@@ -28,7 +28,7 @@ runcmd:
   # k0s single node (controller + worker in one). Service logs land in journald,
   # which syslog-ng's system() source picks up and ships to central.
   - curl -sSLf https://get.k0s.sh | sh
-  - k0s install controller --single
-  - k0s start
+  - /usr/local/bin/k0s install controller --single
+  - /usr/local/bin/k0s start
 
 final_message: "k0s client ready — k0s status; shipping logs to central"

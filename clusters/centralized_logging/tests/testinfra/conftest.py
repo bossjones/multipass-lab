@@ -9,10 +9,15 @@ whose host keys change every `just up`.
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 import testinfra
+
+# How long to wait for a VM to become SSH-reachable and finish cloud-init.
+CONNECT_TIMEOUT = 120
+CLOUD_INIT_TIMEOUT = 600
 
 # tests/testinfra/ -> clusters/centralized_logging/
 CLUSTER_DIR = Path(__file__).resolve().parents[2]
@@ -48,7 +53,27 @@ def ssh_config_file(tmp_path_factory):
 
 
 def _connect(ip, ssh_config_file):
-    return testinfra.get_host(f"ssh://ubuntu@{ip}", ssh_config=ssh_config_file)
+    """Connect over SSH, then wait until the VM is reachable and cloud-init is done.
+
+    `just up` already blocks on cloud-init, but this makes `just verify` safe to run
+    standalone and tolerant of a VM that is still finishing its first boot.
+    """
+    host = testinfra.get_host(f"ssh://ubuntu@{ip}", ssh_config=ssh_config_file)
+
+    deadline = time.time() + CONNECT_TIMEOUT
+    while True:
+        try:
+            if host.run("true").rc == 0:
+                break
+        except Exception:  # noqa: BLE001 - retry until reachable or timeout
+            pass
+        if time.time() >= deadline:
+            raise TimeoutError(f"VM {ip} not SSH-reachable after {CONNECT_TIMEOUT}s")
+        time.sleep(3)
+
+    # Block until provisioning finishes (returns immediately if already done).
+    host.run(f"timeout {CLOUD_INIT_TIMEOUT} cloud-init status --wait")
+    return host
 
 
 @pytest.fixture(scope="session")

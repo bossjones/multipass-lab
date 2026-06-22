@@ -3,6 +3,7 @@
 
 source s_net {
     network(
+        ip("0.0.0.0")
         transport("tcp")
         port(${syslog_port})
         flags(syslog-protocol)

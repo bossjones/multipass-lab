@@ -1,5 +1,7 @@
 """Client VMs: syslog-ng shipper is up, plus their workloads (k0s / docker stack)."""
 
+import time
+
 import pytest
 
 STACK_SERVICES = {"traefik", "heimdall", "prometheus", "alertmanager", "grafana"}
@@ -32,11 +34,17 @@ def test_docker_log_driver_is_journald(docker):
 
 
 def test_docker_stack_all_services_running(docker):
-    res = docker.run(
-        "sudo docker compose -f /opt/stack/compose.yaml ps "
-        "--status running --format '{{.Service}}'"
-    )
-    assert res.rc == 0
-    running = set(res.stdout.split())
-    missing = STACK_SERVICES - running
-    assert not missing, f"stack services not running: {missing}"
+    # Containers may still be pulling/starting right after cloud-init; poll briefly.
+    deadline = time.time() + 120
+    missing = STACK_SERVICES
+    while time.time() < deadline:
+        res = docker.run(
+            "sudo docker compose -f /opt/stack/compose.yaml ps "
+            "--status running --format '{{.Service}}'"
+        )
+        if res.rc == 0:
+            missing = STACK_SERVICES - set(res.stdout.split())
+            if not missing:
+                return
+        time.sleep(5)
+    pytest.fail(f"stack services not running: {missing}")

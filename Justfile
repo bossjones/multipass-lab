@@ -21,9 +21,15 @@ init CLUSTER:
 plan CLUSTER: (init CLUSTER)
     tofu -chdir={{cluster_root}}/{{CLUSTER}} plan
 
-# bring the cluster up (one apply launches all VMs)
+# bring the cluster up (one apply launches all VMs), then block until cloud-init finishes
 up CLUSTER: (init CLUSTER)
     tofu -chdir={{cluster_root}}/{{CLUSTER}} apply -auto-approve
+    @multipass list --format csv \
+      | awk -F, 'NR>1 && $1 ~ /^{{replace(CLUSTER, "_", "-")}}-/ {print $1}' \
+      | while read vm; do \
+          echo "waiting for cloud-init: $vm"; \
+          multipass exec "$vm" -- cloud-init status --wait || true; \
+        done
 
 # tear the cluster down
 down CLUSTER:

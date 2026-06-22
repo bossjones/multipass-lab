@@ -61,6 +61,7 @@ runcmd:
   - systemctl enable syslog-ng
   - systemctl restart syslog-ng
   # Docker + stack
+  - mkdir -p /etc/docker
   - curl -fsSL https://get.docker.com | sh
   - systemctl enable docker
   - systemctl restart docker
