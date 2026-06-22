@@ -28,6 +28,16 @@ variable "ssh_pubkey" {
   default     = ""
 }
 
+variable "hostname_source" {
+  description = "How central derives $HOST for remote senders: 'keep' trusts the client-reported hostname (DNS-independent); 'dns' reverse-resolves the sender IP (needs PTR records); 'ip' folders by raw sender IP."
+  type        = string
+  default     = "keep"
+  validation {
+    condition     = contains(["keep", "dns", "ip"], var.hostname_source)
+    error_message = "hostname_source must be one of: keep, dns, ip."
+  }
+}
+
 variable "central" {
   description = "Resource sizing for the central logging VM."
   type = object({

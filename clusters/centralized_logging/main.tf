@@ -10,9 +10,17 @@ locals {
   k0s_name     = "${var.name_prefix}-k0s"
   docker_name  = "${var.name_prefix}-docker"
 
-  # syslog-ng server config (static — central is the sink).
+  # How central resolves $HOST for remote senders (see var.hostname_source).
+  hostname_opts = {
+    keep = "keep-hostname(yes)"
+    dns  = "keep-hostname(no)\n        use-dns(yes)\n        use-fqdn(no)"
+    ip   = "keep-hostname(no)\n        use-dns(no)"
+  }[var.hostname_source]
+
+  # syslog-ng server config (central is the sink).
   server_conf = templatefile("${path.module}/cloud-init/syslog-ng/server.conf.tftpl", {
-    syslog_port = var.syslog_port
+    syslog_port   = var.syslog_port
+    hostname_opts = local.hostname_opts
   })
 
   # Docker compose stack (no dynamic inputs).

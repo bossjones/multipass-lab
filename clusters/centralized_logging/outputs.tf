@@ -23,6 +23,11 @@ output "hosts" {
   }
 }
 
+output "hostname_source" {
+  description = "Active $HOST foldering strategy on central (keep | dns | ip)."
+  value       = var.hostname_source
+}
+
 output "shell_hints" {
   description = "Handy commands to poke at the cluster."
   value = join("\n", [

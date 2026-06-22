@@ -27,15 +27,27 @@ SSH_KEY = os.path.expanduser(
 
 
 @pytest.fixture(scope="session")
-def hosts():
-    """Return the cluster `hosts` output: {role: {name, ipv4}}."""
+def tofu_output():
+    """Return the full parsed `tofu output -json`."""
     raw = subprocess.run(
         ["tofu", f"-chdir={CLUSTER_DIR}", "output", "-json"],
         capture_output=True,
         text=True,
         check=True,
     ).stdout
-    return json.loads(raw)["hosts"]["value"]
+    return json.loads(raw)
+
+
+@pytest.fixture(scope="session")
+def hosts(tofu_output):
+    """Return the cluster `hosts` output: {role: {name, ipv4}}."""
+    return tofu_output["hosts"]["value"]
+
+
+@pytest.fixture(scope="session")
+def hostname_source(tofu_output):
+    """Active $HOST foldering strategy on central (keep | dns | ip)."""
+    return tofu_output["hostname_source"]["value"]
 
 
 @pytest.fixture(scope="session")

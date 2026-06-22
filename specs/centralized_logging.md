@@ -74,7 +74,24 @@ Every VM ships as much as possible (journald via `system()` + syslog-ng `interna
   possible" without dropping under load.
 - **Central** (`cloud-init/syslog-ng/server.conf.tftpl`): `network(transport(tcp) port(514)
   max-connections(100))` source → `file("/var/log/remote/$HOST/$PROGRAM.log" create-dirs(yes))`.
-  A commented stub shows how to add a VictoriaLogs/OpenObserve destination later (additive).
+  How `$HOST` resolves for remote senders is set by `var.hostname_source` (see below). A
+  commented stub shows how to add a VictoriaLogs/OpenObserve destination later (additive).
+
+### Hostname foldering (`var.hostname_source`)
+
+Central folders received logs as `/var/log/remote/$HOST/$PROGRAM.log`. `$HOST` for remote
+senders is controlled by `hostname_source` (default **`keep`**):
+
+| value | syslog-ng options | result |
+|-------|-------------------|--------|
+| `keep` (default) | `keep-hostname(yes)` | trust the client's self-reported hostname (e.g. `centralized-logging-k0s`). **DNS-independent.** |
+| `dns` | `keep-hostname(no) use-dns(yes) use-fqdn(no)` | reverse-resolve the sender IP; **needs PTR records** (falls back to raw IP otherwise). |
+| `ip` | `keep-hostname(no) use-dns(no)` | fold by raw sender IP. |
+
+`keep` is the default because homelab DNS is unreliable and this lab has no PTR records, so
+`dns` would currently fold by IP anyway. Only the central server config changes with this
+variable — clients already transmit their hostname in the RFC5424 message. Switch modes by
+setting `hostname_source` and re-provisioning (see Notes on applying cloud-init changes).
 - **Capturing container/service logs**: the docker-client sets Docker's daemon
   `log-driver: journald`; the k0s-client's k0s/containerd services log to journald. syslog-ng's
   `system()` source reads journald, so those logs flow to central without per-container config.
@@ -130,7 +147,20 @@ just down centralized_logging     # destroy
 Requires OpenTofu ≥ 1.7, `multipass`, `uv`, `just`, and an SSH keypair at
 `~/.ssh/id_ed25519[.pub]`.
 
+## Applying cloud-init / config changes
+
+The `larstobi/multipass` provider keys `multipass_instance` on the `cloudinit_file` **path**,
+not its content — so editing a cloud-init template (e.g. changing `hostname_source`) updates the
+rendered `.rendered/*.yaml` but does **not** recreate the VM on `tofu apply`. Recreating central
+alone would also change its DHCP IP and break the clients' baked `central_ip`. To apply config
+changes, recreate the whole cluster: `just down centralized_logging && just up centralized_logging`.
+
 ## Future work (kept in mind, not built here)
+
+- **Auto-recreate on cloud-init change**: add `lifecycle { replace_triggered_by = [
+  local_file.*.content_sha256 ] }` to the instances so `just up` rebuilds VMs when their
+  cloud-init changes (clients must also re-render against central's new IP) — removes the manual
+  `down`/`up` step above.
 
 - **Swap the central sink** to VictoriaLogs or OpenObserve (both ingest RFC5424) — add one
   `log {}`/destination block in `server.conf.tftpl`; clients are unchanged.

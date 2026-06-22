@@ -9,6 +9,9 @@ source s_net {
         flags(syslog-protocol)
         max-connections(100)
         log-iw-size(10000)
+        # $HOST resolution strategy, driven by var.hostname_source
+        # (keep = trust client hostname; dns = reverse-resolve; ip = raw IP).
+        ${hostname_opts}
     );
 };
 

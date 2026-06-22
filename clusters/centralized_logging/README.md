@@ -28,3 +28,7 @@ just down centralized_logging    # destroy
   reads its `ipv4`, and renders each client's cloud-init from it.
 - Docker container logs flow to central because the daemon uses the `journald` log-driver
   and syslog-ng's `system()` source reads journald.
+- `var.hostname_source` (`keep` default | `dns` | `ip`) controls how central folders remote
+  senders under `/var/log/remote/<host>/`. `keep` trusts the client hostname (DNS-free); `dns`
+  reverse-resolves (needs PTR). Changing it requires a full `just down` + `just up` (the
+  provider keys on the cloud-init file path, not its content).

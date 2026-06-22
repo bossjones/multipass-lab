@@ -64,4 +64,24 @@ run "sizing_image_names_and_central_render" {
     condition     = strcontains(local_file.central_ci.content, "ssh-ed25519 AAAATESTKEY")
     error_message = "central cloud-init must inject the SSH public key"
   }
+
+  # default hostname_source = keep -> keep-hostname(yes)
+  assert {
+    condition     = strcontains(local_file.central_ci.content, "keep-hostname(yes)")
+    error_message = "default hostname_source (keep) must render keep-hostname(yes)"
+  }
+}
+
+run "hostname_source_dns_renders_use_dns" {
+  command = plan
+
+  variables {
+    ssh_pubkey      = "ssh-ed25519 AAAATESTKEY centralized-logging-tests"
+    hostname_source = "dns"
+  }
+
+  assert {
+    condition     = strcontains(local_file.central_ci.content, "use-dns(yes)")
+    error_message = "hostname_source = dns must render use-dns(yes)"
+  }
 }
