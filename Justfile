@@ -1,14 +1,18 @@
 # multipass-lab — orchestrate OpenTofu/Multipass clusters by folder name.
 #
-#   just up centralized_logging      # tofu apply -> 3 VMs
+#   just up centralized_logging      # tofu apply -> 3 VMs (waits for cloud-init)
 #   just check centralized_logging   # hermetic: fmt + validate + tofu test (no VMs)
 #   just verify centralized_logging  # live: pytest + testinfra over SSH
 #   just down centralized_logging    # tofu destroy
+#
+# NOTE: `multipass exec`/`shell` do not route to the VMs in this environment
+# ("No route to host"), but the host reaches the VMs directly over SSH. So all
+# automation here talks to the VMs via SSH using the injected key and the IPs
+# from the cluster's `hosts` output.
 
 cluster_root := "clusters"
-
-# Multipass instance names use hyphens; cluster folders may use underscores.
-# `prefix` maps the folder name to the VM name_prefix.
+ssh_key := env_var_or_default("CLUSTER_SSH_KEY", env_var("HOME") + "/.ssh/id_ed25519")
+ssh_opts := "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8"
 
 _default:
     @just --list
@@ -24,11 +28,12 @@ plan CLUSTER: (init CLUSTER)
 # bring the cluster up (one apply launches all VMs), then block until cloud-init finishes
 up CLUSTER: (init CLUSTER)
     tofu -chdir={{cluster_root}}/{{CLUSTER}} apply -auto-approve
-    @multipass list --format csv \
-      | awk -F, 'NR>1 && $1 ~ /^{{replace(CLUSTER, "_", "-")}}-/ {print $1}' \
-      | while read vm; do \
-          echo "waiting for cloud-init: $vm"; \
-          multipass exec "$vm" -- cloud-init status --wait || true; \
+    @tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts \
+      | jq -r '.[].ipv4' \
+      | while read ip; do \
+          echo "waiting for cloud-init: $ip"; \
+          until ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" \
+            'cloud-init status --wait >/dev/null 2>&1 || true' 2>/dev/null; do sleep 5; done; \
         done
 
 # tear the cluster down
@@ -51,8 +56,10 @@ status:
 
 # open a shell on a VM:  just ssh centralized_logging central
 ssh CLUSTER ROLE:
-    multipass shell {{replace(CLUSTER, "_", "-")}}-{{ROLE}}
+    @ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.{{ROLE}}.ipv4'); \
+     ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip"
 
 # list the log files collected on the central VM
 logs CLUSTER:
-    multipass exec {{replace(CLUSTER, "_", "-")}}-central -- sudo find /var/log/remote -type f
+    @ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.central.ipv4'); \
+     ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" 'sudo find /var/log/remote -type f'

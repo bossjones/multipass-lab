@@ -5,10 +5,10 @@
 # logs) to the central collector over TCP/RFC5424, with a reliable on-disk buffer so
 # logs survive the central VM being down or restarting.
 
-source s_local {
-    system();
-    internal();
-};
+# NOTE: do NOT declare another system()/internal() source here. Ubuntu's stock
+# syslog-ng.conf already defines `s_src` (system() + internal()), and syslog-ng
+# refuses to start with more than one systemd-journal() source. We ship the stock
+# `s_src` (journald + internal) to central below.
 
 destination d_central {
     network(
@@ -26,7 +26,7 @@ destination d_central {
 };
 
 log {
-    source(s_local);
+    source(s_src);
     destination(d_central);
     flags(flow-control);
 };

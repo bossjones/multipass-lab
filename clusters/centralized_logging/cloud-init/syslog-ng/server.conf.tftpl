@@ -12,10 +12,10 @@ source s_net {
     );
 };
 
-source s_local {
-    system();
-    internal();
-};
+# NOTE: do NOT declare another system()/internal() source here. Ubuntu's stock
+# syslog-ng.conf already defines `s_src` (system() + internal()), and syslog-ng
+# refuses to start with more than one systemd-journal() source. We reference the
+# stock `s_src` below for local logs.
 
 # Partition received logs by sending host and program. This is the MVP sink.
 destination d_remote {
@@ -27,8 +27,8 @@ destination d_remote {
     );
 };
 
-log { source(s_net);   destination(d_remote); };
-log { source(s_local); destination(d_remote); };
+log { source(s_net); destination(d_remote); };
+log { source(s_src); destination(d_remote); };
 
 # --- Future pluggable sink ---------------------------------------------------
 # VictoriaLogs and OpenObserve both ingest RFC5424 syslog, so swapping the sink
