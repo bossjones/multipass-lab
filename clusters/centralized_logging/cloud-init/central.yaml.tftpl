@@ -1,0 +1,28 @@
+#cloud-config
+# Central logging VM — syslog-ng server / collector.
+package_update: true
+package_upgrade: true
+
+packages:
+  - syslog-ng
+  - curl
+  - vim
+  - htop
+  - jq
+
+ssh_authorized_keys:
+  - ${ssh_pubkey}
+
+write_files:
+  - path: /etc/syslog-ng/conf.d/10-central.conf
+    permissions: '0644'
+    content: |
+      ${indent(6, server_conf)}
+
+runcmd:
+  - mkdir -p /var/log/remote
+  - grep -q 'conf.d/\*.conf' /etc/syslog-ng/syslog-ng.conf || echo '@include "/etc/syslog-ng/conf.d/*.conf"' >> /etc/syslog-ng/syslog-ng.conf
+  - systemctl enable syslog-ng
+  - systemctl restart syslog-ng
+
+final_message: "central logging VM ready — collecting under /var/log/remote/"
