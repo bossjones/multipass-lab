@@ -1,0 +1,32 @@
+# Managed by OpenTofu (clusters/centralized_logging). Dropped into /etc/syslog-ng/conf.d/.
+# No @version header here — the main syslog-ng.conf owns it and @includes this file.
+#
+# Ships as much as possible (journald via system(), plus syslog-ng's own internal()
+# logs) to the central collector over TCP/RFC5424, with a reliable on-disk buffer so
+# logs survive the central VM being down or restarting.
+
+source s_local {
+    system();
+    internal();
+};
+
+destination d_central {
+    network(
+        "${central_ip}"
+        transport("tcp")
+        port(${syslog_port})
+        flags(syslog-protocol)
+        disk-buffer(
+            mem-buf-size(163840000)
+            disk-buf-size(536870912)
+            reliable(yes)
+            dir("/var/lib/syslog-ng")
+        )
+    );
+};
+
+log {
+    source(s_local);
+    destination(d_central);
+    flags(flow-control);
+};

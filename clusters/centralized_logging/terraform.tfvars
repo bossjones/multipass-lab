@@ -1,0 +1,21 @@
+name_prefix = "centralized-logging"
+image       = "24.04"
+syslog_port = 514
+
+central = {
+  cpus   = 2
+  memory = "2G"
+  disk   = "40G"
+}
+
+k0s_client = {
+  cpus   = 2
+  memory = "2G"
+  disk   = "20G"
+}
+
+docker_client = {
+  cpus   = 2
+  memory = "4G"
+  disk   = "25G"
+}

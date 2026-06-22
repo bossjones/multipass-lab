@@ -1,0 +1,34 @@
+#cloud-config
+# Client VM — single-node k0s cluster + syslog-ng shipper.
+package_update: true
+package_upgrade: true
+
+packages:
+  - syslog-ng
+  - curl
+  - vim
+  - htop
+  - jq
+
+ssh_authorized_keys:
+  - ${ssh_pubkey}
+
+write_files:
+  - path: /etc/syslog-ng/conf.d/10-ship.conf
+    permissions: '0644'
+    content: |
+      ${indent(6, client_conf)}
+
+runcmd:
+  # syslog-ng shipper
+  - mkdir -p /var/lib/syslog-ng
+  - grep -q 'conf.d/\*.conf' /etc/syslog-ng/syslog-ng.conf || echo '@include "/etc/syslog-ng/conf.d/*.conf"' >> /etc/syslog-ng/syslog-ng.conf
+  - systemctl enable syslog-ng
+  - systemctl restart syslog-ng
+  # k0s single node (controller + worker in one). Service logs land in journald,
+  # which syslog-ng's system() source picks up and ships to central.
+  - curl -sSLf https://get.k0s.sh | sh
+  - k0s install controller --single
+  - k0s start
+
+final_message: "k0s client ready — k0s status; shipping logs to central"

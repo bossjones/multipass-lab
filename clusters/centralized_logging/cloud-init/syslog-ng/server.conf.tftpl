@@ -1,0 +1,39 @@
+# Managed by OpenTofu (clusters/centralized_logging). Dropped into /etc/syslog-ng/conf.d/.
+# No @version header here — the main syslog-ng.conf owns it and @includes this file.
+
+source s_net {
+    network(
+        transport("tcp")
+        port(${syslog_port})
+        flags(syslog-protocol)
+        max-connections(100)
+        log-iw-size(10000)
+    );
+};
+
+source s_local {
+    system();
+    internal();
+};
+
+# Partition received logs by sending host and program. This is the MVP sink.
+destination d_remote {
+    file(
+        "/var/log/remote/$${HOST}/$${PROGRAM}.log"
+        create-dirs(yes)
+        dir-perm(0755)
+        perm(0644)
+    );
+};
+
+log { source(s_net);   destination(d_remote); };
+log { source(s_local); destination(d_remote); };
+
+# --- Future pluggable sink ---------------------------------------------------
+# VictoriaLogs and OpenObserve both ingest RFC5424 syslog, so swapping the sink
+# is additive — just enable one of these and keep (or drop) the file sink above.
+#
+# destination d_victorialogs {
+#     syslog("127.0.0.1" transport("tcp") port(9514) flags(syslog-protocol));
+# };
+# log { source(s_net); destination(d_victorialogs); };

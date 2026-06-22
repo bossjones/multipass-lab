@@ -1,0 +1,14 @@
+[project]
+name = "centralized-logging-tests"
+version = "0.0.0"
+description = "testinfra verify suite for the centralized_logging Multipass cluster"
+requires-python = ">=3.11"
+dependencies = [
+    "pytest>=8",
+    "pytest-testinfra>=10",
+    "pytest-xdist>=3",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["."]
