@@ -1,0 +1,59 @@
+name: CI
+
+# Hermetic validation only — mirrors `just check <cluster>`:
+#   tofu fmt -check + tofu validate + tofu test (mock_provider, no VMs).
+# The live `just verify` suite needs Multipass/KVM VMs and cannot run on
+# GitHub-hosted runners, so it is intentionally out of scope here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Newer pushes to the same ref cancel older in-flight runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Discover every cluster folder so new clusters get CI for free — the
+  # folder name is the only argument the Justfile recipes take.
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      clusters: ${{ steps.find.outputs.clusters }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: find
+        name: Enumerate clusters/<name>/
+        run: |
+          clusters=$(find clusters -mindepth 1 -maxdepth 1 -type d \
+            -exec basename {} \; | sort | jq -R . | jq -cs .)
+          echo "clusters=$clusters" >> "$GITHUB_OUTPUT"
+          echo "Found clusters: $clusters"
+
+  check:
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cluster: ${{ fromJson(needs.discover.outputs.clusters) }}
+    name: check (${{ matrix.cluster }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.12.3"
+
+      - name: Install just
+        uses: extractions/setup-just@v3
+
+      - name: Hermetic check (fmt + validate + tofu test)
+        run: just check ${{ matrix.cluster }}
