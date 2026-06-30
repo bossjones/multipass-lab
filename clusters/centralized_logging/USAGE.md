@@ -32,11 +32,12 @@ For the **why** behind the design, read the spec:
 - [6. Configuration reference](#6-configuration-reference)
 - [7. Using the running cluster](#7-using-the-running-cluster)
 - [8. How log shipping works](#8-how-log-shipping-works)
-- [9. Testing & verification](#9-testing--verification)
-- [10. Changing configuration](#10-changing-configuration)
-- [11. Troubleshooting](#11-troubleshooting)
-- [12. Technology stack & reference links](#12-technology-stack--reference-links)
-- [13. Further reading](#13-further-reading)
+- [9. Metrics & exporter layer](#9-metrics--exporter-layer)
+- [10. Testing & verification](#10-testing--verification)
+- [11. Changing configuration](#11-changing-configuration)
+- [12. Troubleshooting](#12-troubleshooting)
+- [13. Technology stack & reference links](#13-technology-stack--reference-links)
+- [14. Further reading](#14-further-reading)
 
 ---
 
@@ -228,6 +229,12 @@ syslog-ng config before restarting the service.
 > [journald][journald], and syslog-ng's `system()` source reads journald. On the k0s VM,
 > [containerd][containerd]/k0s services log to [systemd][systemd]/journald the same way.
 
+> 📊 Each VM's `runcmd` **also installs a flag-gated Prometheus exporter bundle** (a copied
+> `install-exporter.sh` drops binaries as systemd units; central + clients get a `syslog-ng-ctl
+> stats prometheus` textfile timer; the k0s VM also applies a kube-state-metrics manifest). Nothing
+> scrapes them yet — they're exposed for a future `centralized_monitoring` Prometheus. See
+> [§9 Metrics & exporter layer](#9-metrics--exporter-layer).
+
 ---
 
 ## 6. Configuration reference
@@ -250,6 +257,26 @@ All variables are defined in [`variables.tf`](variables.tf); defaults live in
 | `k0s_client` | `object({cpus, memory, disk})` | `{2, "2G", "20G"}` | Sizing for the k0s VM. |
 | `docker_client` | `object({cpus, memory, disk})` | `{2, "4G", "25G"}` | Sizing for the Docker VM. |
 
+#### Metrics feature flags
+
+Each `enable_*` flag gates an exporter's **install** in cloud-init (there is no local scrape to gate —
+see [§9](#9-metrics--exporter-layer)). A disabled flag means the exporter is not installed, not
+running, and skipped by the live test suite. All are `bool`, threaded via `local.flags` in
+[`main.tf`](main.tf).
+
+| Variable | Default | Scope · port |
+|----------|---------|--------------|
+| `enable_node_exporter` | `true` | all VMs · `:9100` (also serves the syslog-ng textfile `.prom`) |
+| `enable_syslogng_metrics` | `true` | all VMs · via `:9100` (textfile timer → `syslog-ng-ctl stats prometheus`) |
+| `enable_systemd_exporter` | `true` | all VMs · `:9558` (per-unit health, e.g. `syslog-ng.service`) |
+| `enable_journald_exporter` | **`false`** | all VMs · `:12345` — upstream binary is **x86-64-only**, so off on the arm64 lab (works on amd64 Proxmox) |
+| `enable_process_exporter` | `true` | all VMs · `:9256` |
+| `enable_filestat_exporter` | `true` | **central only** · `:9943` (watches `/var/log/remote/*`) |
+| `enable_cadvisor` | `true` | docker + k0s · `:8089` (`:8080` is taken by Traefik / kube-router) |
+| `enable_traefik_metrics` | `true` | docker only · `:8082` (Traefik Prometheus endpoint) |
+| `enable_kube_metrics` | `true` | k0s only · kube-proxy `:10249`, kubelet read-only `:10255` |
+| `enable_kube_state_metrics` | `true` | k0s only · `:8081` (hostNetwork Deployment) |
+
 ### Outputs
 
 Defined in [`outputs.tf`](outputs.tf); read them with
@@ -260,6 +287,8 @@ Defined in [`outputs.tf`](outputs.tf); read them with
 | `central_ipv4` / `k0s_ipv4` / `docker_ipv4` | IPv4 of each VM. |
 | `hosts` | `{role: {name, ipv4}}` for every VM — the contract [`conftest.py`](tests/testinfra/conftest.py) consumes. |
 | `hostname_source` | The active `$HOST` foldering strategy (`keep` \| `dns` \| `ip`). |
+| `enabled_exporters` | Sorted list of active metrics `enable_*` flags; the live suite parametrizes over it (disabled = skipped). |
+| `metrics_targets` | `{role: {ip, exporters: {name: port}}}` — the discovery map a future Prometheus uses to fill in [`logging-scrape.yml`](cloud-init/prometheus/logging-scrape.yml). |
 | `shell_hints` | Handy commands: `multipass shell`, log listing, and `open http://<docker-ip>:8080` (Traefik) / `:3000` (Grafana). |
 
 ### `hostname_source` — where remote logs get foldered
@@ -276,7 +305,7 @@ this variable, which renders different syslog-ng options into
 
 `keep` is the default because homelab DNS is unreliable and this lab has no PTR records.
 **Changing this value requires a full `just down` + `just up`** — see
-[§10 Changing configuration](#10-changing-configuration).
+[§11 Changing configuration](#11-changing-configuration).
 
 ---
 
@@ -411,7 +440,103 @@ the sink is swapped.
 
 ---
 
-## 9. Testing & verification
+## 9. Metrics & exporter layer
+
+This cluster ships a **Prometheus exporter layer** so its health and the log pipeline itself become
+observable. The design principle is **"exporters present, pull deferred"**: exporters are installed
+and bound to `0.0.0.0`, but **nothing scrapes them yet**. A separate
+[`centralized_monitoring`](../centralized_monitoring/) Prometheus will pull them later — so there is
+no dependency cycle and no peer-IP injection in this layer. The full design is in
+[`specs/centralized_logging_metrics.md`](../../specs/centralized_logging_metrics.md); for a hands-on
+walkthrough see [`TUTORIAL.md`](TUTORIAL.md).
+
+> Logging **pushes** (clients → central:514); Prometheus **pulls** (scraper → exporter). This layer
+> only stands up the pull *targets*. The docker VM's on-box Prometheus (`/opt/stack/prometheus.yml`)
+> is intentionally **left as-is** (it still scrapes only itself + `traefik:8080`).
+
+```mermaid
+flowchart TB
+    subgraph future["future centralized_monitoring"]
+        prom["Prometheus<br/>(paste logging-scrape.yml)"]
+    end
+    subgraph central["central"]
+        c["node :9100 (+syslog-ng textfile)<br/>systemd :9558 · process :9256<br/>filestat :9943"]
+    end
+    subgraph docker["docker"]
+        d["node :9100 · systemd :9558 · process :9256<br/>cAdvisor :8089 · Traefik :8082"]
+    end
+    subgraph k0s["k0s"]
+        k["node :9100 · systemd :9558 · process :9256<br/>cAdvisor :8089 · kube-proxy :10249<br/>kubelet ro :10255 · kube-state :8081"]
+    end
+    prom -. "pull (future)" .-> c
+    prom -. "pull (future)" .-> d
+    prom -. "pull (future)" .-> k
+```
+
+### Exporter inventory
+
+All listeners bind `0.0.0.0` (arm64 binaries). Defaults follow [§6 metrics feature flags](#metrics-feature-flags).
+
+| Exporter | central | docker | k0s | Port | Flag | Default |
+|----------|:------:|:------:|:---:|------|------|:------:|
+| node_exporter | ✅ | ✅ | ✅ | 9100 | `enable_node_exporter` | ✅ |
+| syslog-ng metrics (textfile) | ✅ | ✅ | ✅ | via 9100 | `enable_syslogng_metrics` | ✅ |
+| systemd_exporter | ✅ | ✅ | ✅ | 9558 | `enable_systemd_exporter` | ✅ |
+| journald-exporter | ✅ | ✅ | ✅ | 12345 | `enable_journald_exporter` | ⬜ (x86-64-only) |
+| process-exporter | ✅ | ✅ | ✅ | 9256 | `enable_process_exporter` | ✅ |
+| filestat_exporter | ✅ | — | — | 9943 | `enable_filestat_exporter` | ✅ |
+| cAdvisor | — | ✅ | ✅ | 8089 | `enable_cadvisor` | ✅ |
+| Traefik metrics | — | ✅ | — | 8082 | `enable_traefik_metrics` | ✅ |
+| kube-proxy / kubelet ro | — | — | ✅ | 10249 / 10255 | `enable_kube_metrics` | ✅ |
+| kube-state-metrics | — | — | ✅ | 8081 | `enable_kube_state_metrics` | ✅ |
+
+### syslog-ng metrics (no third-party exporter)
+
+syslog-ng 4.1+ (these VMs run **4.3.1**) emits Prometheus text natively via
+`syslog-ng-ctl stats prometheus`. A systemd timer (`syslogng-textfile.timer`, every 15s) writes that
+dump to `/var/lib/node_exporter/textfile_collector/syslogng.prom`, which **node_exporter serves on
+`:9100`** — one port, one binary, no extra service. Metric names start with `syslogng_` (e.g.
+`syslogng_input_events_total`, `syslogng_internal_events_total{result="dropped"}`).
+
+### Verifying the endpoints
+
+```sh
+just ssh centralized_logging central
+# host + syslog-ng textfile metrics
+curl -fsS http://localhost:9100/metrics | grep syslogng_ | head
+# systemd_exporter sees the syslog-ng unit
+curl -fsS http://localhost:9558/metrics | grep 'syslog-ng.service'
+# the textfile the timer maintains
+cat /var/lib/node_exporter/textfile_collector/syslogng.prom | head
+```
+
+Cross-VM reachability proves the `0.0.0.0` bind (the precondition for a future scrape):
+
+```sh
+# on the host: get each role's ip + ports
+tofu -chdir=clusters/centralized_logging output -json metrics_targets
+# from a peer VM, reach central's node_exporter by IP
+just ssh centralized_logging k0s
+curl -fsS http://<central_ip>:9100/metrics | head
+```
+
+> ⬜ `journald-exporter` (`:12345`) is **off by default** — its upstream binary is x86-64-only and
+> won't run on the arm64 lab VMs, so that port is expected to be closed here. The live suite skips it.
+
+### Future integration — wiring the monitoring cluster
+
+Two paste-in artifacts ship with the cluster (not loaded by anything here):
+
+- [`cloud-init/prometheus/logging-scrape.yml`](cloud-init/prometheus/logging-scrape.yml) — scrape
+  jobs; replace `<central_ip>/<docker_ip>/<k0s_ip>` from `tofu output -json metrics_targets`.
+- [`cloud-init/prometheus/alert.rules.yml`](cloud-init/prometheus/alert.rules.yml) — logging-health
+  alerts (`SyslogNgServiceDown`, `SyslogNgEventsDropped`, `NoLogsReceivedFromClient`, …).
+
+Add those to the future `centralized_monitoring` Prometheus to start scraping.
+
+---
+
+## 10. Testing & verification
 
 Two layers, split by cost. This mirrors the repo's testing philosophy (cheap structural checks run
 hermetically; behavioral checks run live against real VMs).
@@ -443,6 +568,7 @@ exposes `central` / `k0s` / `docker` host fixtures (polling SSH reachability, th
 | [`test_central.py`](tests/testinfra/test_central.py) | syslog-ng running & enabled; TCP `514` listening; `/var/log/remote` exists |
 | [`test_clients.py`](tests/testinfra/test_clients.py) | syslog-ng running + `/var/lib/syslog-ng` buffer dir on both clients; `k0s status` healthy; Docker running with `journald` log-driver; all 5 stack services up |
 | [`test_e2e_shipping.py`](tests/testinfra/test_e2e_shipping.py) | **headline proof:** a [`logger`][logger]-emitted token on each client appears under `/var/log/remote/` on central; in `keep` mode it lands under the client's hostname folder |
+| [`test_metrics.py`](tests/testinfra/test_metrics.py) | each enabled exporter port listens + `/metrics` returns 200 (parametrized over `enabled_exporters`, skips when off); `syslogng.prom` present with `syslogng_` series; `systemd_exporter` reports `syslog-ng.service`; cross-VM reachability proves the `0.0.0.0` bind |
 
 Dependencies are declared in [`pyproject.toml`](tests/testinfra/pyproject.toml) and locked in
 [`uv.lock`](tests/testinfra/uv.lock): [`pytest>=8`][pytest],
@@ -464,7 +590,7 @@ The hermetic layer also runs in CI on every push — see
 
 ---
 
-## 10. Changing configuration
+## 11. Changing configuration
 
 The [`larstobi/multipass`][provider-multipass] provider keys a VM on its `cloudinit_file`
 **path**, not the file's contents. Editing a `.tftpl` template re-renders `.rendered/` but **does
@@ -485,12 +611,14 @@ automatically when their cloud-init changes — removing the manual `down`/`up`.
 
 ---
 
-## 11. Troubleshooting
+## 12. Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | `just ssh` / `verify` refused right after `up` | cloud-init still finishing | `just up` already waits per-VM; if you bypassed it, retry — [`conftest.py`](tests/testinfra/conftest.py) also blocks on `cloud-init status --wait` (up to 600s) |
 | `multipass shell`/`exec` → "No route to host" | Multipass exec path doesn't route in this env | use `just ssh centralized_logging <role>` (direct SSH) instead |
+| An exporter port isn't listening | cloud-init still installing the bundle, or its `enable_*` flag is off | wait for `cloud-init status --wait`; check `tofu output enabled_exporters`; see [§9](#9-metrics--exporter-layer) |
+| `:12345` (journald) never opens | expected on arm64 — `enable_journald_exporter` is off (x86-64-only binary) | leave it off, or run on amd64; the live suite skips it |
 | No logs under `/var/log/remote` | shipper or listener down | on a client: `systemctl status syslog-ng`; on central: confirm TCP `514` is listening (`ss -ltnp`) and `/var/log/remote` exists (the [`test_central.py`](tests/testinfra/test_central.py) checks) |
 | Logs in wrong/odd folder | `hostname_source` mismatch | check `tofu output hostname_source`; `keep` folders by client hostname — change requires `down` + `up` |
 | Stale IP after recreate | VMs got new DHCP IPs | nothing to do — `just ssh`/testinfra read fresh IPs from the `hosts` output each run |
@@ -503,7 +631,7 @@ To watch a VM's first boot live: `just ssh centralized_logging <role>` then
 
 ---
 
-## 12. Technology stack & reference links
+## 13. Technology stack & reference links
 
 Everything this lab uses, with homepage and source/docs links so you never have to go hunting.
 
@@ -548,6 +676,22 @@ Everything this lab uses, with homepage and source/docs links so you never have 
 | Alertmanager | [docs][alertmanager] | [GitHub][alertmanager-gh] |
 | Heimdall | [heimdall.site][heimdall] | [GitHub][heimdall-gh] |
 
+### Exporters (metrics layer)
+
+Installed flag-gated via a copied `install-exporter.sh` (arm64 `{ARCH}` substitution). See
+[§9](#9-metrics--exporter-layer) and [`specs/centralized_logging_metrics.md`](../../specs/centralized_logging_metrics.md).
+
+| Exporter | Version | Port | Upstream |
+|----------|---------|------|----------|
+| node_exporter | 1.8.2 | 9100 | [prometheus/node_exporter](https://github.com/prometheus/node_exporter) |
+| systemd_exporter | 0.7.0 | 9558 | [prometheus-community/systemd_exporter](https://github.com/prometheus-community/systemd_exporter) |
+| process-exporter | 0.8.4 | 9256 | [ncabatoff/process-exporter](https://github.com/ncabatoff/process-exporter) |
+| filestat_exporter | 0.4.5 | 9943 | [michael-doubez/filestat_exporter](https://github.com/michael-doubez/filestat_exporter) |
+| cAdvisor | 0.49.1 | 8089 | [google/cadvisor](https://github.com/google/cadvisor) |
+| kube-state-metrics | 2.13.0 | 8081 | [kubernetes/kube-state-metrics](https://github.com/kubernetes/kube-state-metrics) |
+| journald-exporter *(off — x86-64 only)* | 1.0.0 | 12345 | [dead-claudia/journald-exporter](https://github.com/dead-claudia/journald-exporter) |
+| syslog-ng metrics | native (4.3.1) | via 9100 | [`syslog-ng-ctl stats prometheus`](https://www.syslog-ng.com/community/b/blog/posts/syslog-ng-prometheus-exporter) |
+
 ### Test & deployment targets
 
 | Component | Home | Source / Docs |
@@ -560,9 +704,11 @@ Everything this lab uses, with homepage and source/docs links so you never have 
 
 ---
 
-## 13. Further reading
+## 14. Further reading
 
 - 📐 [`specs/centralized_logging.md`](../../specs/centralized_logging.md) — full design rationale
+- 📊 [`specs/centralized_logging_metrics.md`](../../specs/centralized_logging_metrics.md) — metrics/exporter-layer design
+- 🧭 [`TUTORIAL.md`](TUTORIAL.md) — hands-on "stand up & verify the metrics layer" walkthrough
 - 📖 [`README.md`](README.md) — this cluster's quick-reference card
 - 📚 [`docs/README.md`](../../docs/README.md) — repo documentation hub
 - 🏠 [root `README.md`](../../README.md) — repo overview and conventions

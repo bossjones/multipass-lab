@@ -10,6 +10,28 @@ locals {
   k0s_name     = "${var.name_prefix}-k0s"
   docker_name  = "${var.name_prefix}-docker"
 
+  # One map of every metrics enable_* flag, merged into every templatefile() call so
+  # each cloud-init template renders its own %{ if enable_x ~}…%{ endif ~} install
+  # blocks. A disabled flag is therefore neither installed nor running on the VM.
+  # (Mirrors clusters/centralized_monitoring/main.tf.) No scrape is wired locally —
+  # see specs/centralized_logging_metrics.md.
+  flags = {
+    enable_node_exporter      = var.enable_node_exporter
+    enable_syslogng_metrics   = var.enable_syslogng_metrics
+    enable_systemd_exporter   = var.enable_systemd_exporter
+    enable_journald_exporter  = var.enable_journald_exporter
+    enable_process_exporter   = var.enable_process_exporter
+    enable_filestat_exporter  = var.enable_filestat_exporter
+    enable_cadvisor           = var.enable_cadvisor
+    enable_traefik_metrics    = var.enable_traefik_metrics
+    enable_kube_metrics       = var.enable_kube_metrics
+    enable_kube_state_metrics = var.enable_kube_state_metrics
+  }
+
+  # Sorted list of active flags — exported as enabled_exporters and consumed by
+  # tests/testinfra/conftest.py so the live suite asserts only what is on.
+  enabled_exporters = sort([for k, v in local.flags : k if v])
+
   # How central resolves $HOST for remote senders (see var.hostname_source).
   hostname_opts = {
     keep = "keep-hostname(yes)"
@@ -23,8 +45,9 @@ locals {
     hostname_opts = local.hostname_opts
   })
 
-  # Docker compose stack (no dynamic inputs).
-  compose_conf = templatefile("${path.module}/cloud-init/docker/compose.yaml.tftpl", {})
+  # Docker compose stack. Flags are threaded so Traefik's metrics endpoint renders
+  # under %{ if enable_traefik_metrics ~}.
+  compose_conf = templatefile("${path.module}/cloud-init/docker/compose.yaml.tftpl", local.flags)
 
   # syslog-ng client config — references the central VM's runtime IP, which forces
   # OpenTofu to create `central` (and learn its ipv4) before rendering/launching clients.
@@ -38,10 +61,10 @@ locals {
 
 resource "local_file" "central_ci" {
   filename = "${local.render_dir}/central.yaml"
-  content = templatefile("${path.module}/cloud-init/central.yaml.tftpl", {
+  content = templatefile("${path.module}/cloud-init/central.yaml.tftpl", merge(local.flags, {
     ssh_pubkey  = local.ssh_pubkey
     server_conf = local.server_conf
-  })
+  }))
 }
 
 resource "multipass_instance" "central" {
@@ -57,10 +80,10 @@ resource "multipass_instance" "central" {
 
 resource "local_file" "k0s_ci" {
   filename = "${local.render_dir}/k0s-client.yaml"
-  content = templatefile("${path.module}/cloud-init/k0s-client.yaml.tftpl", {
+  content = templatefile("${path.module}/cloud-init/k0s-client.yaml.tftpl", merge(local.flags, {
     ssh_pubkey  = local.ssh_pubkey
     client_conf = local.client_conf
-  })
+  }))
 }
 
 resource "multipass_instance" "k0s" {
@@ -76,11 +99,11 @@ resource "multipass_instance" "k0s" {
 
 resource "local_file" "docker_ci" {
   filename = "${local.render_dir}/docker-client.yaml"
-  content = templatefile("${path.module}/cloud-init/docker-client.yaml.tftpl", {
+  content = templatefile("${path.module}/cloud-init/docker-client.yaml.tftpl", merge(local.flags, {
     ssh_pubkey   = local.ssh_pubkey
     client_conf  = local.client_conf
     compose_conf = local.compose_conf
-  })
+  }))
 }
 
 resource "multipass_instance" "docker" {

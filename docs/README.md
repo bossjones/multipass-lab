@@ -26,7 +26,9 @@ flowchart TD
 | 📚 [`docs/README.md`](README.md) | **This hub** — quickstart + links into the detailed lab docs. |
 | 📖 [`clusters/centralized_logging/README.md`](../clusters/centralized_logging/README.md) | The lab's **quick-reference** card (topology table + 5-line quickstart). |
 | 📘 [`clusters/centralized_logging/USAGE.md`](../clusters/centralized_logging/USAGE.md) | The lab's **detailed how-to-use guide** — config reference, diagrams, troubleshooting. |
+| 🧭 [`clusters/centralized_logging/TUTORIAL.md`](../clusters/centralized_logging/TUTORIAL.md) | Hands-on **"stand up & verify the metrics layer"** walkthrough. |
 | 📐 [`specs/centralized_logging.md`](../specs/centralized_logging.md) | Full **design rationale** for the centralized-logging lab. |
+| 📊 [`specs/centralized_logging_metrics.md`](../specs/centralized_logging_metrics.md) | Design for the lab's **Prometheus exporter layer** (endpoints, flags, future scrape). |
 | 🤖 [`CLAUDE.md`](../CLAUDE.md) | Repo conventions and `.claude/` automation guidance. |
 | ⚙️ [`Justfile`](../Justfile) | Every orchestration recipe (`init`/`plan`/`up`/`down`/`check`/`verify`/`status`/`ssh`/`logs`). |
 | ✅ [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | Hermetic CI — auto-discovers every `clusters/<name>/` folder. |
@@ -59,7 +61,9 @@ internals, and troubleshooting — see
 ### centralized_logging
 
 Three [Multipass](https://multipass.run/) VMs demonstrating syslog-ng log shipping into one
-collector, with runtime DHCP-IP injection between peers.
+collector, with runtime DHCP-IP injection between peers. The lab also ships a flag-gated
+**Prometheus exporter layer** (node/syslog-ng/systemd/process + cAdvisor/kube metrics) exposed for a
+future `centralized_monitoring` scrape.
 
 | VM | Role | Sizing |
 |----|------|--------|

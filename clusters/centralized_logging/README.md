@@ -35,9 +35,17 @@ just down centralized_logging    # destroy
   senders under `/var/log/remote/<host>/`. `keep` trusts the client hostname (DNS-free); `dns`
   reverse-resolves (needs PTR). Changing it requires a full `just down` + `just up` (the
   provider keys on the cloud-init file path, not its content).
+- **Metrics:** each VM exposes flag-gated Prometheus exporters (node/syslog-ng/systemd/process,
+  +cAdvisor on docker/k0s, +kube metrics on k0s), bound to `0.0.0.0` for a *future*
+  `centralized_monitoring` scrape — nothing scrapes them yet. See
+  [USAGE §9](USAGE.md#9-metrics--exporter-layer) and the
+  [metrics spec](../../specs/centralized_logging_metrics.md). `journald-exporter` is off by default
+  (x86-64-only binary).
 
 ## More docs
 
 - 📘 [`USAGE.md`](USAGE.md) — detailed how-to-use guide for this lab
+- 🧭 [`TUTORIAL.md`](TUTORIAL.md) — hands-on "stand up & verify the metrics layer" walkthrough
 - 📐 [`../../specs/centralized_logging.md`](../../specs/centralized_logging.md) — full design
+- 📊 [`../../specs/centralized_logging_metrics.md`](../../specs/centralized_logging_metrics.md) — metrics/exporter design
 - 📚 [`../../docs/README.md`](../../docs/README.md) — repo documentation hub

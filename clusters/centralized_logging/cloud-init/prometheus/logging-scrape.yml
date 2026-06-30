@@ -1,0 +1,46 @@
+# Reference artifact — NOT wired into any running Prometheus by this cluster.
+# Paste these jobs under `scrape_configs:` of the future centralized_monitoring Prometheus.
+# Replace <central_ip>/<docker_ip>/<k0s_ip> with the values from:
+#   tofu -chdir=clusters/centralized_logging output -json metrics_targets
+# All logging-cluster exporters bind 0.0.0.0, so these targets are scrapable cross-cluster.
+#
+# Ports map (see specs/centralized_logging_metrics.md §5):
+#   node 9100 · systemd 9558 · journald 12345 · process 9256 · filestat 9943
+#   cadvisor 8089 · traefik 8082 · kube-proxy 10249 · kubelet ro 10255 · kube-state 8081
+
+- job_name: logging-node        # host metrics + syslog-ng textfile metrics
+  static_configs:
+    - targets: ["<central_ip>:9100", "<docker_ip>:9100", "<k0s_ip>:9100"]
+
+- job_name: logging-systemd
+  static_configs:
+    - targets: ["<central_ip>:9558", "<docker_ip>:9558", "<k0s_ip>:9558"]
+
+- job_name: logging-journald    # only when enable_journald_exporter (amd64 hosts)
+  static_configs:
+    - targets: ["<central_ip>:12345", "<docker_ip>:12345", "<k0s_ip>:12345"]
+
+- job_name: logging-process
+  static_configs:
+    - targets: ["<central_ip>:9256", "<docker_ip>:9256", "<k0s_ip>:9256"]
+
+- job_name: logging-filestat    # central only (/var/log/remote freshness)
+  static_configs:
+    - targets: ["<central_ip>:9943"]
+
+- job_name: logging-cadvisor
+  static_configs:
+    - targets: ["<docker_ip>:8089", "<k0s_ip>:8089"]
+
+- job_name: logging-traefik
+  static_configs:
+    - targets: ["<docker_ip>:8082"]
+
+- job_name: logging-kube        # kube-proxy + kube-state-metrics on the k0s host
+  static_configs:
+    - targets: ["<k0s_ip>:10249", "<k0s_ip>:8081"]
+
+- job_name: logging-kubelet-cadvisor
+  metrics_path: /metrics/cadvisor
+  static_configs:
+    - targets: ["<k0s_ip>:10255"]

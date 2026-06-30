@@ -85,3 +85,90 @@ run "hostname_source_dns_renders_use_dns" {
     error_message = "hostname_source = dns must render use-dns(yes)"
   }
 }
+
+# --- metrics / exporter layer (default flags = all on except journald) -------
+
+run "exporters_render_with_defaults" {
+  command = plan
+
+  # central: node_exporter, syslog-ng textfile, systemd_exporter, process, filestat.
+  assert {
+    condition     = strcontains(local_file.central_ci.content, "node_exporter-1.8.2")
+    error_message = "central must install node_exporter v1.8.2"
+  }
+  assert {
+    condition     = strcontains(local_file.central_ci.content, "syslogng-textfile.sh")
+    error_message = "central must render the syslog-ng textfile collector script"
+  }
+  assert {
+    condition     = strcontains(local_file.central_ci.content, "syslog-ng-ctl stats prometheus")
+    error_message = "central textfile script must dump native syslog-ng prometheus stats"
+  }
+  assert {
+    condition     = strcontains(local_file.central_ci.content, "--web.listen-address=:9558")
+    error_message = "central must install systemd_exporter on :9558"
+  }
+  assert {
+    condition     = strcontains(local_file.central_ci.content, "/var/log/remote/*/*.log")
+    error_message = "central filestat must watch /var/log/remote"
+  }
+
+  # k0s: cadvisor on :8089 (not :8080) + kubelet read-only port + kube-state-metrics.
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "cadvisor --port=8089")
+    error_message = "k0s cAdvisor must bind :8089 (not :8080)"
+  }
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "--read-only-port=10255")
+    error_message = "k0s must enable the kubelet read-only port 10255"
+  }
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "kube-state-metrics")
+    error_message = "k0s must render the kube-state-metrics deployment"
+  }
+
+  # docker: cadvisor on :8089 + Traefik metrics entrypoint.
+  assert {
+    condition     = strcontains(local_file.docker_ci.content, "cadvisor --port=8089")
+    error_message = "docker cAdvisor must bind :8089 (not :8080, the Traefik dashboard)"
+  }
+  assert {
+    condition     = strcontains(local_file.docker_ci.content, "--entrypoints.metrics.address=:8082")
+    error_message = "docker Traefik must expose a Prometheus metrics entrypoint on :8082"
+  }
+
+  # journald-exporter is off by default (x86-64-only upstream binary).
+  assert {
+    condition     = !strcontains(local_file.central_ci.content, "journald-exporter")
+    error_message = "journald-exporter must be absent by default (enable_journald_exporter=false)"
+  }
+
+  # filestat is central-only.
+  assert {
+    condition     = !strcontains(local_file.k0s_ci.content, "filestat_exporter") && !strcontains(local_file.docker_ci.content, "filestat_exporter")
+    error_message = "filestat_exporter must only render on central"
+  }
+}
+
+run "disabled_flags_omit_install_blocks" {
+  command = plan
+
+  variables {
+    enable_filestat_exporter = false
+    enable_cadvisor          = false
+    enable_traefik_metrics   = false
+  }
+
+  assert {
+    condition     = !strcontains(local_file.central_ci.content, "filestat_exporter")
+    error_message = "disabled filestat must not render on central"
+  }
+  assert {
+    condition     = !strcontains(local_file.k0s_ci.content, "cadvisor --port=8089")
+    error_message = "disabled cadvisor must not render on k0s"
+  }
+  assert {
+    condition     = !strcontains(local_file.docker_ci.content, "--entrypoints.metrics.address=:8082")
+    error_message = "disabled traefik metrics must not render in the compose stack"
+  }
+}

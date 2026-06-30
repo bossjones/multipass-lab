@@ -8,6 +8,7 @@ package_upgrade: true
 packages:
   - syslog-ng
   - curl
+  - tar
   - vim
   - htop
   - jq
@@ -20,6 +21,79 @@ write_files:
     permissions: '0644'
     content: |
       ${indent(6, client_conf)}
+
+  # Generic exporter installer (copied from the centralized_monitoring cluster).
+  - path: /usr/local/sbin/install-exporter.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      name="$1"; url="$2"; bin="$3"; shift 3; args="$*"
+      arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+      case "$arch" in aarch64) arch=arm64 ;; x86_64) arch=amd64 ;; esac
+      url="$${url//\{ARCH\}/$arch}"
+      tmp="$(mktemp -d)"
+      curl -sSLf "$url" -o "$tmp/dl"
+      if tar -tzf "$tmp/dl" >/dev/null 2>&1; then
+        tar -xzf "$tmp/dl" -C "$tmp"
+        found="$(find "$tmp" -type f -name "$bin" | head -n1)"
+      else
+        found="$tmp/dl"
+      fi
+      install -m0755 "$found" "/usr/local/bin/$name"
+      cat >/etc/systemd/system/$name.service <<UNIT
+      [Unit]
+      Description=$name
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      ExecStart=/usr/local/bin/$name $args
+      Restart=always
+      RestartSec=5
+      [Install]
+      WantedBy=multi-user.target
+      UNIT
+      systemctl daemon-reload
+      systemctl enable --now "$name"
+%{ if enable_syslogng_metrics ~}
+  # syslog-ng metrics via node_exporter textfile collector.
+  - path: /usr/local/sbin/syslogng-textfile.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      out=/var/lib/node_exporter/textfile_collector/syslogng.prom
+      tmp="$(mktemp)"
+      /usr/sbin/syslog-ng-ctl stats prometheus > "$tmp" 2>/dev/null || true
+      mv "$tmp" "$out"
+  - path: /etc/systemd/system/syslogng-textfile.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Write syslog-ng prometheus stats to the node_exporter textfile collector
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/syslogng-textfile.sh
+  - path: /etc/systemd/system/syslogng-textfile.timer
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Refresh syslog-ng textfile metrics every 15s
+      [Timer]
+      OnBootSec=30
+      OnUnitActiveSec=15
+      [Install]
+      WantedBy=timers.target
+%{ endif ~}
+%{ if enable_process_exporter ~}
+  - path: /etc/process-exporter/all.yaml
+    permissions: '0644'
+    content: |
+      process_names:
+        - name: "{{.Comm}}"
+          cmdline:
+            - '.+'
+%{ endif ~}
 
   - path: /etc/docker/daemon.json
     permissions: '0644'
@@ -66,5 +140,32 @@ runcmd:
   - systemctl enable docker
   - systemctl restart docker
   - docker compose -f /opt/stack/compose.yaml up -d
+%{ if enable_node_exporter || enable_syslogng_metrics ~}
+  - mkdir -p /var/lib/node_exporter/textfile_collector
+%{ endif ~}
+%{ if enable_node_exporter ~}
+  # node_exporter — OS host + systemd-unit metrics (:9100); also serves the syslog-ng .prom.
+  - /usr/local/sbin/install-exporter.sh node_exporter https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-{ARCH}.tar.gz node_exporter --collector.systemd --collector.textfile.directory=/var/lib/node_exporter/textfile_collector
+%{ endif ~}
+%{ if enable_syslogng_metrics ~}
+  - systemctl enable --now syslogng-textfile.timer
+%{ endif ~}
+%{ if enable_systemd_exporter ~}
+  # systemd_exporter — per-unit health/resource metrics (:9558)
+  - /usr/local/sbin/install-exporter.sh systemd_exporter https://github.com/prometheus-community/systemd_exporter/releases/download/v0.7.0/systemd_exporter-0.7.0.linux-{ARCH}.tar.gz systemd_exporter --web.listen-address=:9558
+%{ endif ~}
+%{ if enable_journald_exporter ~}
+  # journald-exporter (:12345) — x86-64-only upstream binary; best-effort (amd64 only).
+  - mkdir -p /etc/journald-exporter/keys
+  - /usr/local/sbin/install-exporter.sh journald-exporter https://github.com/dead-claudia/journald-exporter/releases/download/v1.0.0/journald-exporter journald-exporter --port=12345 --key-dir=/etc/journald-exporter/keys || true
+%{ endif ~}
+%{ if enable_process_exporter ~}
+  # process-exporter — per-process metrics (:9256)
+  - /usr/local/sbin/install-exporter.sh process-exporter https://github.com/ncabatoff/process-exporter/releases/download/v0.8.4/process-exporter-0.8.4.linux-{ARCH}.tar.gz process-exporter --config.path=/etc/process-exporter/all.yaml
+%{ endif ~}
+%{ if enable_cadvisor ~}
+  # cAdvisor — container metrics (:8089; :8080 is taken by the Traefik dashboard on this host)
+  - /usr/local/sbin/install-exporter.sh cadvisor https://github.com/google/cadvisor/releases/download/v0.49.1/cadvisor-v0.49.1-linux-{ARCH} cadvisor --port=8089
+%{ endif ~}
 
-final_message: "docker client ready — stack on :80/:8080/:3000/:9090/:9093; shipping logs to central"
+final_message: "docker client ready — stack on :80/:8080/:3000/:9090/:9093; exporters on :9100/:9558/:9256/:8089; shipping logs to central"

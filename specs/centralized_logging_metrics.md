@@ -114,7 +114,7 @@ node_exporter is launched with `--collector.textfile.directory=/var/lib/node_exp
 | node_exporter | ✓ | ✓ | ✓ | 9100 | `enable_node_exporter` | on | `--collector.systemd --collector.textfile.directory=…`; also serves syslog-ng `.prom` |
 | syslog-ng metrics (textfile) | ✓ | ✓ | ✓ | via 9100 | `enable_syslogng_metrics` | on | timer → `syslog-ng-ctl stats prometheus` |
 | systemd_exporter | ✓ | ✓ | ✓ | 9558 | `enable_systemd_exporter` | on | richer per-unit health than node_exporter's systemd collector; watch `syslog-ng.service` |
-| journald-exporter | ✓ | ✓ | ✓ | 12345 | `enable_journald_exporter` | on | dead-claudia, Rust, `GET /metrics`; **arm64 asset risk — see §13** |
+| journald-exporter | ✓ | ✓ | ✓ | 12345 | `enable_journald_exporter` | **off** | dead-claudia, Rust, `GET /metrics`; prebuilt binary is **x86-64-only** (confirmed) → off on the arm64 lab, usable on amd64 Proxmox. See §13 |
 | process-exporter | ✓ | ✓ | ✓ | 9256 | `enable_process_exporter` | on | catch-all `all.yaml` (reuse monitoring); watches `syslog-ng`/`dockerd`/`k0s` |
 | filestat_exporter | ✓ | — | — | 9943 | `enable_filestat_exporter` | on | watches `/var/log/remote/*` — received-log size/mtime (detect a client that stopped shipping) |
 | cAdvisor | — | ✓ | ✓ | 8089 | `enable_cadvisor` | on | **:8080 taken** by Traefik (docker) / kube-router (k0s) |
@@ -140,7 +140,7 @@ cluster's existing variable style:
 variable "enable_node_exporter"     { type = bool, default = true }
 variable "enable_syslogng_metrics"  { type = bool, default = true }
 variable "enable_systemd_exporter"  { type = bool, default = true }
-variable "enable_journald_exporter" { type = bool, default = true }   # see §13 arm64 risk
+variable "enable_journald_exporter" { type = bool, default = false }  # x86-64-only binary; see §13
 variable "enable_process_exporter"  { type = bool, default = true }
 variable "enable_filestat_exporter" { type = bool, default = true }   # central only
 variable "enable_cadvisor"          { type = bool, default = true }   # docker + k0s, :8089
@@ -311,12 +311,13 @@ Prometheus-targets-`up` assertion.
 
 ## 13. Risks & open questions
 
-- **journald-exporter arm64 (highest risk).** dead-claudia/journald-exporter is Rust and may not
-  publish a prebuilt `arm64` release asset ([repo](https://github.com/dead-claudia/journald-exporter),
-  default port **12345**, `GET /metrics`). Mitigations, in order: (1) use a prebuilt arm64 asset if one
-  exists; (2) `cargo build --release` in cloud-init (adds rust toolchain + build time); (3) leave
-  `enable_journald_exporter=false`. syslog-ng textfile metrics + systemd_exporter already cover most
-  log-pipeline health, so journald-exporter is the lowest-priority of the four optional exporters.
+- **journald-exporter is arm64-incompatible (resolved → default off).** dead-claudia/journald-exporter
+  v1.0.0 ships a **single x86-64 ELF binary** (verified: `ELF 64-bit … x86-64`), no arm64 asset
+  ([repo](https://github.com/dead-claudia/journald-exporter), default port **12345**, `GET /metrics`).
+  So `enable_journald_exporter` **defaults to `false`**; flipping it on works on amd64 (Proxmox) and is a
+  best-effort install (`|| true`) on arm64. To run it on arm64 later, `cargo build --release` in
+  cloud-init. syslog-ng textfile metrics + systemd_exporter already cover most log-pipeline health, so
+  this is the lowest-priority exporter.
 - **systemd metrics overlap.** node_exporter already runs `--collector.systemd`; systemd_exporter is
   additive (richer per-unit resource metrics). Keep both, or drop systemd_exporter if node_exporter's
   systemd collector suffices.

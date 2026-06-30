@@ -46,7 +46,7 @@ lab-specific notes.
 
 | Lab | What it demonstrates | VMs | Docs |
 |-----|----------------------|-----|------|
-| **centralized_logging** | syslog-ng log shipping across three VMs into one collector (`/var/log/remote/<host>/<prog>.log`), with runtime DHCP-IP injection between peers | 3 | 📘 [USAGE](clusters/centralized_logging/USAGE.md) · 📖 [README](clusters/centralized_logging/README.md) · 📐 [spec](specs/centralized_logging.md) |
+| **centralized_logging** | syslog-ng log shipping across three VMs into one collector (`/var/log/remote/<host>/<prog>.log`), with runtime DHCP-IP injection between peers, plus a flag-gated Prometheus exporter layer | 3 | 📘 [USAGE](clusters/centralized_logging/USAGE.md) · 📖 [README](clusters/centralized_logging/README.md) · 🧭 [tutorial](clusters/centralized_logging/TUTORIAL.md) · 📐 [spec](specs/centralized_logging.md) · 📊 [metrics spec](specs/centralized_logging_metrics.md) |
 
 > _New labs land as new `clusters/<name>/` folders. CI auto-discovers them — see
 > [How it works](#how-it-works)._
@@ -162,8 +162,10 @@ templates on every apply.
 
 - 📚 [`docs/README.md`](docs/README.md) — documentation hub (start here to navigate the docs)
 - 📘 [`clusters/centralized_logging/USAGE.md`](clusters/centralized_logging/USAGE.md) — detailed how-to-use guide for the first lab
+- 🧭 [`clusters/centralized_logging/TUTORIAL.md`](clusters/centralized_logging/TUTORIAL.md) — hands-on metrics-layer walkthrough
 - 📖 [`clusters/centralized_logging/README.md`](clusters/centralized_logging/README.md) — the first lab
 - 📐 [`specs/centralized_logging.md`](specs/centralized_logging.md) — full design of the centralized-logging cluster
+- 📊 [`specs/centralized_logging_metrics.md`](specs/centralized_logging_metrics.md) — Prometheus exporter-layer design
 - 🤖 [`CLAUDE.md`](CLAUDE.md) — repo conventions and `.claude/` automation guidance
 - ⚙️ [`Justfile`](Justfile) — every orchestration recipe
 - ✅ [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — hermetic CI pipeline
