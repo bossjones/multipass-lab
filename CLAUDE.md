@@ -27,7 +27,14 @@ just verify centralized_logging  # live: pytest + testinfra over SSH against run
 just down  centralized_logging   # tofu destroy
 just status                      # multipass list
 just ssh   centralized_logging central   # shell onto the <name>-<role> VM
+just open  centralized_monitoring        # open the core dashboards in Chrome
+just open  centralized_monitoring --full # + every enabled /metrics endpoint (debug)
 ```
+
+`just open` reads the cluster's `web_urls` output (`{core, all}`, both flag-aware) and
+opens each URL via `open -a "Google Chrome"` (override with `BROWSER_APP=...`; falls back
+to the default browser). No flag opens `core` (human dashboards); `--full`/`--all` opens
+`all` (core + every **enabled** exporter endpoint — disabled flags are skipped, not opened).
 
 Run a single hermetic test from the cluster dir:
 `tofu -chdir=clusters/<name> test -test-directory=tests/tofu`.

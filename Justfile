@@ -81,6 +81,25 @@ ssh CLUSTER ROLE:
     @ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.{{ROLE}}.ipv4'); \
      ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip"
 
+# open cluster dashboards in the browser:  just open centralized_monitoring [--full]
+# no flag -> core human dashboards;  --full (or --all) -> + every enabled /metrics endpoint.
+# Override the browser with BROWSER_APP=...; falls back to the macOS default browser.
+open CLUSTER *FLAGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    key=core
+    for f in {{FLAGS}}; do case "$f" in --full|--all) key=all ;; esac; done
+    urls=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json web_urls | jq -r ".${key}[]")
+    if [ -z "$urls" ]; then
+      echo "no URLs for {{CLUSTER}} — is it up?  try: just up {{CLUSTER}}" >&2
+      exit 1
+    fi
+    while IFS= read -r u; do
+      echo "open $u"
+      open -a "${BROWSER_APP:-Google Chrome}" "$u" 2>/dev/null || open "$u"
+      sleep 0.25
+    done <<< "$urls"
+
 # list the log files collected on the central VM
 logs CLUSTER:
     @ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.central.ipv4'); \

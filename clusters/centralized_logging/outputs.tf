@@ -65,3 +65,54 @@ output "shell_hints" {
     "open http://${multipass_instance.docker.ipv4}:3000  # grafana (admin/admin)",
   ])
 }
+
+# Browser URLs for `just open centralized_logging [--full]`. The human dashboards all
+# live on the docker VM and are always composed (so `core` is unconditional); `all`
+# folds in every /metrics exporter endpoint, each gated on the same enable_* flag that
+# governs its install in cloud-init — so a disabled exporter never opens as a dead tab.
+locals {
+  _docker_ip = multipass_instance.docker.ipv4
+
+  web_urls_core = [
+    "http://${local._docker_ip}",      # Heimdall (link homepage, fronted by Traefik :80)
+    "http://${local._docker_ip}:3000", # Grafana (admin/admin)
+    "http://${local._docker_ip}:9090", # Prometheus
+    "http://${local._docker_ip}:9093", # Alertmanager
+    "http://${local._docker_ip}:8080", # Traefik dashboard
+  ]
+
+  # One {url, on} candidate per (role, exporter); the same port map as metrics_targets.
+  web_urls_metrics_candidates = [
+    # central
+    { url = "http://${multipass_instance.central.ipv4}:9100/metrics", on = var.enable_node_exporter },
+    { url = "http://${multipass_instance.central.ipv4}:9558/metrics", on = var.enable_systemd_exporter },
+    { url = "http://${multipass_instance.central.ipv4}:12345/metrics", on = var.enable_journald_exporter },
+    { url = "http://${multipass_instance.central.ipv4}:9256/metrics", on = var.enable_process_exporter },
+    { url = "http://${multipass_instance.central.ipv4}:9943/metrics", on = var.enable_filestat_exporter },
+    # docker
+    { url = "http://${local._docker_ip}:9100/metrics", on = var.enable_node_exporter },
+    { url = "http://${local._docker_ip}:9558/metrics", on = var.enable_systemd_exporter },
+    { url = "http://${local._docker_ip}:12345/metrics", on = var.enable_journald_exporter },
+    { url = "http://${local._docker_ip}:9256/metrics", on = var.enable_process_exporter },
+    { url = "http://${local._docker_ip}:8089/metrics", on = var.enable_cadvisor },
+    { url = "http://${local._docker_ip}:8082/metrics", on = var.enable_traefik_metrics },
+    # k0s
+    { url = "http://${multipass_instance.k0s.ipv4}:9100/metrics", on = var.enable_node_exporter },
+    { url = "http://${multipass_instance.k0s.ipv4}:9558/metrics", on = var.enable_systemd_exporter },
+    { url = "http://${multipass_instance.k0s.ipv4}:12345/metrics", on = var.enable_journald_exporter },
+    { url = "http://${multipass_instance.k0s.ipv4}:9256/metrics", on = var.enable_process_exporter },
+    { url = "http://${multipass_instance.k0s.ipv4}:8089/metrics", on = var.enable_cadvisor },
+    { url = "http://${multipass_instance.k0s.ipv4}:10249/metrics", on = var.enable_kube_metrics },
+    { url = "http://${multipass_instance.k0s.ipv4}:10255/metrics/cadvisor", on = var.enable_kube_metrics },
+    { url = "http://${multipass_instance.k0s.ipv4}:8081/metrics", on = var.enable_kube_state_metrics },
+  ]
+  web_urls_metrics = [for c in local.web_urls_metrics_candidates : c.url if c.on]
+}
+
+output "web_urls" {
+  description = "Browser URLs. core = human dashboards; all = core + enabled /metrics endpoints. Consumed by `just open <cluster> [--full]`."
+  value = {
+    core = local.web_urls_core
+    all  = concat(local.web_urls_core, local.web_urls_metrics)
+  }
+}

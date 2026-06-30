@@ -241,3 +241,40 @@ run "heimdall_off_omits_seed" {
     error_message = "disabling Heimdall must also omit its seed step"
   }
 }
+
+run "web_urls_core_and_flag_aware" {
+  command = plan
+
+  # core = the human dashboards on the server VM; the mock fixes ipv4 = 10.99.99.99.
+  assert {
+    condition     = contains(output.web_urls.core, "http://10.99.99.99:3000")
+    error_message = "web_urls.core must include the Grafana dashboard URL"
+  }
+  assert {
+    condition     = contains(output.web_urls.core, "http://10.99.99.99:5080")
+    error_message = "web_urls.core must include OpenObserve (default-on)"
+  }
+  assert {
+    condition     = length(output.web_urls.all) > length(output.web_urls.core)
+    error_message = "web_urls.all must add the /metrics endpoints on top of core"
+  }
+}
+
+run "web_urls_disable_drops_endpoints" {
+  command = plan
+
+  variables {
+    enable_openobserve   = false
+    enable_node_exporter = false
+  }
+
+  # Disabled OpenObserve drops from core; disabled node_exporter drops every :9100 from all.
+  assert {
+    condition     = !contains(output.web_urls.core, "http://10.99.99.99:5080")
+    error_message = "disabling OpenObserve must drop its URL from web_urls.core"
+  }
+  assert {
+    condition     = alltrue([for u in output.web_urls.all : !strcontains(u, ":9100/metrics")])
+    error_message = "disabling node_exporter must drop all :9100/metrics URLs from web_urls.all"
+  }
+}

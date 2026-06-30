@@ -172,3 +172,36 @@ run "disabled_flags_omit_install_blocks" {
     error_message = "disabled traefik metrics must not render in the compose stack"
   }
 }
+
+run "web_urls_core_and_flag_aware" {
+  command = plan
+
+  # core = the human dashboards on the docker VM (always composed).
+  assert {
+    condition     = length(output.web_urls.core) == 5
+    error_message = "web_urls.core must list the 5 docker-VM dashboards (heimdall/grafana/prometheus/alertmanager/traefik)"
+  }
+  assert {
+    condition     = length(output.web_urls.all) > length(output.web_urls.core)
+    error_message = "web_urls.all must add the /metrics endpoints on top of core"
+  }
+
+  # journald-exporter is default-OFF, so its :12345 endpoint must be absent from all.
+  assert {
+    condition     = alltrue([for u in output.web_urls.all : !strcontains(u, ":12345/metrics")])
+    error_message = "journald-exporter is default-off, so no :12345 URL may appear in web_urls.all"
+  }
+}
+
+run "web_urls_journald_on_adds_endpoint" {
+  command = plan
+
+  variables {
+    enable_journald_exporter = true
+  }
+
+  assert {
+    condition     = anytrue([for u in output.web_urls.all : strcontains(u, ":12345/metrics")])
+    error_message = "enabling journald-exporter must add its :12345 endpoint to web_urls.all"
+  }
+}
