@@ -4,6 +4,9 @@ Three Multipass VMs provisioned by OpenTofu, demonstrating centralized log shipp
 with syslog-ng. See [`../../specs/centralized_logging.md`](../../specs/centralized_logging.md)
 for the full design.
 
+> 📘 **New here?** Read the full [**USAGE guide**](USAGE.md) — prerequisites, configuration
+> reference, diagrams, log-shipping internals, and troubleshooting.
+
 | VM | Role | Sizing |
 |----|------|--------|
 | `centralized-logging-central` | syslog-ng **server** → `/var/log/remote/<host>/<prog>.log` | 2 vCPU / 2G / 40G |
@@ -32,3 +35,9 @@ just down centralized_logging    # destroy
   senders under `/var/log/remote/<host>/`. `keep` trusts the client hostname (DNS-free); `dns`
   reverse-resolves (needs PTR). Changing it requires a full `just down` + `just up` (the
   provider keys on the cloud-init file path, not its content).
+
+## More docs
+
+- 📘 [`USAGE.md`](USAGE.md) — detailed how-to-use guide for this lab
+- 📐 [`../../specs/centralized_logging.md`](../../specs/centralized_logging.md) — full design
+- 📚 [`../../docs/README.md`](../../docs/README.md) — repo documentation hub
