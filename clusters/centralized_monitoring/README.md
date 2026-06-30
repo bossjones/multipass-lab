@@ -5,6 +5,10 @@ OpenObserve **server** *pulls* metrics, traces, and uptime from a fully-instrume
 single-node **k0s** host. Sibling to `centralized_logging`; see
 [`specs/centralized_monitoring.md`](../../specs/centralized_monitoring.md) for the full design.
 
+> 📚 **Full documentation:** [`docs/`](docs/) — [architecture](docs/architecture.md) ·
+> [endpoints & ports](docs/endpoints.md) · [feature flags](docs/feature-flags.md) ·
+> [open-source dependencies](docs/dependencies.md) · [operations & testing](docs/operations.md).
+
 | VM | role | vCPU | RAM | Disk | what it runs |
 |----|------|------|-----|------|--------------|
 | `centralized-monitoring-server` | `server` | 4 | 8G | 40G | Prometheus, Alertmanager, Grafana, OpenObserve, OTel Collector, blackbox, Heimdall, Uptime Kuma, Traefik, statsd/ssh exporters |

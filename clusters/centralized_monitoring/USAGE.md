@@ -5,6 +5,12 @@ A deep-dive companion to [`README.md`](README.md) and the design spec
 a pull-based observability stack: a Prometheus/Grafana/OpenObserve **server** that scrapes a
 fully-instrumented single-node **k0s** host.
 
+> 📚 For the full reference — Mermaid diagrams, the complete endpoint/port catalog, the open-source
+> dependency tables, and the feature-flag matrix — see [`docs/`](docs/):
+> [architecture](docs/architecture.md) · [endpoints](docs/endpoints.md) ·
+> [feature flags](docs/feature-flags.md) · [dependencies](docs/dependencies.md) ·
+> [operations](docs/operations.md).
+
 ## 1. Architecture & the inverted IP edge
 
 ```
