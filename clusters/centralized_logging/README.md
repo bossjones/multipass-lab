@@ -7,6 +7,10 @@ for the full design.
 > 📘 **New here?** Read the full [**USAGE guide**](USAGE.md) — prerequisites, configuration
 > reference, diagrams, log-shipping internals, and troubleshooting.
 
+> 📚 **Full documentation:** [`docs/`](docs/) — [architecture](docs/architecture.md) ·
+> [endpoints & ports](docs/endpoints.md) · [feature flags](docs/feature-flags.md) ·
+> [open-source dependencies](docs/dependencies.md) · [operations & testing](docs/operations.md).
+
 | VM | Role | Sizing |
 |----|------|--------|
 | `centralized-logging-central` | syslog-ng **server** → `/var/log/remote/<host>/<prog>.log` | 2 vCPU / 2G / 40G |
@@ -45,6 +49,7 @@ just down centralized_logging    # destroy
 ## More docs
 
 - 📘 [`USAGE.md`](USAGE.md) — detailed how-to-use guide for this lab
+- 📚 [`docs/`](docs/) — deep reference suite (architecture, endpoints, feature flags, dependencies, operations)
 - 🧭 [`TUTORIAL.md`](TUTORIAL.md) — hands-on "stand up & verify the metrics layer" walkthrough
 - 📐 [`../../specs/centralized_logging.md`](../../specs/centralized_logging.md) — full design
 - 📊 [`../../specs/centralized_logging_metrics.md`](../../specs/centralized_logging_metrics.md) — metrics/exporter design

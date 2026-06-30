@@ -709,6 +709,7 @@ Installed flag-gated via a copied `install-exporter.sh` (arm64 `{ARCH}` substitu
 - 📐 [`specs/centralized_logging.md`](../../specs/centralized_logging.md) — full design rationale
 - 📊 [`specs/centralized_logging_metrics.md`](../../specs/centralized_logging_metrics.md) — metrics/exporter-layer design
 - 🧭 [`TUTORIAL.md`](TUTORIAL.md) — hands-on "stand up & verify the metrics layer" walkthrough
+- 📚 [`docs/README.md`](docs/README.md) — deep reference suite hub (architecture, endpoints, feature flags, dependencies, operations)
 - 📖 [`README.md`](README.md) — this cluster's quick-reference card
 - 📚 [`docs/README.md`](../../docs/README.md) — repo documentation hub
 - 🏠 [root `README.md`](../../README.md) — repo overview and conventions

@@ -27,8 +27,14 @@ flowchart TD
 | 📖 [`clusters/centralized_logging/README.md`](../clusters/centralized_logging/README.md) | The lab's **quick-reference** card (topology table + 5-line quickstart). |
 | 📘 [`clusters/centralized_logging/USAGE.md`](../clusters/centralized_logging/USAGE.md) | The lab's **detailed how-to-use guide** — config reference, diagrams, troubleshooting. |
 | 🧭 [`clusters/centralized_logging/TUTORIAL.md`](../clusters/centralized_logging/TUTORIAL.md) | Hands-on **"stand up & verify the metrics layer"** walkthrough. |
+| 📚 [`clusters/centralized_logging/docs/`](../clusters/centralized_logging/docs/) | Deep reference suite — architecture, endpoints, feature flags, dependencies, operations. |
 | 📐 [`specs/centralized_logging.md`](../specs/centralized_logging.md) | Full **design rationale** for the centralized-logging lab. |
 | 📊 [`specs/centralized_logging_metrics.md`](../specs/centralized_logging_metrics.md) | Design for the lab's **Prometheus exporter layer** (endpoints, flags, future scrape). |
+| 📖 [`clusters/centralized_monitoring/README.md`](../clusters/centralized_monitoring/README.md) | The lab's **quick-reference** card (topology table + quickstart). |
+| 📘 [`clusters/centralized_monitoring/USAGE.md`](../clusters/centralized_monitoring/USAGE.md) | The lab's **detailed how-to-use guide**. |
+| 📚 [`clusters/centralized_monitoring/docs/`](../clusters/centralized_monitoring/docs/) | Deep reference suite — architecture, endpoints, feature flags, dependencies, operations. |
+| 📐 [`specs/centralized_monitoring.md`](../specs/centralized_monitoring.md) | Full **design rationale** for the centralized-monitoring lab. |
+| 🧪 [`specs/e2e-centralized-monitoring.md`](../specs/e2e-centralized-monitoring.md) | End-to-end monitoring design. |
 | 🤖 [`CLAUDE.md`](../CLAUDE.md) | Repo conventions and `.claude/` automation guidance. |
 | ⚙️ [`Justfile`](../Justfile) | Every orchestration recipe (`init`/`plan`/`up`/`down`/`check`/`verify`/`status`/`ssh`/`logs`). |
 | ✅ [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | Hermetic CI — auto-discovers every `clusters/<name>/` folder. |
@@ -71,9 +77,27 @@ future `centralized_monitoring` scrape.
 | `centralized-logging-k0s` | syslog-ng client + single-node k0s | 2 vCPU / 2G / 20G |
 | `centralized-logging-docker` | syslog-ng client + Docker stack | 2 vCPU / 4G / 25G |
 
-**Docs:** 📘 [USAGE](../clusters/centralized_logging/USAGE.md) ·
+**Docs:** 📚 [docs/](../clusters/centralized_logging/docs/) ·
+📘 [USAGE](../clusters/centralized_logging/USAGE.md) ·
 📖 [README](../clusters/centralized_logging/README.md) ·
 📐 [spec](../specs/centralized_logging.md)
+
+### centralized_monitoring
+
+Two [Multipass](https://multipass.run/) VMs demonstrating a **pull-based** Prometheus / Grafana /
+OpenObserve observability stack, with feature-flagged, tiered (MVP/Reach/Nice-to-have) exporters.
+The runtime-IP injection edge is inverted vs. `centralized_logging`: the k0s client is created
+**first** so its DHCP IP can be baked into the server's `prometheus.yml` scrape config.
+
+| VM | Role | Sizing |
+|----|------|--------|
+| `centralized-monitoring-server` | Prometheus/Grafana/OpenObserve/Alertmanager hub | 4 vCPU / 8G / 40G |
+| `centralized-monitoring-k0s` | single-node k0s + exporter bundle | 2 vCPU / 4G / 30G |
+
+**Docs:** 📚 [docs/](../clusters/centralized_monitoring/docs/) ·
+📘 [USAGE](../clusters/centralized_monitoring/USAGE.md) ·
+📖 [README](../clusters/centralized_monitoring/README.md) ·
+📐 [spec](../specs/centralized_monitoring.md)
 
 > _New labs land as new `clusters/<name>/` folders, each with its own `README.md` + `USAGE.md`.
 > Add a section here and a row to the [root README labs table](../README.md#labs) when you

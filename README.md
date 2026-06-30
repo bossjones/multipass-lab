@@ -47,6 +47,7 @@ lab-specific notes.
 | Lab | What it demonstrates | VMs | Docs |
 |-----|----------------------|-----|------|
 | **centralized_logging** | syslog-ng log shipping across three VMs into one collector (`/var/log/remote/<host>/<prog>.log`), with runtime DHCP-IP injection between peers, plus a flag-gated Prometheus exporter layer | 3 | 📘 [USAGE](clusters/centralized_logging/USAGE.md) · 📖 [README](clusters/centralized_logging/README.md) · 🧭 [tutorial](clusters/centralized_logging/TUTORIAL.md) · 📐 [spec](specs/centralized_logging.md) · 📊 [metrics spec](specs/centralized_logging_metrics.md) |
+| **centralized_monitoring** | Pull-based Prometheus/Grafana/OpenObserve observability stack across two VMs, with feature-flagged, tiered (MVP/Reach/Nice-to-have) exporters and an inverted runtime-IP injection edge | 2 | 📘 [USAGE](clusters/centralized_monitoring/USAGE.md) · 📖 [README](clusters/centralized_monitoring/README.md) · 📚 [docs/](clusters/centralized_monitoring/docs/) · 📐 [spec](specs/centralized_monitoring.md) · 🧪 [e2e spec](specs/e2e-centralized-monitoring.md) |
 
 > _New labs land as new `clusters/<name>/` folders. CI auto-discovers them — see
 > [How it works](#how-it-works)._
@@ -166,6 +167,11 @@ templates on every apply.
 - 📖 [`clusters/centralized_logging/README.md`](clusters/centralized_logging/README.md) — the first lab
 - 📐 [`specs/centralized_logging.md`](specs/centralized_logging.md) — full design of the centralized-logging cluster
 - 📊 [`specs/centralized_logging_metrics.md`](specs/centralized_logging_metrics.md) — Prometheus exporter-layer design
+- 📘 [`clusters/centralized_monitoring/USAGE.md`](clusters/centralized_monitoring/USAGE.md) — detailed how-to-use guide for the second lab
+- 📚 [`clusters/centralized_monitoring/docs/`](clusters/centralized_monitoring/docs/) — deep reference suite (architecture, endpoints, feature flags, dependencies, operations)
+- 📖 [`clusters/centralized_monitoring/README.md`](clusters/centralized_monitoring/README.md) — the second lab
+- 📐 [`specs/centralized_monitoring.md`](specs/centralized_monitoring.md) — full design of the centralized-monitoring cluster
+- 🧪 [`specs/e2e-centralized-monitoring.md`](specs/e2e-centralized-monitoring.md) — end-to-end monitoring design
 - 🤖 [`CLAUDE.md`](CLAUDE.md) — repo conventions and `.claude/` automation guidance
 - ⚙️ [`Justfile`](Justfile) — every orchestration recipe
 - ✅ [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — hermetic CI pipeline
