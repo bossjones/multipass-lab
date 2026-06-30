@@ -118,6 +118,12 @@ resource "local_file" "server_ci" {
     grafana_dash_node   = local.grafana_dash_node
     grafana_dash_cad    = local.grafana_dash_cad
     ssh_exporter_conf   = local.ssh_exporter_conf
+    # Heimdall auto-seed (cloud-init). enable_heimdall comes from local.flags; the
+    # seed toggle + script body + flag list are passed explicitly so enabled_exporters
+    # stays a pure service-flag list.
+    enable_heimdall_seed = var.enable_heimdall_seed
+    heimdall_cli_py      = file("${path.module}/scripts/heimdall_cli.py")
+    heimdall_seed_flags  = join(",", local.enabled_exporters)
   }))
 }
 

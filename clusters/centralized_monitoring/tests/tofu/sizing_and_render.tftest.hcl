@@ -183,3 +183,61 @@ run "nut_toggle_on_renders_install_and_job" {
     error_message = "enabling nut must render its scrape job"
   }
 }
+
+run "heimdall_seed_renders_by_default" {
+  command = plan
+
+  # Heimdall + auto-seed are both default-on, so the server cloud-init must embed
+  # the seed tool and the runtime seed steps (uv install, IP discovery, seed call).
+  assert {
+    condition = alltrue([for marker in [
+      "/opt/stack/heimdall/heimdall_cli.py",
+      "astral.sh/uv/install.sh",
+      "ip -4 route get",
+      "heimdall_cli.py seed",
+    ] : strcontains(local_file.server_ci.content, marker)])
+    error_message = "default render must embed the Heimdall seed tool + runcmd steps"
+  }
+
+  # The embedded script + block-scalar runcmd must keep the cloud-init valid YAML.
+  assert {
+    condition     = can(yamldecode(local_file.server_ci.content))
+    error_message = "rendered server cloud-init must be valid YAML"
+  }
+}
+
+run "heimdall_seed_off_omits_block" {
+  command = plan
+
+  variables {
+    enable_heimdall_seed = false
+  }
+
+  # With seeding disabled the script and runcmd steps must be gone, even though
+  # Heimdall itself stays in the compose stack.
+  assert {
+    condition = alltrue([for marker in [
+      "/opt/stack/heimdall/heimdall_cli.py",
+      "heimdall_cli.py seed",
+    ] : !strcontains(local_file.server_ci.content, marker)])
+    error_message = "enable_heimdall_seed=false must omit the seed write_file + runcmd"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "lscr.io/linuxserver/heimdall")
+    error_message = "Heimdall service itself must remain when only seeding is off"
+  }
+}
+
+run "heimdall_off_omits_seed" {
+  command = plan
+
+  variables {
+    enable_heimdall = false
+  }
+
+  # No Heimdall -> no seed, regardless of the seed flag default.
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "heimdall_cli.py seed")
+    error_message = "disabling Heimdall must also omit its seed step"
+  }
+}

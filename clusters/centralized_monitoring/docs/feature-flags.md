@@ -71,6 +71,7 @@ Legend: **Default** ✅ on / ⬜ off · **Host** = where it runs.
 | `enable_kube_state_metrics` | ✅ | k0s | 8081 | k8s object state (hostNetwork Deployment) |
 | `enable_kubelet_scrape` | ✅ | k0s | 10255 | kubelet/cAdvisor via read-only port (no auth) |
 | `enable_heimdall` | ✅ | server | 80 (or via Traefik) | homepage / link dashboard |
+| `enable_heimdall_seed` | ✅ | server | — | auto-seed Heimdall tiles at boot via cloud-init (needs `enable_heimdall`) |
 | `enable_uptime_kuma` | ✅ | server | 3001 | human status page + notifications |
 | `enable_traefik` | ✅ | server | 80/443/8082 | ingress fronting the stack + `/metrics` |
 | `enable_statsd_exporter` | ✅ | server | 9102 (TCP), 8125 (UDP) | StatsD → Prometheus bridge |

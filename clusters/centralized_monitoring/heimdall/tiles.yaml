@@ -1,0 +1,35 @@
+# Heimdall dashboard tiles for the centralized_monitoring cluster.
+#
+# Source of truth for `heimdall_cli.py sync`. `{server_ip}` is substituted from
+# `tofu output -raw server_ipv4` at sync time. `just heimdall-sync` regenerates
+# the default set from live tofu outputs (flag-aware) and reconciles with --prune;
+# hand-edits here survive because the tool only prunes tiles it manages.
+#
+# Each tile becomes a plain Heimdall item (type=0) pinned to the default dashboard.
+# `icon`/`colour` are optional; `tag` (optional) groups a tile under a category.
+
+tiles:
+  - title: Grafana
+    url: "http://{server_ip}:3000"
+    icon: grafana
+    colour: "#161b1f"
+  - title: Prometheus
+    url: "http://{server_ip}:9090"
+    icon: prometheus
+    colour: "#e6522c"
+  - title: Alertmanager
+    url: "http://{server_ip}:9093"
+    icon: prometheus
+    colour: "#e6522c"
+  - title: OpenObserve
+    url: "http://{server_ip}:5080"
+    icon: openobserve
+    colour: "#3b1e54"
+  - title: Uptime Kuma
+    url: "http://{server_ip}:3001"
+    icon: uptime-kuma
+    colour: "#5cdd8b"
+  - title: Traefik
+    url: "http://{server_ip}:8082"
+    icon: traefik
+    colour: "#24a1c1"

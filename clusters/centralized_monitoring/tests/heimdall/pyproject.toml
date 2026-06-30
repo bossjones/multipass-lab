@@ -1,0 +1,18 @@
+[project]
+name = "heimdall-cli-tests"
+version = "0.0.0"
+description = "Hermetic unit tests for heimdall_cli (Heimdall tile management)"
+requires-python = ">=3.11"
+dependencies = [
+    "pytest>=8",
+    "pytest-mock>=3",
+    "pytest-cov>=5",
+    "pytest-randomly>=3",
+    "PyYAML>=6",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["."]
+# Make the single-file CLI importable as `heimdall_cli` from the cluster scripts dir.
+pythonpath = ["../../scripts"]

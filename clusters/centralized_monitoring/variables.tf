@@ -133,6 +133,12 @@ variable "enable_heimdall" {
   default     = true
 }
 
+variable "enable_heimdall_seed" {
+  description = "Auto-seed Heimdall tiles at boot via cloud-init (requires enable_heimdall)."
+  type        = bool
+  default     = true
+}
+
 variable "enable_uptime_kuma" {
   description = "Uptime Kuma human status page service."
   type        = bool

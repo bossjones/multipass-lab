@@ -50,6 +50,28 @@ check CLUSTER: (init CLUSTER)
 verify CLUSTER:
     cd {{cluster_root}}/{{CLUSTER}}/tests/testinfra && uv run pytest -v
 
+# reconcile Heimdall tiles to the live, flag-aware endpoint set (generate -> sync --prune)
+heimdall-sync CLUSTER:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="{{cluster_root}}/{{CLUSTER}}"
+    tmp="$(mktemp -t heimdall-tiles.XXXXXX.yaml)"
+    trap 'rm -f "$tmp"' EXIT
+    uv run "$dir/scripts/heimdall_cli.py" generate --chdir "$dir" -o "$tmp"
+    uv run "$dir/scripts/heimdall_cli.py" sync --chdir "$dir" --config "$tmp" --prune
+
+# list the tiles currently in Heimdall
+heimdall-list CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/heimdall_cli.py list --chdir {{cluster_root}}/{{CLUSTER}}
+
+# add a single tile:  just heimdall-add centralized_monitoring "Grafana" "http://<ip>:3000"
+heimdall-add CLUSTER TITLE URL:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/heimdall_cli.py add --chdir {{cluster_root}}/{{CLUSTER}} --title {{quote(TITLE)}} --url {{quote(URL)}}
+
+# remove a single tile (soft delete):  just heimdall-rm centralized_monitoring "Grafana"
+heimdall-rm CLUSTER TITLE:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/heimdall_cli.py remove --chdir {{cluster_root}}/{{CLUSTER}} --title {{quote(TITLE)}}
+
 # multipass list
 status:
     multipass list
