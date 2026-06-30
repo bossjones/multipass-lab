@@ -145,16 +145,19 @@ variable "enable_traefik" {
   default     = true
 }
 
+# nut_exporter & nftables_exporter are Reach-tier but LAB-HOSTILE, so they default OFF:
+# nut_exporter needs a running upsd/UPS (absent in a VM), and nftables_exporter ships only as
+# a Python tool (no portable binary release). Flip them on if your target host supports them.
 variable "enable_nut_exporter" {
-  description = "nut_exporter (UPS / Network UPS Tools) on the client + nut job."
+  description = "nut_exporter (UPS / Network UPS Tools) on the client + nut job. Off: needs a real UPS/upsd."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "enable_nftables_exporter" {
-  description = "nftables_exporter (firewall rule counters) on the client + nftables job."
+  description = "nftables_exporter (firewall rule counters) on the client + nftables job. Off: no portable binary release."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "enable_statsd_exporter" {

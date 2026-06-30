@@ -27,7 +27,14 @@ exporters:
 service:
   telemetry:
     metrics:
-      address: 0.0.0.0:8888
+      # Collector self-metrics on :8888 (scraped by Prometheus's `selfmetrics` job). Recent
+      # collectors require the `readers` form; the old `address: 0.0.0.0:8888` is rejected.
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: '0.0.0.0'
+                port: 8888
   pipelines:
     traces:
       receivers: [otlp]

@@ -40,11 +40,11 @@ def test_enabled_client_exporter_port(k0s, enabled_exporters, flag):
 def test_kube_state_metrics_reachable(k0s, enabled_exporters):
     if "enable_kube_state_metrics" not in enabled_exporters:
         pytest.skip("enable_kube_state_metrics disabled")
-    # kube-state-metrics runs in-cluster; assert the deployment is available.
+    # kube-state-metrics runs as a hostNetwork Deployment in kube-system; assert it is available.
     deadline = time.time() + 240
     while time.time() < deadline:
         res = k0s.run(
-            "sudo k0s kubectl get deploy kube-state-metrics "
+            "sudo k0s kubectl get deploy kube-state-metrics -n kube-system "
             "-o jsonpath='{.status.availableReplicas}'"
         )
         if res.rc == 0 and res.stdout.strip() not in ("", "0"):

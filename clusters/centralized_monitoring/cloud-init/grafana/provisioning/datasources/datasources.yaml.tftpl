@@ -10,11 +10,15 @@ datasources:
     isDefault: true
     editable: true
 %{ if enable_openobserve ~}
+  # OpenObserve exposed via its Prometheus-compatible PromQL HTTP API, so it provisions
+  # cleanly as a built-in datasource type (no unsigned Grafana plugin to install).
   - name: OpenObserve
-    type: zinclabs-openobserve-datasource
+    type: prometheus
     access: proxy
-    url: http://openobserve:5080
-    jsonData:
-      organization: default
+    url: http://openobserve:5080/api/default/prometheus
+    basicAuth: true
+    basicAuthUser: admin@example.com
+    secureJsonData:
+      basicAuthPassword: ${openobserve_password}
     editable: true
 %{ endif ~}

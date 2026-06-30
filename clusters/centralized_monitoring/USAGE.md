@@ -77,19 +77,29 @@ install/compose block and the scrape job:
 
 | tier | flags |
 |------|-------|
-| MVP | `enable_otel` `enable_openobserve` `enable_blackbox` `enable_node_exporter` `enable_cadvisor` `enable_process_exporter` `enable_netdata` |
-| Reach | `enable_kube_state_metrics` `enable_kubelet_scrape` `enable_heimdall` `enable_uptime_kuma` `enable_traefik` `enable_nut_exporter` `enable_nftables_exporter` `enable_statsd_exporter` `enable_ssh_exporter` `enable_filestat_exporter` |
-| Nice | `enable_osquery_exporter` `enable_ebpf_exporter`* `enable_texporter`* `enable_ffmpeg_exporter` `enable_script_exporter` `enable_vector` |
+| MVP (on) | `enable_otel` `enable_openobserve` `enable_blackbox` `enable_node_exporter` `enable_cadvisor` `enable_process_exporter` `enable_netdata` |
+| Reach (on) | `enable_kube_state_metrics` `enable_kubelet_scrape` `enable_heimdall` `enable_uptime_kuma` `enable_traefik` `enable_statsd_exporter` `enable_ssh_exporter` `enable_filestat_exporter` |
+| Reach but **off** (lab-hostile) | `enable_nut_exporter`† `enable_nftables_exporter`‡ |
+| Nice (off) | `enable_osquery_exporter` `enable_ebpf_exporter`* `enable_texporter`* `enable_ffmpeg_exporter` `enable_script_exporter` `enable_vector` |
 
-`*` need kernel `linux-headers` (the install block pulls them). The `enabled_exporters` output is a
-sorted list of the active flags, consumed by `tests/testinfra/conftest.py`.
+`*` need kernel `linux-headers` (the install block pulls them). `†` `nut_exporter` needs a running
+`upsd`/UPS — absent in a lab VM. `‡` `nftables_exporter` ships only as a Python tool (no portable
+binary release). Both stay flag-available; flip them on for a host that supports them. The
+`enabled_exporters` output is a sorted list of the active flags, consumed by
+`tests/testinfra/conftest.py`.
+
+> **Arch note:** exporter binaries are installed via `install-exporter.sh`, which substitutes
+> `{ARCH}` (arm64/amd64 from `dpkg`) into each release URL — so the bundle works on Apple-Silicon
+> Multipass (arm64) and amd64 Proxmox alike. kube-state-metrics runs as a **host binary** against
+> the k0s admin kubeconfig (a ClusterIP Service is unreachable from the server), and the kubelet
+> job uses the **read-only port 10255** (http, no token), enabled via k0s `--kubelet-extra-args`.
 
 ### Scrape jobs (rendered with default flags)
 
 `prometheus` (spine) · `node` · `cadvisor` · `process` · `netdata` · `kube-state-metrics` ·
-`kubelet` · `nut` · `nftables` · `filestat` · `statsd` · `ssh` · `traefik` · `blackbox` ·
-`selfmetrics`. Nice jobs (`osquery`/`ebpf`/`texporter`/`ffmpeg`/`script`) render only when their
-flag is set.
+`kubelet` · `filestat` · `statsd` · `ssh` · `traefik` · `blackbox` · `selfmetrics`. The
+lab-hostile `nut`/`nftables` jobs and the Nice jobs (`osquery`/`ebpf`/`texporter`/`ffmpeg`/`script`)
+render only when their flag is set.
 
 ## 5. Testing — layered
 

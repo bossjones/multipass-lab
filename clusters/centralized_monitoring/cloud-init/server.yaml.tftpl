@@ -69,6 +69,13 @@ write_files:
     content: |
       ${indent(6, otel_config)}
 %{ endif ~}
+%{ if enable_ssh_exporter ~}
+  # --- ssh_exporter ---------------------------------------------------------
+  - path: /opt/stack/ssh_exporter/ssh_exporter.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, ssh_exporter_conf)}
+%{ endif ~}
 
   # --- the compose stack itself ---------------------------------------------
   - path: /opt/stack/compose.yaml

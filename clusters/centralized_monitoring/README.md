@@ -21,9 +21,11 @@ server's `prometheus.yml` from it, then launches the server. The dependency chai
 
 Every exporter / integration is an individual `enable_*` bool that gates **both** its cloud-init
 install/compose block **and** its `prometheus.yml` scrape job. Defaults: **MVP + Reach ON,
-Nice-to-have OFF**. The Prometheus / Grafana / Alertmanager spine is always on. The
-`enabled_exporters` output lists the active set and drives the live test suite. See
-[`variables.tf`](variables.tf) and [`USAGE.md`](USAGE.md) for the full table.
+Nice-to-have OFF**, with two Reach exceptions kept **off** because they are lab-hostile —
+`enable_nut_exporter` (needs a real UPS/`upsd`) and `enable_nftables_exporter` (no portable binary
+release). The Prometheus / Grafana / Alertmanager spine is always on. The `enabled_exporters`
+output lists the active set and drives the live test suite. See [`variables.tf`](variables.tf) and
+[`USAGE.md`](USAGE.md) for the full table.
 
 ## Quickstart
 

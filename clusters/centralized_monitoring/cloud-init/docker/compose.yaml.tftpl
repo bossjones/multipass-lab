@@ -26,9 +26,6 @@ services:
     image: grafana/grafana:latest
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${grafana_admin_password}
-%{ if enable_openobserve ~}
-      - GF_INSTALL_PLUGINS=zinclabs-openobserve-datasource
-%{ endif ~}
     ports:
       - "3000:3000"
     volumes:
@@ -69,7 +66,9 @@ services:
     image: public.ecr.aws/zinclabs/openobserve:latest
     environment:
       - ZO_ROOT_USER_EMAIL=admin@example.com
-      - ZO_ROOT_USER_PASSWORD=${grafana_admin_password}
+      # OpenObserve rejects weak passwords (needs upper+lower+digit+special), so this is a
+      # dedicated strong value, reused by the Grafana OpenObserve datasource's basic auth.
+      - ZO_ROOT_USER_PASSWORD=${openobserve_password}
     ports:
       - "5080:5080"
     volumes:
@@ -168,8 +167,12 @@ services:
   # --- ssh_exporter — SSH endpoint probes -----------------------------------
   ssh_exporter:
     image: treydock/ssh_exporter:latest
+    command:
+      - "--config.file=/config/ssh_exporter.yaml"
     ports:
       - "9312:9312"
+    volumes:
+      - /opt/stack/ssh_exporter/ssh_exporter.yaml:/config/ssh_exporter.yaml:ro
     restart: unless-stopped
 %{ endif ~}
 %{ if enable_vector ~}

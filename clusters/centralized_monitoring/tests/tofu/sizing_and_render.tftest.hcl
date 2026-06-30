@@ -98,7 +98,7 @@ run "defaults_sizing_names_and_render" {
   assert {
     condition = alltrue([for marker in [
       "node_exporter", "process-exporter", "netdata", "cadvisor",
-      "nut_exporter", "nftables_exporter", "filestat_exporter", "kube-state-metrics",
+      "filestat_exporter", "kube-state-metrics",
     ] : strcontains(local_file.k0s_ci.content, marker)])
     error_message = "k0s cloud-init must install the default-on exporter bundle"
   }
@@ -112,6 +112,17 @@ run "defaults_sizing_names_and_render" {
     condition = alltrue([for j in ["osquery", "ebpf", "texporter", "ffmpeg", "script"] :
     !strcontains(local_file.server_ci.content, "job_name: ${j}")])
     error_message = "Nice-to-have jobs must be absent with default flags"
+  }
+
+  # --- lab-hostile Reach exporters (nut/nftables) are OFF by default ------
+  assert {
+    condition = alltrue([for j in ["nut", "nftables"] :
+    !strcontains(local_file.server_ci.content, "job_name: ${j}")])
+    error_message = "nut/nftables jobs must be absent by default (lab-hostile, default off)"
+  }
+  assert {
+    condition     = !strcontains(local_file.k0s_ci.content, "nut_exporter")
+    error_message = "nut_exporter install block must be absent by default"
   }
   assert {
     condition     = !strcontains(local_file.server_ci.content, "timberio/vector")
@@ -155,20 +166,20 @@ run "ebpf_toggle_on_renders_install_and_job" {
   }
 }
 
-run "nut_toggle_off_removes_install_and_job" {
+run "nut_toggle_on_renders_install_and_job" {
   command = plan
 
   variables {
     ssh_pubkey          = "ssh-ed25519 AAAATESTKEY centralized-monitoring-tests"
-    enable_nut_exporter = false
+    enable_nut_exporter = true
   }
 
   assert {
-    condition     = !strcontains(local_file.k0s_ci.content, "nut_exporter")
-    error_message = "disabling nut must drop its install block"
+    condition     = strcontains(local_file.k0s_ci.content, "nut_exporter")
+    error_message = "enabling nut (lab-hostile, default off) must render its install block"
   }
   assert {
-    condition     = !strcontains(local_file.server_ci.content, "job_name: nut")
-    error_message = "disabling nut must drop its scrape job"
+    condition     = strcontains(local_file.server_ci.content, "job_name: nut")
+    error_message = "enabling nut must render its scrape job"
   }
 }

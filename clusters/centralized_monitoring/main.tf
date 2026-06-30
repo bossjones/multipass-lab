@@ -9,6 +9,10 @@ locals {
   server_name = "${var.name_prefix}-server"
   k0s_name    = "${var.name_prefix}-k0s"
 
+  # OpenObserve rejects weak passwords; this dedicated strong value is used both for the
+  # OpenObserve root user and the Grafana OpenObserve-datasource basic auth (must match).
+  openobserve_password = "Complexpass#123"
+
   # One map of every enable_* flag, threaded into every templatefile() call so each
   # template renders its own %{ if enable_x ~}…%{ endif ~} blocks. A disabled flag is
   # therefore neither installed/composed on the VM nor scraped by Prometheus.
@@ -79,10 +83,11 @@ locals {
 
   compose_conf = templatefile("${path.module}/cloud-init/docker/compose.yaml.tftpl", merge(local.flags, {
     grafana_admin_password = var.grafana_admin_password
+    openobserve_password   = local.openobserve_password
   }))
 
   grafana_datasources = templatefile("${path.module}/cloud-init/grafana/provisioning/datasources/datasources.yaml.tftpl", merge(local.flags, {
-    k0s_ip = multipass_instance.k0s.ipv4
+    openobserve_password = local.openobserve_password
   }))
 
   # Static (non-templated) configs spliced verbatim into the server cloud-init.
@@ -93,6 +98,7 @@ locals {
   grafana_dash_prov = file("${path.module}/cloud-init/grafana/provisioning/dashboards/dashboards.yaml")
   grafana_dash_node = file("${path.module}/cloud-init/grafana/provisioning/dashboards/node-exporter.json")
   grafana_dash_cad  = file("${path.module}/cloud-init/grafana/provisioning/dashboards/cadvisor-k8s.json")
+  ssh_exporter_conf = file("${path.module}/cloud-init/ssh/ssh_exporter.yaml")
 }
 
 # --- server (the observability hub) — created SECOND ------------------------
@@ -111,6 +117,7 @@ resource "local_file" "server_ci" {
     grafana_dash_prov   = local.grafana_dash_prov
     grafana_dash_node   = local.grafana_dash_node
     grafana_dash_cad    = local.grafana_dash_cad
+    ssh_exporter_conf   = local.ssh_exporter_conf
   }))
 }
 

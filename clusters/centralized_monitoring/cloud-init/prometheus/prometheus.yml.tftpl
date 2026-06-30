@@ -27,7 +27,8 @@ scrape_configs:
 %{ if enable_cadvisor ~}
   - job_name: cadvisor
     static_configs:
-      - targets: ["cadvisor:8080", "${k0s_ip}:8080"]
+      # server cAdvisor container :8080; client cAdvisor binary on :8089 (:8080 is k0s kube-router)
+      - targets: ["cadvisor:8080", "${k0s_ip}:8089"]
 %{ endif ~}
 %{ if enable_process_exporter ~}
   - job_name: process
@@ -49,12 +50,10 @@ scrape_configs:
 %{ endif ~}
 %{ if enable_kubelet_scrape ~}
   - job_name: kubelet
-    scheme: https
-    tls_config:
-      insecure_skip_verify: true
+    # kubelet read-only port (10255, http, no auth) — enabled via k0s --kubelet-extra-args.
     metrics_path: /metrics/cadvisor
     static_configs:
-      - targets: ["${k0s_ip}:10250"]
+      - targets: ["${k0s_ip}:10255"]
 %{ endif ~}
 %{ if enable_nut_exporter ~}
   - job_name: nut
@@ -139,9 +138,6 @@ scrape_configs:
       - targets:
           - "alertmanager:9093"
           - "grafana:3000"
-%{ if enable_openobserve ~}
-          - "openobserve:5080"
-%{ endif ~}
 %{ if enable_otel ~}
           - "otel-collector:8888"
 %{ endif ~}

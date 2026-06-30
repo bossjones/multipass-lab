@@ -35,11 +35,13 @@ k0s_client = {
 # enable_heimdall           = true
 # enable_uptime_kuma        = true
 # enable_traefik            = true
-# enable_nut_exporter       = true
-# enable_nftables_exporter  = true
 # enable_statsd_exporter    = true
 # enable_ssh_exporter       = true
 # enable_filestat_exporter  = true
+
+# --- Reach but lab-hostile (off by default) ---------------------------------
+# enable_nut_exporter      = true   # needs a real UPS / upsd
+# enable_nftables_exporter = true   # upstream is a Python tool (no portable binary)
 
 # --- Nice-to-have (off) -----------------------------------------------------
 # enable_osquery_exporter = true
