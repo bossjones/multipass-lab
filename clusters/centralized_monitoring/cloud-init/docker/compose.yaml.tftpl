@@ -1,0 +1,198 @@
+services:
+  # --- spine (always on) ----------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    ports:
+      - "9090:9090"
+    volumes:
+      - /opt/stack/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - /opt/stack/prometheus/alert.rules.yml:/etc/prometheus/alert.rules.yml:ro
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+    ports:
+      - "9093:9093"
+    volumes:
+      - /opt/stack/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${grafana_admin_password}
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - /opt/stack/grafana/provisioning:/etc/grafana/provisioning:ro
+      - /opt/stack/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    restart: unless-stopped
+%{ if enable_node_exporter ~}
+  # --- server self-metrics: node_exporter (:9100) ---------------------------
+  node_exporter:
+    image: prom/node-exporter:latest
+    command:
+      - "--path.rootfs=/host"
+      - "--collector.systemd"
+    pid: host
+    ports:
+      - "9100:9100"
+    volumes:
+      - /:/host:ro,rslave
+    restart: unless-stopped
+%{ endif ~}
+%{ if enable_cadvisor ~}
+  # --- server self-metrics: cAdvisor (:8080) --------------------------------
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    restart: unless-stopped
+%{ endif ~}
+%{ if enable_openobserve ~}
+  # --- OpenObserve — OTLP traces/metrics/logs store + Grafana datasource -----
+  openobserve:
+    image: public.ecr.aws/zinclabs/openobserve:latest
+    environment:
+      - ZO_ROOT_USER_EMAIL=admin@example.com
+      # OpenObserve rejects weak passwords (needs upper+lower+digit+special), so this is a
+      # dedicated strong value, reused by the Grafana OpenObserve datasource's basic auth.
+      - ZO_ROOT_USER_PASSWORD=${openobserve_password}
+    ports:
+      - "5080:5080"
+    volumes:
+      - openobserve_data:/data
+    restart: unless-stopped
+%{ endif ~}
+%{ if enable_otel ~}
+  # --- OpenTelemetry Collector — OTLP gateway -------------------------------
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command:
+      - "--config=/etc/otel/collector-config.yaml"
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8888:8888"
+    volumes:
+      - /opt/stack/otel/collector-config.yaml:/etc/otel/collector-config.yaml:ro
+    restart: unless-stopped
+%{ endif ~}
+%{ if enable_blackbox ~}
+  # --- blackbox_exporter — HTTP/TCP/ICMP probes -----------------------------
+  blackbox_exporter:
+    image: prom/blackbox-exporter:latest
+    command:
+      - "--config.file=/etc/blackbox/blackbox.yml"
+    ports:
+      - "9115:9115"
+    volumes:
+      - /opt/stack/blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    restart: unless-stopped
+%{ endif ~}
+%{ if enable_heimdall ~}
+  # --- Heimdall — homepage / link dashboard ---------------------------------
+  heimdall:
+    image: lscr.io/linuxserver/heimdall:latest
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+    volumes:
+      - heimdall_config:/config
+%{ if enable_traefik ~}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.heimdall.rule=Host(`heimdall.localhost`)"
+      - "traefik.http.services.heimdall.loadbalancer.server.port=80"
+%{ else ~}
+    ports:
+      - "80:80"
+%{ endif ~}
+    restart: unless-stopped
+%{ endif ~}
+%{ if enable_uptime_kuma ~}
+  # --- Uptime Kuma — human status page + notifications ----------------------
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    ports:
+      - "3001:3001"
+    volumes:
+      - uptime_kuma_data:/app/data
+    restart: unless-stopped
+%{ endif ~}
+%{ if enable_traefik ~}
+  # --- Traefik — ingress fronting the stack + its own /metrics --------------
+  traefik:
+    image: traefik:v3.1
+    command:
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.metrics.address=:8082"
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.entrypoint=metrics"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8082:8082"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+%{ endif ~}
+%{ if enable_statsd_exporter ~}
+  # --- statsd_exporter — StatsD -> Prometheus bridge ------------------------
+  statsd_exporter:
+    image: prom/statsd-exporter:latest
+    ports:
+      - "9102:9102"
+      - "8125:8125/udp"
+    restart: unless-stopped
+%{ endif ~}
+%{ if enable_ssh_exporter ~}
+  # --- ssh_exporter — SSH endpoint probes -----------------------------------
+  ssh_exporter:
+    image: treydock/ssh_exporter:latest
+    command:
+      - "--config.file=/config/ssh_exporter.yaml"
+    ports:
+      - "9312:9312"
+    volumes:
+      - /opt/stack/ssh_exporter/ssh_exporter.yaml:/config/ssh_exporter.yaml:ro
+    restart: unless-stopped
+%{ endif ~}
+%{ if enable_vector ~}
+  # --- Vector — optional pipeline (alt to OTel; future logging route) -------
+  vector:
+    image: timberio/vector:latest-debian
+    ports:
+      - "8686:8686"
+    restart: unless-stopped
+%{ endif ~}
+
+volumes:
+  prometheus_data:
+  grafana_data:
+%{ if enable_openobserve ~}
+  openobserve_data:
+%{ endif ~}
+%{ if enable_heimdall ~}
+  heimdall_config:
+%{ endif ~}
+%{ if enable_uptime_kuma ~}
+  uptime_kuma_data:
+%{ endif ~}

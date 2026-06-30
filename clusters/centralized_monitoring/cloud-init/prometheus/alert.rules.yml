@@ -1,0 +1,23 @@
+# Managed by OpenTofu (clusters/centralized_monitoring). Loaded by Prometheus as a
+# rule_file. Lab-grade alerting: fire when a scrape target is down or a blackbox probe
+# fails. Routed through Alertmanager (which defaults to a null receiver in the lab).
+groups:
+  - name: availability
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scrape target down: {{ $labels.job }} / {{ $labels.instance }}"
+          description: "Prometheus has been unable to scrape {{ $labels.instance }} for >1m."
+
+      - alert: BlackboxProbeFailed
+        expr: probe_success == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Blackbox probe failed: {{ $labels.instance }}"
+          description: "The blackbox probe of {{ $labels.instance }} has been failing for >1m."

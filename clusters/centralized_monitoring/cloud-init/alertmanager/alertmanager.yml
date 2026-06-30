@@ -1,0 +1,17 @@
+# Managed by OpenTofu (clusters/centralized_monitoring). Lab default: a null receiver
+# that swallows everything (no paging in the lab). Real notifiers (ntfy / email / Slack)
+# are Future work — drop a receiver here and point the route at it.
+route:
+  receiver: "devnull"
+  group_by: ["alertname"]
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 1h
+
+receivers:
+  - name: "devnull"
+
+inhibit_rules:
+  - source_matchers: ['severity = "critical"']
+    target_matchers: ['severity = "warning"']
+    equal: ["alertname", "instance"]

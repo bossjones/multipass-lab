@@ -1,0 +1,8 @@
+# Managed by OpenTofu (clusters/centralized_monitoring). Minimal ssh_exporter config so the
+# exporter starts and serves /metrics (the `ssh` job scrapes the exporter's own metrics).
+# Real SSH probe targets are queried via /ssh?target=...&module=default — Future work.
+modules:
+  default:
+    user: monitor
+    password: monitor
+    timeout: 10

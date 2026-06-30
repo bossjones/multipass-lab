@@ -1,0 +1,199 @@
+#cloud-config
+# Monitored host — single-node k0s + the enabled exporter bundle. "Anything that can
+# be monitored should be." Because this is an Ubuntu host running k0s, enabled exporters
+# cover BOTH layers: the OS (node_exporter incl. systemd, process-exporter, netdata, and
+# the Reach/Nice host exporters) and the k8s node (kube-state-metrics + kubelet/cAdvisor).
+# Each exporter's install block is gated on its enable_* flag, so the footprint scales
+# with what is turned on. Prometheus on the server PULLS these — no server IP is needed
+# here (that would create a dependency cycle; client-side OTLP push is Future work).
+#
+# NOTE on arch: install-exporter.sh substitutes {ARCH} (arm64/amd64, from dpkg) into each
+# release URL so the bundle works on Apple-Silicon Multipass (arm64) and amd64 Proxmox alike.
+package_update: true
+package_upgrade: true
+
+packages:
+  - curl
+  - tar
+  - vim
+  - htop
+  - jq
+
+ssh_authorized_keys:
+  - ${ssh_pubkey}
+
+write_files:
+  # Generic exporter installer: download a GitHub release (tar.gz or raw binary),
+  # drop the binary in /usr/local/bin, and install + enable a systemd unit for it.
+  # {ARCH} in the URL is replaced with the host's Debian arch (arm64/amd64).
+  - path: /usr/local/sbin/install-exporter.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      name="$1"; url="$2"; bin="$3"; shift 3; args="$*"
+      arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+      case "$arch" in aarch64) arch=arm64 ;; x86_64) arch=amd64 ;; esac
+      url="$${url//\{ARCH\}/$arch}"
+      tmp="$(mktemp -d)"
+      curl -sSLf "$url" -o "$tmp/dl"
+      if tar -tzf "$tmp/dl" >/dev/null 2>&1; then
+        tar -xzf "$tmp/dl" -C "$tmp"
+        found="$(find "$tmp" -type f -name "$bin" | head -n1)"
+      else
+        found="$tmp/dl"
+      fi
+      install -m0755 "$found" "/usr/local/bin/$name"
+      cat >/etc/systemd/system/$name.service <<UNIT
+      [Unit]
+      Description=$name
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      ExecStart=/usr/local/bin/$name $args
+      Restart=always
+      RestartSec=5
+      [Install]
+      WantedBy=multi-user.target
+      UNIT
+      systemctl daemon-reload
+      systemctl enable --now "$name"
+%{ if enable_process_exporter ~}
+  # process-exporter config: a catch-all group keyed on the process basename.
+  - path: /etc/process-exporter/all.yaml
+    permissions: '0644'
+    content: |
+      process_names:
+        - name: "{{.Comm}}"
+          cmdline:
+            - '.+'
+%{ endif ~}
+%{ if enable_filestat_exporter ~}
+  # filestat_exporter config: stat a couple of always-present files so it emits metrics.
+  - path: /etc/filestat_exporter/filestat.yaml
+    permissions: '0644'
+    content: |
+      exporter:
+        files:
+          - patterns:
+              - '/var/log/syslog'
+              - '/etc/hostname'
+%{ endif ~}
+%{ if enable_kube_state_metrics ~}
+  # kube-state-metrics runs as a hostNetwork Deployment (upstream no longer ships a standalone
+  # binary, and a ClusterIP Service is unreachable from the server). hostNetwork binds the k0s
+  # host's :8081 directly, and it authenticates with the k0s admin kubeconfig mounted from the
+  # host (the kubeconfig's apiserver address — the node IP:6443 — is reachable on the host netns).
+  - path: /etc/kube-state-metrics/deployment.yaml
+    permissions: '0644'
+    content: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: kube-state-metrics
+        namespace: kube-system
+        labels:
+          app.kubernetes.io/name: kube-state-metrics
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: kube-state-metrics
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: kube-state-metrics
+          spec:
+            hostNetwork: true
+            containers:
+              - name: kube-state-metrics
+                image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
+                args:
+                  - --port=8081
+                  - --telemetry-port=8082
+                  - --kubeconfig=/etc/ksm/kubeconfig
+                ports:
+                  - containerPort: 8081
+                    name: http-metrics
+                  - containerPort: 8082
+                    name: telemetry
+                volumeMounts:
+                  - name: kubeconfig
+                    mountPath: /etc/ksm
+                    readOnly: true
+            volumes:
+              - name: kubeconfig
+                hostPath:
+                  path: /etc/kube-state-metrics
+                  type: Directory
+%{ endif ~}
+
+runcmd:
+  # --- single-node k0s (controller + worker in one). The kubelet read-only port (10255,
+  # http, no auth) is enabled so the server can scrape kubelet/cAdvisor without a token.
+  - curl -sSLf https://get.k0s.sh | sh
+  - /usr/local/bin/k0s install controller --single --kubelet-extra-args="--read-only-port=10255"
+  - /usr/local/bin/k0s start
+%{ if enable_node_exporter ~}
+  # node_exporter — OS host + systemd-unit metrics (:9100)
+  - /usr/local/sbin/install-exporter.sh node_exporter https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-{ARCH}.tar.gz node_exporter --collector.systemd
+%{ endif ~}
+%{ if enable_process_exporter ~}
+  # process-exporter — per-process metrics (:9256)
+  - /usr/local/sbin/install-exporter.sh process-exporter https://github.com/ncabatoff/process-exporter/releases/download/v0.8.4/process-exporter-0.8.4.linux-{ARCH}.tar.gz process-exporter --config.path=/etc/process-exporter/all.yaml
+%{ endif ~}
+%{ if enable_cadvisor ~}
+  # cAdvisor — container metrics (:8089; :8080 is taken by k0s kube-router on this host)
+  - /usr/local/sbin/install-exporter.sh cadvisor https://github.com/google/cadvisor/releases/download/v0.49.1/cadvisor-v0.49.1-linux-{ARCH} cadvisor --port=8089
+%{ endif ~}
+%{ if enable_netdata ~}
+  # netdata — real-time agent (:19999, /api/v1/allmetrics?format=prometheus)
+  - curl -sSLf https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh && sh /tmp/netdata-kickstart.sh --dont-wait --disable-telemetry || true
+%{ endif ~}
+%{ if enable_kube_state_metrics ~}
+  # kube-state-metrics — wait for the API, drop the admin kubeconfig next to the manifest, then
+  # apply the hostNetwork Deployment so :8081 is reachable from the server at <k0s_ip>:8081.
+  - until /usr/local/bin/k0s kubectl get --raw='/readyz' >/dev/null 2>&1; do sleep 5; done
+  - mkdir -p /etc/kube-state-metrics && /usr/local/bin/k0s kubeconfig admin > /etc/kube-state-metrics/kubeconfig
+  - /usr/local/bin/k0s kubectl apply -f /etc/kube-state-metrics/deployment.yaml
+%{ endif ~}
+%{ if enable_nut_exporter ~}
+  # nut_exporter — UPS / Network UPS Tools metrics (:9199). Lab-hostile: needs a running
+  # upsd/UPS, so this flag is off by default.
+  - /usr/local/sbin/install-exporter.sh nut_exporter https://github.com/DRuggeri/nut_exporter/releases/download/v3.2.5/nut_exporter_3.2.5_linux_{ARCH}.tar.gz nut_exporter
+%{ endif ~}
+%{ if enable_nftables_exporter ~}
+  # nftables_exporter — firewall rule counters (:9630). Lab-hostile: upstream ships a Python
+  # tool (no portable binary release), so this flag is off by default.
+  - /usr/local/sbin/install-exporter.sh nftables_exporter https://github.com/Sheridan/nftables_exporter/releases/download/2.1.0/nftables_exporter-2.1.0.linux-{ARCH}.tar.gz nftables_exporter
+%{ endif ~}
+%{ if enable_filestat_exporter ~}
+  # filestat_exporter — file size / mtime / stat metrics (:9943)
+  - /usr/local/sbin/install-exporter.sh filestat_exporter https://github.com/michael-doubez/filestat_exporter/releases/download/v0.4.5/filestat_exporter-v0.4.5.linux-{ARCH}.tar.gz filestat_exporter --config.file=/etc/filestat_exporter/filestat.yaml
+%{ endif ~}
+%{ if enable_osquery_exporter ~}
+  # osquery_exporter — osquery query results -> metrics (:9450)
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y osquery || true
+  - /usr/local/sbin/install-exporter.sh osquery_exporter https://github.com/zwopir/osquery_exporter/releases/download/v0.1.1/osquery_exporter-0.1.1.linux-{ARCH}.tar.gz osquery_exporter
+%{ endif ~}
+%{ if enable_ebpf_exporter ~}
+  # ebpf_exporter — custom eBPF metrics (:9435). Needs kernel headers to compile probes.
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y linux-headers-$(uname -r) || DEBIAN_FRONTEND=noninteractive apt-get install -y linux-headers-generic
+  - /usr/local/sbin/install-exporter.sh ebpf_exporter https://github.com/cloudflare/ebpf_exporter/releases/download/v2.4.2/ebpf_exporter-2.4.2-linux-{ARCH}.tar.gz ebpf_exporter --config.dir=/etc/ebpf_exporter
+%{ endif ~}
+%{ if enable_texporter ~}
+  # texporter — eBPF network-traffic metrics (:9101). Needs kernel headers.
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y linux-headers-$(uname -r) || DEBIAN_FRONTEND=noninteractive apt-get install -y linux-headers-generic
+  - /usr/local/sbin/install-exporter.sh texporter https://github.com/wobcom/texporter/releases/download/v0.1.0/texporter-0.1.0.linux-{ARCH}.tar.gz texporter
+%{ endif ~}
+%{ if enable_ffmpeg_exporter ~}
+  # ffmpeg_exporter — FFmpeg job metrics (:9618), only with media workloads
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg || true
+  - /usr/local/sbin/install-exporter.sh ffmpeg_exporter https://github.com/projectkudu/ffmpeg_exporter/releases/download/v0.1.0/ffmpeg_exporter-0.1.0.linux-{ARCH}.tar.gz ffmpeg_exporter
+%{ endif ~}
+%{ if enable_script_exporter ~}
+  # script_exporter — arbitrary shell-script metrics (:9469)
+  - /usr/local/sbin/install-exporter.sh script_exporter https://github.com/ricoberger/script_exporter/releases/download/v2.18.0/script_exporter-2.18.0.linux-{ARCH}.tar.gz script_exporter
+%{ endif ~}
+
+final_message: "k0s monitored host ready — k0s status; exporters scraped by the server"
