@@ -1,0 +1,124 @@
+locals {
+  # Explicit inline key wins; otherwise read the pubkey file if it exists; otherwise empty.
+  ssh_pubkey = var.ssh_pubkey != "" ? var.ssh_pubkey : (
+    fileexists(pathexpand(var.ssh_pubkey_path)) ? trimspace(file(pathexpand(var.ssh_pubkey_path))) : ""
+  )
+
+  render_dir = "${path.module}/.rendered"
+
+  server_name = "${var.name_prefix}-server"
+  k0s_name    = "${var.name_prefix}-k0s"
+
+  # One map of every enable_* flag, threaded into every templatefile() call so each
+  # template renders its own %{ if enable_x ~}…%{ endif ~} blocks. A disabled flag is
+  # therefore neither installed/composed on the VM nor scraped by Prometheus.
+  flags = {
+    # MVP
+    enable_otel             = var.enable_otel
+    enable_openobserve      = var.enable_openobserve
+    enable_blackbox         = var.enable_blackbox
+    enable_node_exporter    = var.enable_node_exporter
+    enable_cadvisor         = var.enable_cadvisor
+    enable_process_exporter = var.enable_process_exporter
+    enable_netdata          = var.enable_netdata
+    # Reach
+    enable_kube_state_metrics = var.enable_kube_state_metrics
+    enable_kubelet_scrape     = var.enable_kubelet_scrape
+    enable_heimdall           = var.enable_heimdall
+    enable_uptime_kuma        = var.enable_uptime_kuma
+    enable_traefik            = var.enable_traefik
+    enable_nut_exporter       = var.enable_nut_exporter
+    enable_nftables_exporter  = var.enable_nftables_exporter
+    enable_statsd_exporter    = var.enable_statsd_exporter
+    enable_ssh_exporter       = var.enable_ssh_exporter
+    enable_filestat_exporter  = var.enable_filestat_exporter
+    # Nice-to-have
+    enable_osquery_exporter = var.enable_osquery_exporter
+    enable_ebpf_exporter    = var.enable_ebpf_exporter
+    enable_texporter        = var.enable_texporter
+    enable_ffmpeg_exporter  = var.enable_ffmpeg_exporter
+    enable_script_exporter  = var.enable_script_exporter
+    enable_vector           = var.enable_vector
+  }
+
+  # Sorted list of the active flags — exported as enabled_exporters and consumed by
+  # tests/testinfra/conftest.py so the live suite asserts only what is on.
+  enabled_exporters = sort([for k, v in local.flags : k if v])
+}
+
+# --- k0s-client (the monitored host) — created FIRST ------------------------
+# Prometheus pulls, so the dependency edge is the inverse of the logging cluster:
+# the scrape target must exist (and have a DHCP IP) before the server renders.
+
+resource "local_file" "k0s_ci" {
+  filename = "${local.render_dir}/k0s-client.yaml"
+  content = templatefile("${path.module}/cloud-init/k0s-client.yaml.tftpl", merge(local.flags, {
+    ssh_pubkey = local.ssh_pubkey
+  }))
+}
+
+resource "multipass_instance" "k0s" {
+  name           = local.k0s_name
+  image          = var.image
+  cpus           = var.k0s_client.cpus
+  memory         = var.k0s_client.memory
+  disk           = var.k0s_client.disk
+  cloudinit_file = local_file.k0s_ci.filename
+}
+
+# --- rendered server-side configs -------------------------------------------
+# prometheus.yml references the k0s runtime IP — THIS is the edge that forces
+# server-after-client ordering inside a single `tofu apply`:
+#   server -> local_file.server_ci -> prometheus_yml -> k0s.ipv4 -> k0s instance.
+
+locals {
+  prometheus_yml = templatefile("${path.module}/cloud-init/prometheus/prometheus.yml.tftpl", merge(local.flags, {
+    k0s_ip          = multipass_instance.k0s.ipv4
+    scrape_interval = var.prometheus_scrape_interval
+  }))
+
+  compose_conf = templatefile("${path.module}/cloud-init/docker/compose.yaml.tftpl", merge(local.flags, {
+    grafana_admin_password = var.grafana_admin_password
+  }))
+
+  grafana_datasources = templatefile("${path.module}/cloud-init/grafana/provisioning/datasources/datasources.yaml.tftpl", merge(local.flags, {
+    k0s_ip = multipass_instance.k0s.ipv4
+  }))
+
+  # Static (non-templated) configs spliced verbatim into the server cloud-init.
+  alert_rules       = file("${path.module}/cloud-init/prometheus/alert.rules.yml")
+  blackbox_yml      = file("${path.module}/cloud-init/prometheus/blackbox.yml")
+  alertmanager_yml  = file("${path.module}/cloud-init/alertmanager/alertmanager.yml")
+  otel_config       = file("${path.module}/cloud-init/otel/collector-config.yaml")
+  grafana_dash_prov = file("${path.module}/cloud-init/grafana/provisioning/dashboards/dashboards.yaml")
+  grafana_dash_node = file("${path.module}/cloud-init/grafana/provisioning/dashboards/node-exporter.json")
+  grafana_dash_cad  = file("${path.module}/cloud-init/grafana/provisioning/dashboards/cadvisor-k8s.json")
+}
+
+# --- server (the observability hub) — created SECOND ------------------------
+
+resource "local_file" "server_ci" {
+  filename = "${local.render_dir}/server.yaml"
+  content = templatefile("${path.module}/cloud-init/server.yaml.tftpl", merge(local.flags, {
+    ssh_pubkey          = local.ssh_pubkey
+    prometheus_yml      = local.prometheus_yml
+    compose_conf        = local.compose_conf
+    alert_rules         = local.alert_rules
+    blackbox_yml        = local.blackbox_yml
+    alertmanager_yml    = local.alertmanager_yml
+    otel_config         = local.otel_config
+    grafana_datasources = local.grafana_datasources
+    grafana_dash_prov   = local.grafana_dash_prov
+    grafana_dash_node   = local.grafana_dash_node
+    grafana_dash_cad    = local.grafana_dash_cad
+  }))
+}
+
+resource "multipass_instance" "server" {
+  name           = local.server_name
+  image          = var.image
+  cpus           = var.server.cpus
+  memory         = var.server.memory
+  disk           = var.server.disk
+  cloudinit_file = local_file.server_ci.filename
+}

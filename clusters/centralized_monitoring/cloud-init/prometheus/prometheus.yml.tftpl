@@ -1,0 +1,147 @@
+# Managed by OpenTofu (clusters/centralized_monitoring). Rendered from the k0s client's
+# runtime IP — ${k0s_ip} is the single injected value that forces client-before-server
+# ordering. Every scrape job is wrapped in an enable_* conditional so jobs exist only for
+# enabled features. Service names (grafana, alertmanager, …) resolve on the compose network.
+global:
+  scrape_interval: ${scrape_interval}
+  evaluation_interval: ${scrape_interval}
+
+rule_files:
+  - /etc/prometheus/alert.rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # --- spine (always on) ----------------------------------------------------
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+%{ if enable_node_exporter ~}
+  - job_name: node
+    static_configs:
+      - targets: ["node_exporter:9100", "${k0s_ip}:9100"]
+%{ endif ~}
+%{ if enable_cadvisor ~}
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080", "${k0s_ip}:8080"]
+%{ endif ~}
+%{ if enable_process_exporter ~}
+  - job_name: process
+    static_configs:
+      - targets: ["${k0s_ip}:9256"]
+%{ endif ~}
+%{ if enable_netdata ~}
+  - job_name: netdata
+    metrics_path: /api/v1/allmetrics
+    params:
+      format: ["prometheus"]
+    static_configs:
+      - targets: ["${k0s_ip}:19999"]
+%{ endif ~}
+%{ if enable_kube_state_metrics ~}
+  - job_name: kube-state-metrics
+    static_configs:
+      - targets: ["${k0s_ip}:8081"]
+%{ endif ~}
+%{ if enable_kubelet_scrape ~}
+  - job_name: kubelet
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true
+    metrics_path: /metrics/cadvisor
+    static_configs:
+      - targets: ["${k0s_ip}:10250"]
+%{ endif ~}
+%{ if enable_nut_exporter ~}
+  - job_name: nut
+    static_configs:
+      - targets: ["${k0s_ip}:9199"]
+%{ endif ~}
+%{ if enable_nftables_exporter ~}
+  - job_name: nftables
+    static_configs:
+      - targets: ["${k0s_ip}:9630"]
+%{ endif ~}
+%{ if enable_filestat_exporter ~}
+  - job_name: filestat
+    static_configs:
+      - targets: ["${k0s_ip}:9943"]
+%{ endif ~}
+%{ if enable_statsd_exporter ~}
+  - job_name: statsd
+    static_configs:
+      - targets: ["statsd_exporter:9102"]
+%{ endif ~}
+%{ if enable_ssh_exporter ~}
+  - job_name: ssh
+    static_configs:
+      - targets: ["ssh_exporter:9312"]
+%{ endif ~}
+%{ if enable_traefik ~}
+  - job_name: traefik
+    static_configs:
+      - targets: ["traefik:8082"]
+%{ endif ~}
+%{ if enable_osquery_exporter ~}
+  - job_name: osquery
+    static_configs:
+      - targets: ["${k0s_ip}:9450"]
+%{ endif ~}
+%{ if enable_ebpf_exporter ~}
+  - job_name: ebpf
+    static_configs:
+      - targets: ["${k0s_ip}:9435"]
+%{ endif ~}
+%{ if enable_texporter ~}
+  - job_name: texporter
+    static_configs:
+      - targets: ["${k0s_ip}:9101"]
+%{ endif ~}
+%{ if enable_ffmpeg_exporter ~}
+  - job_name: ffmpeg
+    static_configs:
+      - targets: ["${k0s_ip}:9618"]
+%{ endif ~}
+%{ if enable_script_exporter ~}
+  - job_name: script
+    metrics_path: /probe
+    static_configs:
+      - targets: ["${k0s_ip}:9469"]
+%{ endif ~}
+%{ if enable_blackbox ~}
+  # blackbox: Prometheus hands target URLs to the exporter, which probes them.
+  - job_name: blackbox
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://grafana:3000/login
+%{ if enable_openobserve ~}
+          - http://openobserve:5080/healthz
+%{ endif ~}
+          - http://${k0s_ip}:9100/metrics
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox_exporter:9115
+%{ endif ~}
+  # selfmetrics: scrape the server's own stack components that expose /metrics.
+  - job_name: selfmetrics
+    static_configs:
+      - targets:
+          - "alertmanager:9093"
+          - "grafana:3000"
+%{ if enable_openobserve ~}
+          - "openobserve:5080"
+%{ endif ~}
+%{ if enable_otel ~}
+          - "otel-collector:8888"
+%{ endif ~}

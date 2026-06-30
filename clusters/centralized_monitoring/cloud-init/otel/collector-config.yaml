@@ -1,0 +1,43 @@
+# Managed by OpenTofu (clusters/centralized_monitoring). OpenTelemetry Collector running
+# as a gateway on the server: OTLP receivers on 4317 (gRPC) / 4318 (HTTP), exporting
+# metrics to a Prometheus endpoint (scraped via :8888) and traces/logs to OpenObserve.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  # Collector self-telemetry + pipeline metrics are exposed on :8888 and scraped by
+  # Prometheus's `selfmetrics` job.
+  prometheus:
+    endpoint: 0.0.0.0:8889
+  # Traces/logs to OpenObserve over OTLP HTTP. Adjust the auth header/org/stream to your
+  # OpenObserve install (Future work wires the real token).
+  otlphttp/openobserve:
+    endpoint: http://openobserve:5080/api/default
+    headers:
+      Authorization: "Basic cm9vdEBleGFtcGxlLmNvbTphZG1pbg=="
+
+service:
+  telemetry:
+    metrics:
+      address: 0.0.0.0:8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/openobserve]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/openobserve]

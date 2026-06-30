@@ -1,0 +1,20 @@
+# Managed by OpenTofu (clusters/centralized_monitoring). Grafana datasource provisioning:
+# Prometheus always; OpenObserve only when enable_openobserve. No click-ops on first boot.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+%{ if enable_openobserve ~}
+  - name: OpenObserve
+    type: zinclabs-openobserve-datasource
+    access: proxy
+    url: http://openobserve:5080
+    jsonData:
+      organization: default
+    editable: true
+%{ endif ~}

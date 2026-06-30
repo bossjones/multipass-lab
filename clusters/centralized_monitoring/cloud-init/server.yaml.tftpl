@@ -1,0 +1,86 @@
+#cloud-config
+# Observability server — a single Docker Compose stack. The spine (Prometheus,
+# Alertmanager, Grafana) is always on; every MVP/Reach/Nice server service whose
+# enable_* flag is true is rendered into compose.yaml. Prometheus loads the rendered
+# prometheus.yml (which carries the injected k0s client IP as a scrape target) plus
+# alert.rules.yml. Grafana datasources + starter dashboards are provisioned from files
+# dropped here, so there is no click-ops on first boot.
+package_update: true
+package_upgrade: true
+
+packages:
+  - curl
+  - vim
+  - htop
+  - jq
+
+ssh_authorized_keys:
+  - ${ssh_pubkey}
+
+write_files:
+  # --- Prometheus (spine) ---------------------------------------------------
+  - path: /opt/stack/prometheus/prometheus.yml
+    permissions: '0644'
+    content: |
+      ${indent(6, prometheus_yml)}
+
+  - path: /opt/stack/prometheus/alert.rules.yml
+    permissions: '0644'
+    content: |
+      ${indent(6, alert_rules)}
+
+  # --- Alertmanager (spine) -------------------------------------------------
+  - path: /opt/stack/alertmanager/alertmanager.yml
+    permissions: '0644'
+    content: |
+      ${indent(6, alertmanager_yml)}
+
+  # --- Grafana provisioning (spine) -----------------------------------------
+  - path: /opt/stack/grafana/provisioning/datasources/datasources.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, grafana_datasources)}
+
+  - path: /opt/stack/grafana/provisioning/dashboards/dashboards.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, grafana_dash_prov)}
+
+  - path: /opt/stack/grafana/dashboards/node-exporter.json
+    permissions: '0644'
+    content: |
+      ${indent(6, grafana_dash_node)}
+
+  - path: /opt/stack/grafana/dashboards/cadvisor-k8s.json
+    permissions: '0644'
+    content: |
+      ${indent(6, grafana_dash_cad)}
+%{ if enable_blackbox ~}
+  # --- blackbox_exporter ----------------------------------------------------
+  - path: /opt/stack/blackbox/blackbox.yml
+    permissions: '0644'
+    content: |
+      ${indent(6, blackbox_yml)}
+%{ endif ~}
+%{ if enable_otel ~}
+  # --- OpenTelemetry Collector ----------------------------------------------
+  - path: /opt/stack/otel/collector-config.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, otel_config)}
+%{ endif ~}
+
+  # --- the compose stack itself ---------------------------------------------
+  - path: /opt/stack/compose.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, compose_conf)}
+
+runcmd:
+  - mkdir -p /opt/stack
+  - curl -fsSL https://get.docker.com | sh
+  - systemctl enable docker
+  - systemctl restart docker
+  - docker compose -f /opt/stack/compose.yaml up -d
+
+final_message: "monitoring server ready — prometheus :9090 / grafana :3000 / openobserve :5080"

@@ -1,0 +1,15 @@
+# Managed by OpenTofu (clusters/centralized_monitoring). Tells Grafana to load any
+# dashboard JSON dropped under /var/lib/grafana/dashboards (provisioned via cloud-init).
+apiVersion: 1
+
+providers:
+  - name: starter
+    orgId: 1
+    folder: "Starter"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
