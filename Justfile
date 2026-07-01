@@ -29,7 +29,9 @@ help:
     @echo "  just verify CLUSTER        live: pytest + testinfra over SSH"
     @echo "  just open   CLUSTER [--full]  open dashboards (core; --full adds /metrics endpoints)"
     @echo "  just ssh    CLUSTER ROLE   shell onto the <name>-<role> VM"
-    @echo "  just destroy CLUSTER       tofu destroy (one cluster, gone)"
+    @echo "  just destroy CLUSTER       tofu destroy + prune orphaned VMs (one cluster, gone)"
+    @echo "  just recreate CLUSTER      destroy (incl. orphan cleanup) then up"
+    @echo "  just prune CLUSTER         delete VMs tofu no longer tracks (fix a failed up)"
     @echo "  just down                  graceful multipass stop --all (all VMs, preserved)"
     @echo ""
     @echo "All recipes:"
@@ -54,9 +56,31 @@ up CLUSTER: (init CLUSTER)
             'cloud-init status --wait >/dev/null 2>&1 || true' 2>/dev/null; do sleep 5; done; \
         done
 
-# tofu destroy (one cluster, gone):  just destroy (centralized_logging|centralized_monitoring)
+# tofu destroy + prune any orphaned VMs (one cluster, gone):  just destroy (centralized_logging|centralized_monitoring)
 destroy CLUSTER:
     tofu -chdir={{cluster_root}}/{{CLUSTER}} destroy -auto-approve
+    @just prune {{CLUSTER}}
+
+# delete + purge Multipass VMs for this cluster that OpenTofu no longer tracks.
+# A failed `up` (e.g. a launch timeout) leaves a VM behind that `tofu destroy` can't
+# see, which then collides with the next `up` ("instance already exists"). Safe to run
+# anytime: it never touches a VM that is still in tofu state.  just prune centralized_logging
+prune CLUSTER:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    prefix="$(echo {{CLUSTER}} | tr '_' '-')"
+    tracked="$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts 2>/dev/null | jq -r '.[].name' 2>/dev/null || true)"
+    found=0
+    for inst in $(multipass list --format csv | tail -n +2 | cut -d, -f1 | grep "^${prefix}-" || true); do
+      if echo "$tracked" | grep -qx "$inst"; then continue; fi   # OpenTofu manages it — leave it
+      echo "deleting orphaned VM: $inst"
+      multipass delete "$inst"
+      found=1
+    done
+    if [ "$found" -eq 1 ]; then multipass purge; else echo "no orphaned VMs for {{CLUSTER}}"; fi
+
+# destroy (incl. orphan cleanup) then bring the cluster back up:  just recreate centralized_logging
+recreate CLUSTER: (destroy CLUSTER) (up CLUSTER)
 
 # hermetic: fmt + validate + tofu test (no VMs):  just check (centralized_logging|centralized_monitoring)
 check CLUSTER: (init CLUSTER)
