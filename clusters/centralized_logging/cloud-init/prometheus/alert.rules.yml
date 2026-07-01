@@ -1,0 +1,41 @@
+# Reference artifact — NOT wired into any running Prometheus by this cluster.
+# Load from the future centralized_monitoring Prometheus (rule_files:) once it scrapes the
+# logging-cluster exporters (logging-scrape.yml). See specs/centralized_logging_metrics.md §11.
+groups:
+  - name: centralized-logging
+    rules:
+      - alert: SyslogNgServiceDown
+        # systemd_exporter (:9558) per-unit state; syslog-ng.service not active.
+        expr: systemd_unit_state{name="syslog-ng.service", state="active"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "syslog-ng is not active on {{ $labels.instance }}"
+
+      - alert: LoggingExporterDown
+        # any logging-* scrape target unreachable (covers central unreachable too).
+        expr: up{job=~"logging-.*"} == 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Logging exporter target {{ $labels.job }} on {{ $labels.instance }} is down"
+
+      - alert: SyslogNgEventsDropped
+        # syslog-ng dropped internal events (from the textfile metrics on :9100).
+        expr: rate(syslogng_internal_events_total{result="dropped"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "syslog-ng is dropping events on {{ $labels.instance }}"
+
+      - alert: NoLogsReceivedFromClient
+        # filestat (:9943) on central: a received-log file has not been written in 10m.
+        expr: time() - filestat_file_mtime_seconds{path=~"/var/log/remote/.*"} > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No new logs in {{ $labels.path }} for >10m (a client may have stopped shipping)"

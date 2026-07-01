@@ -7,9 +7,18 @@ services:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
+%{ if enable_traefik_metrics ~}
+      # Prometheus metrics on a dedicated entrypoint (:8082) for a future scrape.
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.entrypoint=metrics"
+      - "--entrypoints.metrics.address=:8082"
+%{ endif ~}
     ports:
       - "80:80"
       - "8080:8080"
+%{ if enable_traefik_metrics ~}
+      - "8082:8082"
+%{ endif ~}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped

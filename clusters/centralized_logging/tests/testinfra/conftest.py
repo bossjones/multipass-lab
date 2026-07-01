@@ -51,6 +51,19 @@ def hostname_source(tofu_output):
 
 
 @pytest.fixture(scope="session")
+def enabled_exporters(tofu_output):
+    """Sorted list of active metrics enable_* flags. test_metrics parametrizes over this
+    so a disabled exporter is skipped (not failed)."""
+    return tofu_output["enabled_exporters"]["value"]
+
+
+@pytest.fixture(scope="session")
+def metrics_targets(tofu_output):
+    """role -> {ip, exporters{name: port}} — the future-scrape discovery map."""
+    return tofu_output["metrics_targets"]["value"]
+
+
+@pytest.fixture(scope="session")
 def ssh_config_file(tmp_path_factory):
     cfg = tmp_path_factory.mktemp("ssh") / "config"
     cfg.write_text(

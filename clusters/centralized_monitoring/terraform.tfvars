@@ -33,6 +33,7 @@ k0s_client = {
 # enable_kube_state_metrics = true
 # enable_kubelet_scrape     = true
 # enable_heimdall           = true
+# enable_heimdall_seed      = true   # auto-seed Heimdall tiles at boot (needs enable_heimdall)
 # enable_uptime_kuma        = true
 # enable_traefik            = true
 # enable_statsd_exporter    = true

@@ -39,7 +39,8 @@ just up centralized_monitoring       # one apply -> k0s first, then server scrap
 multipass list                       # 2 Running with IPs
 just verify centralized_monitoring   # services up / all Prometheus targets up / blackbox / grafana
 just ssh centralized_monitoring server
-just down centralized_monitoring     # destroy
+just destroy centralized_monitoring  # tofu destroy (one cluster, gone)
+just down                            # graceful `multipass stop --all` (all VMs, preserved)
 ```
 
 Requires OpenTofu ≥ 1.7, `multipass`, `uv`, `just`, and an SSH keypair at
@@ -51,4 +52,4 @@ The `larstobi/multipass` provider keys the instance on the cloud-init **file pat
 content — editing a template (e.g. `prometheus_scrape_interval`) re-renders `.rendered/*.yaml`
 but does **not** recreate the VM. Recreating the k0s-client alone also changes its DHCP IP,
 invalidating the scrape target the server baked in. To apply changes, recreate the whole cluster:
-`just down centralized_monitoring && just up centralized_monitoring`.
+`just destroy centralized_monitoring && just up centralized_monitoring`.

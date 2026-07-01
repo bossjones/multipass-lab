@@ -23,8 +23,10 @@ name is the only argument these recipes take.
 | `just up centralized_monitoring` | `tofu apply -auto-approve`, then block on `cloud-init status --wait` over SSH for each VM | launches both VMs |
 | `just verify centralized_monitoring` | `cd tests/testinfra && uv run pytest -v` | **live — SSH to running VMs** |
 | `just ssh centralized_monitoring <role>` | resolve `hosts.<role>.ipv4`, SSH as `ubuntu` | — |
-| `just down centralized_monitoring` | `tofu destroy -auto-approve` | tears both VMs down |
+| `just destroy centralized_monitoring` | `tofu destroy -auto-approve` | tears both VMs down |
+| `just down` | `multipass stop --all` (no arg) | stops **all** VMs, preserved |
 | `just status` | `multipass list` | — |
+| `just help` | curated workflow overview + `just --list` | — |
 
 SSH uses `~/.ssh/id_ed25519` (override with `CLUSTER_SSH_KEY`), with
 `StrictHostKeyChecking=no` (host keys reset every `up`). Roles for `just ssh` are `server` and `k0s`.
@@ -62,7 +64,7 @@ hyphens and are derived from `var.name_prefix` (default `centralized-monitoring`
 To apply any change, recreate the whole cluster:
 
 ```sh
-just down centralized_monitoring && just up centralized_monitoring
+just destroy centralized_monitoring && just up centralized_monitoring
 ```
 
 Generated `.rendered/*.yaml` is gitignored and re-rendered every apply — don't hand-edit it.
@@ -112,7 +114,7 @@ are **skipped, not failed**. [`conftest.py`](../tests/testinfra/conftest.py) bui
 | Symptom | Cause / fix |
 |---------|-------------|
 | a Prometheus target is `down` | exporter still installing — re-check after cloud-init settles. Off-by-default exporter release URLs may need a version bump (see [`k0s-client.yaml.tftpl`](../cloud-init/k0s-client.yaml.tftpl)) |
-| config edit didn't take | provider keys on cloud-init **path**, not content — recreate the cluster (`just down && just up`) |
+| config edit didn't take | provider keys on cloud-init **path**, not content — recreate the cluster (`just destroy centralized_monitoring && just up centralized_monitoring`) |
 | `just verify` can't reach a VM | confirm `~/.ssh/id_ed25519` matches the injected pubkey; host keys reset every `up` (testinfra disables host-key checking) |
 | OpenObserve datasource missing in Grafana | check the grafana container logs; the datasource uses OpenObserve's PromQL API with basic auth |
 

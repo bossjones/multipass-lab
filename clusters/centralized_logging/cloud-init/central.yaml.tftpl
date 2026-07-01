@@ -1,11 +1,15 @@
 #cloud-config
-# Central logging VM — syslog-ng server / collector.
+# Central logging VM — syslog-ng server / collector + the metrics exporter layer.
+# Exporters are installed and bound to 0.0.0.0 (no local scrape — a future
+# centralized_monitoring Prometheus pulls them). See specs/centralized_logging_metrics.md.
+# Each install block is gated on its enable_* flag (threaded via local.flags in main.tf).
 package_update: true
 package_upgrade: true
 
 packages:
   - syslog-ng
   - curl
+  - tar
   - vim
   - htop
   - jq
@@ -19,10 +23,128 @@ write_files:
     content: |
       ${indent(6, server_conf)}
 
+  # Generic exporter installer (copied from the centralized_monitoring cluster): download a
+  # GitHub release (tar.gz or raw binary), drop the binary in /usr/local/bin, install + enable
+  # a systemd unit. {ARCH} in the URL is replaced with the host's Debian arch (arm64/amd64).
+  - path: /usr/local/sbin/install-exporter.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      name="$1"; url="$2"; bin="$3"; shift 3; args="$*"
+      arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+      case "$arch" in aarch64) arch=arm64 ;; x86_64) arch=amd64 ;; esac
+      url="$${url//\{ARCH\}/$arch}"
+      tmp="$(mktemp -d)"
+      curl -sSLf "$url" -o "$tmp/dl"
+      if tar -tzf "$tmp/dl" >/dev/null 2>&1; then
+        tar -xzf "$tmp/dl" -C "$tmp"
+        found="$(find "$tmp" -type f -name "$bin" | head -n1)"
+      else
+        found="$tmp/dl"
+      fi
+      install -m0755 "$found" "/usr/local/bin/$name"
+      cat >/etc/systemd/system/$name.service <<UNIT
+      [Unit]
+      Description=$name
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      ExecStart=/usr/local/bin/$name $args
+      Restart=always
+      RestartSec=5
+      [Install]
+      WantedBy=multi-user.target
+      UNIT
+      systemctl daemon-reload
+      systemctl enable --now "$name"
+%{ if enable_syslogng_metrics ~}
+  # syslog-ng metrics via node_exporter textfile collector: dump `syslog-ng-ctl stats prometheus`
+  # (native Prometheus output on syslog-ng 4.1+) to a .prom file node_exporter serves on :9100.
+  - path: /usr/local/sbin/syslogng-textfile.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      out=/var/lib/node_exporter/textfile_collector/syslogng.prom
+      tmp="$(mktemp)"
+      /usr/sbin/syslog-ng-ctl stats prometheus > "$tmp" 2>/dev/null || true
+      mv "$tmp" "$out"
+  - path: /etc/systemd/system/syslogng-textfile.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Write syslog-ng prometheus stats to the node_exporter textfile collector
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/syslogng-textfile.sh
+  - path: /etc/systemd/system/syslogng-textfile.timer
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Refresh syslog-ng textfile metrics every 15s
+      [Timer]
+      OnBootSec=30
+      OnUnitActiveSec=15
+      [Install]
+      WantedBy=timers.target
+%{ endif ~}
+%{ if enable_process_exporter ~}
+  # process-exporter config: a catch-all group keyed on the process basename.
+  - path: /etc/process-exporter/all.yaml
+    permissions: '0644'
+    content: |
+      process_names:
+        - name: "{{.Comm}}"
+          cmdline:
+            - '.+'
+%{ endif ~}
+%{ if enable_filestat_exporter ~}
+  # filestat_exporter config: watch the received-log files so a client that stops shipping
+  # shows up as a stale mtime under /var/log/remote/.
+  - path: /etc/filestat_exporter/filestat.yaml
+    permissions: '0644'
+    content: |
+      exporter:
+        files:
+          - patterns:
+              - '/var/log/remote/*/*.log'
+              - '/etc/hostname'
+%{ endif ~}
+
 runcmd:
   - mkdir -p /var/log/remote
   - grep -q 'conf.d/\*.conf' /etc/syslog-ng/syslog-ng.conf || echo '@include "/etc/syslog-ng/conf.d/*.conf"' >> /etc/syslog-ng/syslog-ng.conf
   - systemctl enable syslog-ng
   - systemctl restart syslog-ng
+%{ if enable_node_exporter || enable_syslogng_metrics ~}
+  - mkdir -p /var/lib/node_exporter/textfile_collector
+%{ endif ~}
+%{ if enable_node_exporter ~}
+  # node_exporter — OS host + systemd-unit metrics (:9100); also serves the syslog-ng .prom.
+  - /usr/local/sbin/install-exporter.sh node_exporter https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-{ARCH}.tar.gz node_exporter --collector.systemd --collector.textfile.directory=/var/lib/node_exporter/textfile_collector
+%{ endif ~}
+%{ if enable_syslogng_metrics ~}
+  - systemctl enable --now syslogng-textfile.timer
+%{ endif ~}
+%{ if enable_systemd_exporter ~}
+  # systemd_exporter — per-unit health/resource metrics (:9558)
+  - /usr/local/sbin/install-exporter.sh systemd_exporter https://github.com/prometheus-community/systemd_exporter/releases/download/v0.7.0/systemd_exporter-0.7.0.linux-{ARCH}.tar.gz systemd_exporter --web.listen-address=:9558
+%{ endif ~}
+%{ if enable_journald_exporter ~}
+  # journald-exporter — journald entry/field counters (:12345). NOTE: upstream ships an
+  # x86-64-only prebuilt binary, so this works on amd64 (Proxmox) but not the arm64 lab VMs;
+  # best-effort (|| true) so a failed install never breaks boot.
+  - mkdir -p /etc/journald-exporter/keys
+  - /usr/local/sbin/install-exporter.sh journald-exporter https://github.com/dead-claudia/journald-exporter/releases/download/v1.0.0/journald-exporter journald-exporter --port=12345 --key-dir=/etc/journald-exporter/keys || true
+%{ endif ~}
+%{ if enable_process_exporter ~}
+  # process-exporter — per-process metrics (:9256)
+  - /usr/local/sbin/install-exporter.sh process-exporter https://github.com/ncabatoff/process-exporter/releases/download/v0.8.4/process-exporter-0.8.4.linux-{ARCH}.tar.gz process-exporter --config.path=/etc/process-exporter/all.yaml
+%{ endif ~}
+%{ if enable_filestat_exporter ~}
+  # filestat_exporter — size/mtime/stat metrics over /var/log/remote (:9943)
+  - /usr/local/sbin/install-exporter.sh filestat_exporter https://github.com/michael-doubez/filestat_exporter/releases/download/v0.4.5/filestat_exporter-v0.4.5.linux-{ARCH}.tar.gz filestat_exporter --config.file=/etc/filestat_exporter/filestat.yaml
+%{ endif ~}
 
-final_message: "central logging VM ready — collecting under /var/log/remote/"
+final_message: "central logging VM ready — collecting under /var/log/remote/; exporters on :9100/:9558/:9256/:9943"

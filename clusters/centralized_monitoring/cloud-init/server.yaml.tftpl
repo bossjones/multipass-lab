@@ -82,6 +82,14 @@ write_files:
     permissions: '0644'
     content: |
       ${indent(6, compose_conf)}
+%{ if enable_heimdall && enable_heimdall_seed ~}
+
+  # --- heimdall seed tool (uv single-file CLI) ------------------------------
+  - path: /opt/stack/heimdall/heimdall_cli.py
+    permissions: '0755'
+    content: |
+      ${indent(6, heimdall_cli_py)}
+%{ endif ~}
 
 runcmd:
   - mkdir -p /opt/stack
@@ -89,5 +97,21 @@ runcmd:
   - systemctl enable docker
   - systemctl restart docker
   - docker compose -f /opt/stack/compose.yaml up -d
+%{ if enable_heimdall && enable_heimdall_seed ~}
+  # --- auto-seed Heimdall tiles (best-effort; never fails the boot) ----------
+  - curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh || true
+  - |
+    i=0
+    until docker compose -f /opt/stack/compose.yaml exec -T heimdall test -f /config/www/app.sqlite; do
+      i=$((i+1)); [ $i -ge 60 ] && break; sleep 5
+    done
+  - |
+    IP=$(ip -4 route get 1.1.1.1 | awk '{print $7; exit}')
+    /usr/local/bin/uv run /opt/stack/heimdall/heimdall_cli.py seed \
+      --compose-file /opt/stack/compose.yaml \
+      --server-ip "$IP" \
+      --enabled "${heimdall_seed_flags}" \
+      --prune || true
+%{ endif ~}
 
 final_message: "monitoring server ready — prometheus :9090 / grafana :3000 / openobserve :5080"
