@@ -27,6 +27,7 @@ help:
     @echo "  just check  CLUSTER        hermetic: fmt + validate + tofu test (no VMs)"
     @echo "  just up     CLUSTER        tofu apply -> launch all VMs (waits for cloud-init)"
     @echo "  just verify CLUSTER        live: pytest + testinfra over SSH"
+    @echo "  just verify-all            run the live testinfra suite for every cluster"
     @echo "  just open   CLUSTER [--full]  open dashboards (core; --full adds /metrics endpoints)"
     @echo "  just ssh    CLUSTER ROLE   shell onto the <name>-<role> VM"
     @echo "  just destroy CLUSTER       tofu destroy + prune orphaned VMs (one cluster, gone)"
@@ -52,7 +53,7 @@ up CLUSTER: (init CLUSTER)
       | jq -r '.[].ipv4' \
       | while read ip; do \
           echo "waiting for cloud-init: $ip"; \
-          until ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" \
+          until ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" \
             'cloud-init status --wait >/dev/null 2>&1 || true' 2>/dev/null; do sleep 5; done; \
         done
 
@@ -91,6 +92,19 @@ check CLUSTER: (init CLUSTER)
 # live: pytest + testinfra over SSH:  just verify (centralized_logging|centralized_monitoring)
 verify CLUSTER:
     cd {{cluster_root}}/{{CLUSTER}}/tests/testinfra && uv run pytest -v
+
+# run the live testinfra suite for every cluster that has one:  just verify-all
+verify-all:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=0
+    for dir in {{cluster_root}}/*/tests/testinfra; do
+      [ -d "$dir" ] || continue
+      cluster="$(basename "$(dirname "$(dirname "$dir")")")"
+      echo "=== verify: $cluster ==="
+      just verify "$cluster" || rc=1
+    done
+    exit "$rc"
 
 # reconcile Heimdall tiles (generate -> sync --prune):  just heimdall-sync centralized_monitoring
 heimdall-sync CLUSTER:

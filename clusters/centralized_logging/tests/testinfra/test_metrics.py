@@ -53,14 +53,16 @@ def test_enabled_exporter_serves_metrics(request, enabled_exporters, flag, role,
 def test_syslogng_textfile_present(central, enabled_exporters):
     if "enable_syslogng_metrics" not in enabled_exporters:
         pytest.skip("enable_syslogng_metrics disabled")
+    # The timer writes this file root-only (0600, via mktemp+mv), so read it with sudo —
+    # node_exporter runs as root and serves it fine on :9100; only this raw-file check needs it.
     prom = "/var/lib/node_exporter/textfile_collector/syslogng.prom"
     deadline = time.time() + 120
     while time.time() < deadline:
-        if central.file(prom).exists:
-            break
+        res = central.run(f"sudo cat {prom}")
+        if res.rc == 0 and "syslogng_" in res.stdout:
+            return
         time.sleep(5)
-    assert central.file(prom).exists, f"{prom} was never written"
-    assert "syslogng_" in central.file(prom).content_string
+    pytest.fail(f"{prom} never contained syslogng_ metrics")
 
 
 def test_systemd_exporter_reports_syslog_ng_unit(central, enabled_exporters):

@@ -24,6 +24,7 @@ every cluster **by folder name** — that name is the only argument the recipes 
 just check centralized_logging   # hermetic: tofu fmt + validate + test (no VMs)
 just up    centralized_logging   # tofu apply -> launches all VMs in one apply
 just verify centralized_logging  # live: pytest + testinfra over SSH against running VMs
+just verify-all                  # live: run every cluster's testinfra suite (glob-discovered)
 just destroy centralized_logging # tofu destroy + prune orphaned VMs (see below)
 just recreate centralized_logging # destroy (incl. orphan cleanup) then up
 just prune centralized_logging   # delete VMs tofu no longer tracks (recover a failed up)
