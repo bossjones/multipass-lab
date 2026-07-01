@@ -141,7 +141,8 @@ just up centralized_logging       # one apply -> 3 VMs
 multipass list                    # 3 Running with IPs
 just verify centralized_logging   # syslog-ng / k0s / docker / E2E shipping
 just logs centralized_logging     # list collected log files on central
-just down centralized_logging     # destroy
+just destroy centralized_logging  # tofu destroy (one cluster, gone)
+just down                         # graceful `multipass stop --all` (all VMs, preserved)
 ```
 
 Requires OpenTofu ≥ 1.7, `multipass`, `uv`, `just`, and an SSH keypair at
@@ -153,7 +154,7 @@ The `larstobi/multipass` provider keys `multipass_instance` on the `cloudinit_fi
 not its content — so editing a cloud-init template (e.g. changing `hostname_source`) updates the
 rendered `.rendered/*.yaml` but does **not** recreate the VM on `tofu apply`. Recreating central
 alone would also change its DHCP IP and break the clients' baked `central_ip`. To apply config
-changes, recreate the whole cluster: `just down centralized_logging && just up centralized_logging`.
+changes, recreate the whole cluster: `just destroy centralized_logging && just up centralized_logging`.
 
 ## Future work (kept in mind, not built here)
 

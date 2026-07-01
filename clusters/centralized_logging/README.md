@@ -24,7 +24,8 @@ just check centralized_logging   # hermetic: fmt + validate + tofu test (no VMs)
 just up centralized_logging      # one apply -> all 3 VMs
 just verify centralized_logging  # pytest + testinfra over SSH against live VMs
 just logs centralized_logging    # list collected log files on central
-just down centralized_logging    # destroy
+just destroy centralized_logging # tofu destroy (one cluster, gone)
+just down                        # graceful `multipass stop --all` (all VMs, preserved)
 ```
 
 ## Notes
@@ -37,7 +38,7 @@ just down centralized_logging    # destroy
   and syslog-ng's `system()` source reads journald.
 - `var.hostname_source` (`keep` default | `dns` | `ip`) controls how central folders remote
   senders under `/var/log/remote/<host>/`. `keep` trusts the client hostname (DNS-free); `dns`
-  reverse-resolves (needs PTR). Changing it requires a full `just down` + `just up` (the
+  reverse-resolves (needs PTR). Changing it requires a full `just destroy` + `just up` (the
   provider keys on the cloud-init file path, not its content).
 - **Metrics:** each VM exposes flag-gated Prometheus exporters (node/syslog-ng/systemd/process,
   +cAdvisor on docker/k0s, +kube metrics on k0s), bound to `0.0.0.0` for a *future*

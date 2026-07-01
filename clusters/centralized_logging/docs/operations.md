@@ -24,8 +24,10 @@ folder name is the only argument these recipes take.
 | `just verify centralized_logging` | `cd tests/testinfra && uv run pytest -v` | **live — SSH to running VMs** |
 | `just logs centralized_logging` | `find /var/log/remote -type f` on central | live — reads |
 | `just ssh centralized_logging <role>` | resolve `hosts.<role>.ipv4`, SSH as `ubuntu` | — |
-| `just down centralized_logging` | `tofu destroy -auto-approve` | tears all 3 VMs down |
+| `just destroy centralized_logging` | `tofu destroy -auto-approve` | tears all 3 VMs down |
+| `just down` | `multipass stop --all` (no arg) | stops **all** VMs, preserved |
 | `just status` | `multipass list` | — |
+| `just help` | curated workflow overview + `just --list` | — |
 
 SSH uses `~/.ssh/id_ed25519` (override with `CLUSTER_SSH_KEY`), with
 `StrictHostKeyChecking=no` (host keys reset every `up`). Roles for `just ssh` are `central`,
@@ -66,7 +68,7 @@ hyphens and are derived from `var.name_prefix` (default `centralized-logging`):
 To apply any change, recreate the whole cluster:
 
 ```sh
-just down centralized_logging && just up centralized_logging
+just destroy centralized_logging && just up centralized_logging
 ```
 
 Generated `.rendered/*.yaml` is gitignored and re-rendered every apply — don't hand-edit it. A

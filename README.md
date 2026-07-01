@@ -61,10 +61,12 @@ just check  centralized_logging   # hermetic: tofu fmt + validate + test (no VMs
 just up     centralized_logging   # tofu apply -> launches all VMs in one apply
 just verify centralized_logging   # live: pytest + testinfra over SSH against running VMs
 just logs   centralized_logging   # list collected log files on the central VM
-just down   centralized_logging   # tofu destroy
+just destroy centralized_logging  # tofu destroy (one cluster, gone)
 
 just status                       # multipass list
+just down                         # graceful `multipass stop --all` (all VMs, preserved)
 just ssh    centralized_logging central   # shell onto the <name>-<role> VM
+just help                         # curated workflow overview + full recipe list
 ```
 
 Run a single **hermetic** test from the cluster dir:

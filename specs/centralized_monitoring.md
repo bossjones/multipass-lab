@@ -329,12 +329,14 @@ just up centralized_monitoring       # one apply -> 2 VMs (client first, server 
 multipass list                       # 2 Running with IPs
 just verify centralized_monitoring   # services up / all Prometheus targets up / blackbox / grafana
 just ssh centralized_monitoring server   # shell onto the server VM
-just down centralized_monitoring     # destroy
+just destroy centralized_monitoring  # tofu destroy (one cluster, gone)
+just down                            # graceful `multipass stop --all` (all VMs, preserved)
 ```
 
 Requires OpenTofu ≥ 1.7, `multipass`, `uv`, `just`, and an SSH keypair at
-`~/.ssh/id_ed25519[.pub]`. The root `Justfile`'s generic recipes (`check / up / verify / down /
-status / ssh / init / plan`) are cluster-name-parameterized and already work for
+`~/.ssh/id_ed25519[.pub]`. The root `Justfile`'s generic recipes (`check / up / verify / destroy /
+ssh / init / plan`, each taking the cluster name; plus no-arg `down` = `multipass stop --all`
+and `status` = `multipass list`) are cluster-name-parameterized and already work for
 `centralized_monitoring` unchanged; a monitoring-specific `just targets`/`just urls`
 convenience recipe is Future work.
 
@@ -345,7 +347,7 @@ not its content — so editing a cloud-init template (e.g. changing `prometheus_
 updates the rendered `.rendered/*.yaml` but does **not** recreate the VM on `tofu apply`.
 Recreating the k0s-client alone also changes its DHCP IP, invalidating the scrape target the
 server baked into `prometheus.yml`. To apply config changes, recreate the whole cluster:
-`just down centralized_monitoring && just up centralized_monitoring`.
+`just destroy centralized_monitoring && just up centralized_monitoring`.
 
 ## Future work (kept in mind, not built here)
 

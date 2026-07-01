@@ -44,7 +44,8 @@ The edge that forces it lives in [`main.tf`](main.tf): `prometheus_yml` referenc
 | up | `just up centralized_monitoring` | one `tofu apply`: renders k0s cloud-init → launches k0s → reads its IP → renders `prometheus.yml` + server cloud-init → launches server; then blocks on `cloud-init status --wait` over SSH |
 | verify | `just verify centralized_monitoring` | `uv run pytest` in `tests/testinfra` over SSH |
 | shell | `just ssh centralized_monitoring server` | SSH onto a VM by role |
-| down | `just down centralized_monitoring` | `tofu destroy` |
+| destroy | `just destroy centralized_monitoring` | `tofu destroy` (one cluster, gone) |
+| down | `just down` | `multipass stop --all` (no arg; all VMs, preserved) |
 
 ## 3. Cloud-init breakdown
 
@@ -125,7 +126,7 @@ render only when their flag is set.
 | symptom | cause / fix |
 |---------|-------------|
 | a Prometheus target is `down` | the exporter is still installing; re-check after cloud-init settles. Some Nice/Reach exporter release URLs may need version bumps — see `cloud-init/k0s-client.yaml.tftpl` |
-| config edit didn't take | the provider keys on the cloud-init **path**, not content — recreate the cluster (`just down && just up`) |
+| config edit didn't take | the provider keys on the cloud-init **path**, not content — recreate the cluster (`just destroy centralized_monitoring && just up centralized_monitoring`) |
 | `just verify` can't reach a VM | confirm `~/.ssh/id_ed25519` matches the injected pubkey; host keys reset every `up` (testinfra disables host-key checking) |
 | OpenObserve datasource missing in Grafana | the `zinclabs-openobserve-datasource` plugin install needs network on first boot; check the grafana container logs |
 

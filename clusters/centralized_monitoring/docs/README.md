@@ -54,7 +54,8 @@ just up     centralized_monitoring   # one apply -> k0s first, then server scrap
 multipass list                       # 2 Running with IPs
 just verify centralized_monitoring   # live: services up / all targets up / blackbox / grafana
 just ssh    centralized_monitoring server
-just down   centralized_monitoring   # destroy
+just destroy centralized_monitoring  # tofu destroy (one cluster, gone)
+just down                            # graceful `multipass stop --all` (all VMs, preserved)
 ```
 
 Requires OpenTofu ≥ 1.7, `multipass`, `uv`, `just`, and an SSH keypair at

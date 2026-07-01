@@ -116,5 +116,5 @@ tofu -chdir=clusters/centralized_monitoring apply \
 
 > Because the provider keys the VM on the cloud-init **file path** (not content), changing a flag
 > re-renders `.rendered/*.yaml` but does **not** recreate a running VM. To apply, recreate the
-> cluster: `just down centralized_monitoring && just up centralized_monitoring`. See
+> cluster: `just destroy centralized_monitoring && just up centralized_monitoring`. See
 > [operations.md](operations.md#applying-config-changes).

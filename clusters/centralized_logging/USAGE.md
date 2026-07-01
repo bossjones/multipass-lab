@@ -12,7 +12,8 @@ log shipping with [**syslog-ng**][syslog-ng]. Two client VMs run real workloads 
 > just up    centralized_logging   # one apply -> all 3 VMs, waits for cloud-init
 > just verify centralized_logging  # live: pytest + testinfra over SSH
 > just logs  centralized_logging   # list collected log files on central
-> just down  centralized_logging   # destroy
+> just destroy centralized_logging # tofu destroy (one cluster, gone)
+> just down                        # graceful `multipass stop --all` (all VMs, preserved)
 > ```
 
 For the **why** behind the design, read the spec:
@@ -143,8 +144,8 @@ just logs centralized_logging
 # 5. Open a shell on any VM by role.
 just ssh centralized_logging central
 
-# 6. Tear it all down.
-just down centralized_logging
+# 6. Tear it all down (delete the VMs; `just down` only stops them).
+just destroy centralized_logging
 ```
 
 `just status` (→ `multipass list`) shows every VM on the host.
@@ -159,7 +160,9 @@ just down centralized_logging
 | [`just logs`](../../Justfile) | `find /var/log/remote -type f` on central | yes (reads) |
 | [`just ssh`](../../Justfile) | SSH into `<cluster>-<role>` | yes (reads) |
 | [`just status`](../../Justfile) | `multipass list` | yes (reads) |
-| [`just down`](../../Justfile) | `tofu destroy` | **yes** (deletes) |
+| [`just destroy`](../../Justfile) | `tofu destroy` (one cluster) | **yes** (deletes) |
+| [`just down`](../../Justfile) | `multipass stop --all` (no arg; all VMs, preserved) | yes (stops) |
+| [`just help`](../../Justfile) | curated workflow overview + `just --list` | no |
 
 ---
 
@@ -304,7 +307,7 @@ this variable, which renders different syslog-ng options into
 | `ip` | `keep-hostname(no)` `use-dns(no)` | Folder by raw sender IP. | No |
 
 `keep` is the default because homelab DNS is unreliable and this lab has no PTR records.
-**Changing this value requires a full `just down` + `just up`** — see
+**Changing this value requires a full `just destroy` + `just up`** — see
 [§11 Changing configuration](#11-changing-configuration).
 
 ---
@@ -598,7 +601,7 @@ not** trigger a VM replacement on `tofu apply`. To apply any cloud-init or `host
 change, recreate the cluster:
 
 ```sh
-just down centralized_logging && just up centralized_logging
+just destroy centralized_logging && just up centralized_logging
 ```
 
 > Never hand-edit files under `.rendered/` — they are regenerated from the `.tftpl` templates on

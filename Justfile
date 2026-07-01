@@ -3,7 +3,8 @@
 #   just up centralized_logging      # tofu apply -> 3 VMs (waits for cloud-init)
 #   just check centralized_logging   # hermetic: fmt + validate + tofu test (no VMs)
 #   just verify centralized_logging  # live: pytest + testinfra over SSH
-#   just down centralized_logging    # tofu destroy
+#   just destroy centralized_logging # tofu destroy
+#   just down                        # graceful `multipass stop --all` (all VMs, preserved)
 #
 # NOTE: `multipass exec`/`shell` do not route to the VMs in this environment
 # ("No route to host"), but the host reaches the VMs directly over SSH. So all
@@ -17,15 +18,32 @@ ssh_opts := "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogL
 _default:
     @just --list
 
-# tofu init for a cluster
+# show a curated overview of the common cluster workflow, then list every recipe
+help:
+    @echo "multipass-lab — orchestrate OpenTofu/Multipass clusters by folder name."
+    @echo "CLUSTER is a folder under {{cluster_root}}/ (e.g. centralized_logging, centralized_monitoring)."
+    @echo ""
+    @echo "Typical loop:"
+    @echo "  just check  CLUSTER        hermetic: fmt + validate + tofu test (no VMs)"
+    @echo "  just up     CLUSTER        tofu apply -> launch all VMs (waits for cloud-init)"
+    @echo "  just verify CLUSTER        live: pytest + testinfra over SSH"
+    @echo "  just open   CLUSTER [--full]  open dashboards (core; --full adds /metrics endpoints)"
+    @echo "  just ssh    CLUSTER ROLE   shell onto the <name>-<role> VM"
+    @echo "  just destroy CLUSTER       tofu destroy (one cluster, gone)"
+    @echo "  just down                  graceful multipass stop --all (all VMs, preserved)"
+    @echo ""
+    @echo "All recipes:"
+    @just --list
+
+# tofu init:  just init (centralized_logging|centralized_monitoring)
 init CLUSTER:
     tofu -chdir={{cluster_root}}/{{CLUSTER}} init
 
-# tofu plan
+# tofu plan:  just plan (centralized_logging|centralized_monitoring)
 plan CLUSTER: (init CLUSTER)
     tofu -chdir={{cluster_root}}/{{CLUSTER}} plan
 
-# bring the cluster up (one apply launches all VMs), then block until cloud-init finishes
+# apply -> launch all VMs, wait for cloud-init:  just up (centralized_logging|centralized_monitoring)
 up CLUSTER: (init CLUSTER)
     tofu -chdir={{cluster_root}}/{{CLUSTER}} apply -auto-approve
     @tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts \
@@ -36,21 +54,21 @@ up CLUSTER: (init CLUSTER)
             'cloud-init status --wait >/dev/null 2>&1 || true' 2>/dev/null; do sleep 5; done; \
         done
 
-# tear the cluster down
-down CLUSTER:
+# tofu destroy (one cluster, gone):  just destroy (centralized_logging|centralized_monitoring)
+destroy CLUSTER:
     tofu -chdir={{cluster_root}}/{{CLUSTER}} destroy -auto-approve
 
-# hermetic inner loop — never touches Multipass
+# hermetic: fmt + validate + tofu test (no VMs):  just check (centralized_logging|centralized_monitoring)
 check CLUSTER: (init CLUSTER)
     tofu -chdir={{cluster_root}}/{{CLUSTER}} fmt -check -recursive
     tofu -chdir={{cluster_root}}/{{CLUSTER}} validate
     tofu -chdir={{cluster_root}}/{{CLUSTER}} test -test-directory=tests/tofu
 
-# live verify against the running VMs (pytest + testinfra over SSH)
+# live: pytest + testinfra over SSH:  just verify (centralized_logging|centralized_monitoring)
 verify CLUSTER:
     cd {{cluster_root}}/{{CLUSTER}}/tests/testinfra && uv run pytest -v
 
-# reconcile Heimdall tiles to the live, flag-aware endpoint set (generate -> sync --prune)
+# reconcile Heimdall tiles (generate -> sync --prune):  just heimdall-sync centralized_monitoring
 heimdall-sync CLUSTER:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -60,7 +78,7 @@ heimdall-sync CLUSTER:
     uv run "$dir/scripts/heimdall_cli.py" generate --chdir "$dir" -o "$tmp"
     uv run "$dir/scripts/heimdall_cli.py" sync --chdir "$dir" --config "$tmp" --prune
 
-# list the tiles currently in Heimdall
+# list Heimdall tiles:  just heimdall-list centralized_monitoring
 heimdall-list CLUSTER:
     uv run {{cluster_root}}/{{CLUSTER}}/scripts/heimdall_cli.py list --chdir {{cluster_root}}/{{CLUSTER}}
 
@@ -76,14 +94,20 @@ heimdall-rm CLUSTER TITLE:
 status:
     multipass list
 
-# open a shell on a VM:  just ssh centralized_logging central
+# gracefully stop every multipass VM (preserves them; use `just up`/`multipass start` to resume)
+stop:
+    multipass stop --all
+
+alias down := stop
+
+# shell onto the <name>-<role> VM:  just ssh centralized_logging central   (roles: logging=central|k0s|docker, monitoring=server|k0s)
 ssh CLUSTER ROLE:
     @ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.{{ROLE}}.ipv4'); \
      ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip"
 
-# open cluster dashboards in the browser:  just open centralized_monitoring [--full]
 # no flag -> core human dashboards;  --full (or --all) -> + every enabled /metrics endpoint.
 # Override the browser with BROWSER_APP=...; falls back to the macOS default browser.
+# open cluster dashboards in the browser:  just open (centralized_logging|centralized_monitoring) [--full|--all]
 open CLUSTER *FLAGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -100,7 +124,7 @@ open CLUSTER *FLAGS:
       sleep 0.25
     done <<< "$urls"
 
-# list the log files collected on the central VM
+# list collected log files (central VM):  just logs centralized_logging
 logs CLUSTER:
     @ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.central.ipv4'); \
      ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" 'sudo find /var/log/remote -type f'

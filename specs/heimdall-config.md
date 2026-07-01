@@ -11,7 +11,7 @@ observability stack (Grafana, Prometheus, Alertmanager, OpenObserve, Uptime Kuma
 1. **Does Heimdall have all the endpoints configured?** **No.** It ships *completely empty*.
    The container boots a fresh SQLite DB into the persistent `heimdall_config` volume with zero
    tiles. Every link must be added by hand in the web UI — and because VMs are recreated on
-   every `just up` and the volume is destroyed on `just down`, that manual work is lost on each
+   every `just up` and the volume is destroyed on `just destroy`, that manual work is lost on each
    bring-up.
 2. **Is there a native programmatic CLI/API?** **No.** Heimdall (a Laravel/PHP app) exposes
    **no stable REST API** and **no artisan command** to create a user tile. Its only artisan
@@ -233,7 +233,7 @@ command reconciles Heimdall to the live, flag-aware endpoint set.
 
 ## Cloud-init auto-seed
 
-`heimdall_config` is destroyed on every `just down`, so the laptop recipes would have to be
+`heimdall_config` is destroyed on every `just destroy`, so the laptop recipes would have to be
 re-run after each `just up`. Instead the server VM **seeds itself at first boot**, so `just up`
 alone yields a populated dashboard. Gated by **both** `enable_heimdall` and the new
 `enable_heimdall_seed` (default `true`; opt out to manage tiles by hand).
@@ -257,7 +257,7 @@ How it wires together (all in `clusters/centralized_monitoring/`):
   `heimdall` is reliable. It builds tiles from the same `build_catalog_tiles()` the headline
   `just heimdall-sync` uses, so boot-time and laptop seeding produce identical dashboards.
 
-Because `just down`/`up` recreates the VM, cloud-init (and thus the seed) re-runs on every
+Because `just destroy`/`up` recreates the VM, cloud-init (and thus the seed) re-runs on every
 bring-up; `--prune` keeps the dashboard converged to the flag-aware set without duplicates.
 
 ## Testing strategy
@@ -311,7 +311,7 @@ just heimdall-rm  centralized_monitoring "Grafana"
   `/config/www/icons/` and be owned by `abc`. Foundation logos may need to be copied in.
 - **Schema version coupling** — `appid`/`appdescription` columns are 2.x+; probe with
   `PRAGMA table_info(items)` rather than hardcoding.
-- **Volume lifecycle** — `heimdall_config` is destroyed on `just down`. With auto-seed on
+- **Volume lifecycle** — `heimdall_config` is destroyed on `just destroy`. With auto-seed on
   (default) every `just up` re-seeds; otherwise re-run `just heimdall-sync` after each `just up`.
 - **Traefik routing** — when `enable_traefik` is on, Heimdall is fronted at `heimdall.localhost`
   rather than `:80`; tile URLs still point at the *target* services, not at Heimdall.

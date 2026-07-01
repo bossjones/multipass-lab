@@ -52,7 +52,8 @@ just up     centralized_logging   # one apply -> all 3 VMs, waits for cloud-init
 just verify centralized_logging   # live: pytest + testinfra over SSH
 just logs   centralized_logging   # list collected log files on central
 just ssh    centralized_logging central
-just down   centralized_logging   # destroy
+just destroy centralized_logging  # tofu destroy (one cluster, gone)
+just down                         # graceful `multipass stop --all` (all VMs, preserved)
 ```
 
 Requires OpenTofu ≥ 1.7, `multipass`, `uv`, `just`, and an SSH keypair at
