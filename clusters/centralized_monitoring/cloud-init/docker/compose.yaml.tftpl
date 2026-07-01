@@ -105,6 +105,7 @@ services:
   # --- Heimdall — homepage / link dashboard ---------------------------------
   heimdall:
     image: lscr.io/linuxserver/heimdall:latest
+    container_name: heimdall  # remote CLI transport addresses the container by this name (docker cp)
     environment:
       - PUID=1000
       - PGID=1000

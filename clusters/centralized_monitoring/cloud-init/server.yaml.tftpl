@@ -94,6 +94,7 @@ write_files:
 runcmd:
   - mkdir -p /opt/stack
   - curl -fsSL https://get.docker.com | sh
+  - usermod -aG docker ubuntu  # let the SSH user reach the docker socket (heimdall CLI remote transport)
   - systemctl enable docker
   - systemctl restart docker
   - docker compose -f /opt/stack/compose.yaml up -d
