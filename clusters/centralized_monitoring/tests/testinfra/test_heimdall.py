@@ -29,8 +29,12 @@ def _cli(*args):
         ["uv", "run", str(CLI), *args, "--chdir", str(CLUSTER_DIR)],
         capture_output=True,
         text=True,
-        check=True,
     )
+    if result.returncode != 0:
+        pytest.fail(
+            f"heimdall_cli {args} exited {result.returncode}\n"
+            f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+        )
     return result.stdout
 
 
@@ -54,7 +58,9 @@ def test_cloud_init_autoseed_populates_dashboard(heimdall_enabled, server):
             break
         time.sleep(5)
     missing = {t for t in EXPECTED_TILES if t not in listed}
-    assert not missing, f"auto-seed did not populate Heimdall: missing {missing}\n{listed}"
+    assert not missing, (
+        f"auto-seed did not populate Heimdall: missing {missing}\n{listed}"
+    )
 
 
 def test_generate_sync_list_roundtrip(heimdall_enabled, server):

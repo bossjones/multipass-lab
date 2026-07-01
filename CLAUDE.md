@@ -24,13 +24,22 @@ every cluster **by folder name** — that name is the only argument the recipes 
 just check centralized_logging   # hermetic: tofu fmt + validate + test (no VMs)
 just up    centralized_logging   # tofu apply -> launches all VMs in one apply
 just verify centralized_logging  # live: pytest + testinfra over SSH against running VMs
-just destroy centralized_logging # tofu destroy
+just verify-all                  # live: run every cluster's testinfra suite (glob-discovered)
+just destroy centralized_logging # tofu destroy + prune orphaned VMs (see below)
+just recreate centralized_logging # destroy (incl. orphan cleanup) then up
+just prune centralized_logging   # delete VMs tofu no longer tracks (recover a failed up)
 just down                        # graceful `multipass stop --all` (all VMs, preserved)
 just status                      # multipass list
 just ssh   centralized_logging central   # shell onto the <name>-<role> VM
 just open  centralized_monitoring        # open the core dashboards in Chrome
 just open  centralized_monitoring --full # + every enabled /metrics endpoint (debug)
 ```
+
+A failed `just up` (e.g. a `multipass launch` timeout) leaves an orphaned VM that OpenTofu
+never recorded in state, so plain `tofu destroy` can't remove it and the next `up` collides
+(`instance already exists`). `just prune` deletes + purges any cluster-prefixed VMs that
+`tofu state` no longer tracks (safe anytime — it won't touch a managed VM); `just destroy`
+runs it automatically after `tofu destroy`, and `just recreate` chains destroy→up.
 
 `just open` reads the cluster's `web_urls` output (`{core, all}`, both flag-aware) and
 opens each URL via `open -a "Google Chrome"` (override with `BROWSER_APP=...`; falls back

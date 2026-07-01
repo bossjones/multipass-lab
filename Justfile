@@ -27,9 +27,12 @@ help:
     @echo "  just check  CLUSTER        hermetic: fmt + validate + tofu test (no VMs)"
     @echo "  just up     CLUSTER        tofu apply -> launch all VMs (waits for cloud-init)"
     @echo "  just verify CLUSTER        live: pytest + testinfra over SSH"
+    @echo "  just verify-all            run the live testinfra suite for every cluster"
     @echo "  just open   CLUSTER [--full]  open dashboards (core; --full adds /metrics endpoints)"
     @echo "  just ssh    CLUSTER ROLE   shell onto the <name>-<role> VM"
-    @echo "  just destroy CLUSTER       tofu destroy (one cluster, gone)"
+    @echo "  just destroy CLUSTER       tofu destroy + prune orphaned VMs (one cluster, gone)"
+    @echo "  just recreate CLUSTER      destroy (incl. orphan cleanup) then up"
+    @echo "  just prune CLUSTER         delete VMs tofu no longer tracks (fix a failed up)"
     @echo "  just down                  graceful multipass stop --all (all VMs, preserved)"
     @echo ""
     @echo "All recipes:"
@@ -50,13 +53,35 @@ up CLUSTER: (init CLUSTER)
       | jq -r '.[].ipv4' \
       | while read ip; do \
           echo "waiting for cloud-init: $ip"; \
-          until ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" \
+          until ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" \
             'cloud-init status --wait >/dev/null 2>&1 || true' 2>/dev/null; do sleep 5; done; \
         done
 
-# tofu destroy (one cluster, gone):  just destroy (centralized_logging|centralized_monitoring)
+# tofu destroy + prune any orphaned VMs (one cluster, gone):  just destroy (centralized_logging|centralized_monitoring)
 destroy CLUSTER:
     tofu -chdir={{cluster_root}}/{{CLUSTER}} destroy -auto-approve
+    @just prune {{CLUSTER}}
+
+# delete + purge Multipass VMs for this cluster that OpenTofu no longer tracks.
+# A failed `up` (e.g. a launch timeout) leaves a VM behind that `tofu destroy` can't
+# see, which then collides with the next `up` ("instance already exists"). Safe to run
+# anytime: it never touches a VM that is still in tofu state.  just prune centralized_logging
+prune CLUSTER:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    prefix="$(echo {{CLUSTER}} | tr '_' '-')"
+    tracked="$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts 2>/dev/null | jq -r '.[].name' 2>/dev/null || true)"
+    found=0
+    for inst in $(multipass list --format csv | tail -n +2 | cut -d, -f1 | grep "^${prefix}-" || true); do
+      if echo "$tracked" | grep -qx "$inst"; then continue; fi   # OpenTofu manages it — leave it
+      echo "deleting orphaned VM: $inst"
+      multipass delete "$inst"
+      found=1
+    done
+    if [ "$found" -eq 1 ]; then multipass purge; else echo "no orphaned VMs for {{CLUSTER}}"; fi
+
+# destroy (incl. orphan cleanup) then bring the cluster back up:  just recreate centralized_logging
+recreate CLUSTER: (destroy CLUSTER) (up CLUSTER)
 
 # hermetic: fmt + validate + tofu test (no VMs):  just check (centralized_logging|centralized_monitoring)
 check CLUSTER: (init CLUSTER)
@@ -67,6 +92,19 @@ check CLUSTER: (init CLUSTER)
 # live: pytest + testinfra over SSH:  just verify (centralized_logging|centralized_monitoring)
 verify CLUSTER:
     cd {{cluster_root}}/{{CLUSTER}}/tests/testinfra && uv run pytest -v
+
+# run the live testinfra suite for every cluster that has one:  just verify-all
+verify-all:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=0
+    for dir in {{cluster_root}}/*/tests/testinfra; do
+      [ -d "$dir" ] || continue
+      cluster="$(basename "$(dirname "$(dirname "$dir")")")"
+      echo "=== verify: $cluster ==="
+      just verify "$cluster" || rc=1
+    done
+    exit "$rc"
 
 # reconcile Heimdall tiles (generate -> sync --prune):  just heimdall-sync centralized_monitoring
 heimdall-sync CLUSTER:

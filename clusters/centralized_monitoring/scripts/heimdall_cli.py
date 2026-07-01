@@ -46,21 +46,61 @@ MANAGED_TAG = "managed-by-cli"
 RESERVED_COLUMNS = {"order"}
 
 SSH_OPTS = [
-    "-o", "StrictHostKeyChecking=no",
-    "-o", "UserKnownHostsFile=/dev/null",
-    "-o", "LogLevel=ERROR",
-    "-o", "ConnectTimeout=8",
+    "-o",
+    "StrictHostKeyChecking=no",
+    "-o",
+    "UserKnownHostsFile=/dev/null",
+    "-o",
+    "LogLevel=ERROR",
+    "-o",
+    "ConnectTimeout=8",
 ]
 
 # The default, flag-aware tile catalog (the human-facing web UIs from
 # docs/endpoints.md). enabled_when=None means a spine service that is always on.
 CATALOG = [
-    {"title": "Grafana", "port": 3000, "enabled_when": None, "icon": "grafana", "colour": "#161b1f"},
-    {"title": "Prometheus", "port": 9090, "enabled_when": None, "icon": "prometheus", "colour": "#e6522c"},
-    {"title": "Alertmanager", "port": 9093, "enabled_when": None, "icon": "prometheus", "colour": "#e6522c"},
-    {"title": "OpenObserve", "port": 5080, "enabled_when": "enable_openobserve", "icon": "openobserve", "colour": "#3b1e54"},
-    {"title": "Uptime Kuma", "port": 3001, "enabled_when": "enable_uptime_kuma", "icon": "uptime-kuma", "colour": "#5cdd8b"},
-    {"title": "Traefik", "port": 8082, "enabled_when": "enable_traefik", "icon": "traefik", "colour": "#24a1c1"},
+    {
+        "title": "Grafana",
+        "port": 3000,
+        "enabled_when": None,
+        "icon": "grafana",
+        "colour": "#161b1f",
+    },
+    {
+        "title": "Prometheus",
+        "port": 9090,
+        "enabled_when": None,
+        "icon": "prometheus",
+        "colour": "#e6522c",
+    },
+    {
+        "title": "Alertmanager",
+        "port": 9093,
+        "enabled_when": None,
+        "icon": "prometheus",
+        "colour": "#e6522c",
+    },
+    {
+        "title": "OpenObserve",
+        "port": 5080,
+        "enabled_when": "enable_openobserve",
+        "icon": "openobserve",
+        "colour": "#3b1e54",
+    },
+    {
+        "title": "Uptime Kuma",
+        "port": 3001,
+        "enabled_when": "enable_uptime_kuma",
+        "icon": "uptime-kuma",
+        "colour": "#5cdd8b",
+    },
+    {
+        "title": "Traefik",
+        "port": 8082,
+        "enabled_when": "enable_traefik",
+        "icon": "traefik",
+        "colour": "#24a1c1",
+    },
 ]
 
 
@@ -189,7 +229,12 @@ def ensure_pivot(conn, parent_id, child_id) -> None:
     _insert(
         conn,
         "item_tag",
-        {"item_id": parent_id, "tag_id": child_id, "created_at": now, "updated_at": now},
+        {
+            "item_id": parent_id,
+            "tag_id": child_id,
+            "created_at": now,
+            "updated_at": now,
+        },
     )
 
 
@@ -300,7 +345,9 @@ def resolve_server_ip(chdir: str) -> str:
 
 
 def _ssh(ip: str, *remote_cmd: str, capture=False, check=True):
-    return _run(["ssh", *SSH_OPTS, f"ubuntu@{ip}", *remote_cmd], capture=capture, check=check)
+    return _run(
+        ["ssh", *SSH_OPTS, f"ubuntu@{ip}", *remote_cmd], capture=capture, check=check
+    )
 
 
 def pause_container(ip, container) -> None:
@@ -321,11 +368,10 @@ def pull_remote_db(ip, container) -> str:
 
 
 def push_remote_db(ip, container, local_path) -> None:
-    """Copy the mutated DB back into the container and restore ownership."""
+    """Copy the mutated DB back into the container (paused-safe: file copy only)."""
     remote_tmp = "/tmp/heimdall-app.sqlite"
     _run(["scp", *SSH_OPTS, local_path, f"ubuntu@{ip}:{remote_tmp}"])
     _ssh(ip, "docker", "cp", remote_tmp, f"{container}:{REMOTE_DB_PATH}")
-    _ssh(ip, "docker", "exec", container, "chown", REMOTE_OWNER, REMOTE_DB_PATH)
 
 
 def with_remote_db(ip, container, mutate) -> None:
@@ -344,16 +390,23 @@ def with_remote_db(ip, container, mutate) -> None:
         unpause_container(ip, container)
         if local_path and os.path.exists(local_path):
             os.unlink(local_path)
+    # `docker exec` refuses a paused container, so restore ownership (docker cp
+    # lands the file as root) only after unpause. Reached only on the success
+    # path — an exception above propagates through `finally` and skips this.
+    _ssh(ip, "docker", "exec", container, "chown", REMOTE_OWNER, REMOTE_DB_PATH)
 
 
 # --- local transport (on-host, docker compose) -------------------------------
 # Used by the cloud-init `seed` path: the tool runs ON the server VM, so there is
-# no ssh — it reaches the container by *service* name (no container_name is set)
-# via `docker compose`. Mirrors the remote transport otherwise.
+# no ssh — it reaches the container by compose *service* name via `docker compose`
+# (the compose file also pins container_name=heimdall so the remote `docker cp`
+# transport can address it by that name). Mirrors the remote transport otherwise.
 
 
 def _compose(compose_file, *args, capture=False, check=True):
-    return _run(["docker", "compose", "-f", compose_file, *args], capture=capture, check=check)
+    return _run(
+        ["docker", "compose", "-f", compose_file, *args], capture=capture, check=check
+    )
 
 
 def pause_local_container(compose_file, container) -> None:
@@ -372,9 +425,8 @@ def pull_local_db(compose_file, container) -> str:
 
 
 def push_local_db(compose_file, container, local_path) -> None:
-    """Copy the mutated DB back into the local container and restore ownership."""
+    """Copy the mutated DB back into the local container (paused-safe: file copy only)."""
     _compose(compose_file, "cp", local_path, f"{container}:{REMOTE_DB_PATH}")
-    _compose(compose_file, "exec", "-T", container, "chown", REMOTE_OWNER, REMOTE_DB_PATH)
 
 
 def with_local_db(compose_file, container, mutate) -> None:
@@ -393,6 +445,12 @@ def with_local_db(compose_file, container, mutate) -> None:
         unpause_local_container(compose_file, container)
         if local_path and os.path.exists(local_path):
             os.unlink(local_path)
+    # `docker exec` refuses a paused container, so restore ownership (docker cp
+    # lands the file as root) only after unpause. Reached only on the success
+    # path — an exception above propagates through `finally` and skips this.
+    _compose(
+        compose_file, "exec", "-T", container, "chown", REMOTE_OWNER, REMOTE_DB_PATH
+    )
 
 
 # --- command dispatch --------------------------------------------------------
@@ -419,7 +477,9 @@ def _apply(args, conn) -> None:
         else:
             soft_delete_tile(conn, args.title, args.user_id)
     elif args.cmd == "sync":
-        variables = {"server_ip": args.server_ip} if getattr(args, "server_ip", None) else {}
+        variables = (
+            {"server_ip": args.server_ip} if getattr(args, "server_ip", None) else {}
+        )
         tiles = load_config(args.config, variables)
         sync_tiles(conn, tiles, args.user_id, args.prune)
 
@@ -463,9 +523,7 @@ def _cmd_list(args) -> None:
 
 
 def _cmd_generate(args) -> None:
-    raw = _run(
-        ["tofu", f"-chdir={args.chdir}", "output", "-json"], capture=True
-    ).stdout
+    raw = _run(["tofu", f"-chdir={args.chdir}", "output", "-json"], capture=True).stdout
     ip, flags = parse_tofu_output(json.loads(raw))
     tiles = build_catalog_tiles(ip, flags)
     out = render_config_yaml(tiles)
@@ -535,7 +593,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync.add_argument("--config", required=True)
     p_sync.add_argument("--prune", action="store_true")
 
-    p_gen = sub.add_parser("generate", parents=[common], help="emit tiles.yaml from tofu")
+    p_gen = sub.add_parser(
+        "generate", parents=[common], help="emit tiles.yaml from tofu"
+    )
     p_gen.add_argument("--from-tofu", action="store_true", default=True)
     p_gen.add_argument("-o", "--output")
 
