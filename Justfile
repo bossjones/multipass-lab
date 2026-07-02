@@ -184,6 +184,15 @@ openobserve-streams CLUSTER:
 openobserve-search CLUSTER SQL:
     uv run {{cluster_root}}/{{CLUSTER}}/scripts/openobserve_cli.py --cluster {{CLUSTER}} search {{quote(SQL)}}
 
+# import the OpenObserve log dashboards (idempotent; see specs/openobserve-dashboards.md):  just openobserve-dashboards centralized_monitoring
+# afterwards `... check --require-dashboards` asserts they resolve (not in verify-api since import is on-demand).
+openobserve-dashboards CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/openobserve_cli.py --cluster {{CLUSTER}} dashboards import
+
+# list installed OpenObserve dashboards:  just openobserve-dashboards-list centralized_monitoring
+openobserve-dashboards-list CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/openobserve_cli.py --cluster {{CLUSTER}} dashboards list
+
 # --- Locust load generators (host-run; resolve VM IPs from tofu; see specs/locustio.md) ---
 # Drive live traffic into a cluster's dashboards. `*FLAGS` pass through to the CLI's callback
 # (e.g. -u/-r/-t, --server-url). No flag = interactive web UI on http://localhost:8089.

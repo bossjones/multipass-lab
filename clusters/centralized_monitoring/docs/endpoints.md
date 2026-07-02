@@ -143,6 +143,8 @@ uses a null `devnull` receiver in the lab):
 | `http://admin:admin@<server>:3000/api/datasources` | JSON of provisioned Grafana datasources |
 | `http://<server>:5080/healthz` | OpenObserve health check |
 | `http://<server>:5080/api/default/prometheus` | OpenObserve PromQL-compatible API (the Grafana datasource URL) |
+| `http://<server>:5080/api/v2/default/folders/dashboards` | OpenObserve dashboard folders (GET list / POST create; v0.91 uses the v2 folders API) |
+| `http://<server>:5080/api/default/dashboards?folder=<id>` | OpenObserve dashboards (GET/POST; PUT needs `&hash=<hash>`; DELETE `.../dashboards/<id>?folder=<id>`) — see `just openobserve-dashboards` |
 
 These endpoints are wrapped by the host-side **verification CLIs** — `just grafana-check`,
 `just prometheus-check`, `just openobserve-check` (or `just verify-api` for all three), plus

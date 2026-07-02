@@ -127,11 +127,18 @@ org default `default`, server resolved by `_obs_common.resolve_target`):
 | Subcommand | Endpoint | Purpose |
 |---|---|---|
 | `dashboards list` | `GET /api/{org}/dashboards` | list installed dashboards (rich table; `--json`) |
-| `dashboards import [PATH]` | `GET/POST /api/{org}/folders` + `POST /api/{org}/dashboards?folder=<id>` | load every `*.json` under PATH (default: the repo dashboards dir); ensure folder, upsert by title |
-| `dashboards delete ID` | `DELETE /api/{org}/dashboards/<id>` | remove a dashboard |
+| `dashboards import [PATH]` | `GET/POST /api/v2/{org}/folders/dashboards` + `POST/PUT /api/{org}/dashboards?folder=<id>` | load every `*.json` under PATH (default: the repo dashboards dir); ensure folder, upsert by title |
+| `dashboards delete ID` | `DELETE /api/{org}/dashboards/<id>?folder=<id>` | remove a dashboard |
 
 `import` is **idempotent**: it lists existing dashboards, and for each file updates the
 matching title in place (or creates it), so re-running never duplicates.
+
+> **Verified against OpenObserve v0.91.1** (`public.ecr.aws/zinclabs/openobserve:latest`
+> at build time): dashboard **folders live on the v2 API** (`/api/v2/{org}/folders/dashboards`)
+> while dashboards themselves stay on v1 (`/api/{org}/dashboards`); the **update (PUT) requires
+> a `&hash=<hash>`** query param (read from the existing dashboard's `hash`), and a `POST`
+> accepts the raw dashboard JSON as-is (the server wraps it under a `v5` key). The CLI's
+> response/field extraction is tolerant of this shape so a future version bump is a small edit.
 
 ## `check` semantics (exit 0 pass / 2 fail)
 
