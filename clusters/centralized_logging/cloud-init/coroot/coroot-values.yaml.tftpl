@@ -1,0 +1,47 @@
+# Managed by OpenTofu (clusters/centralized_logging). Helm values for the coroot/coroot-ce chart,
+# rendered to /etc/coroot/values.yaml on the k0s VM and passed to `helm install coroot`. The chart
+# turns these into a Coroot custom resource that the coroot-operator reconciles (server + eBPF
+# node-agent + cluster-agent + bundled Prometheus + ClickHouse). See specs/coroot.md.
+#
+# Every value here exists to override a chart default that is hostile to a single laptop VM:
+#   - clickhouse.storage.size default 100Gi   -> far larger than the VM disk (CRITICAL override)
+#   - resources.requests.memory default 4Gi   -> trimmed so the stack fits ~8G of RAM
+#   - service.type default ClusterIP          -> NodePort so the UI is reachable from the host
+
+metricsRefreshInterval: 15s
+
+# UI exposure. NodePort is always on as a host-reachable fallback (http://<k0s_ip>:${coroot_nodeport});
+# the ingress block is added only when enable_ingress (reach via Host: ${coroot_host} on :80).
+service:
+  type: NodePort
+  port: 8080
+  nodePort: ${coroot_nodeport}
+%{ if enable_ingress ~}
+ingress:
+  className: nginx
+  host: ${coroot_host}
+  path: /
+%{ endif ~}
+
+# Coroot server config store (small).
+storage:
+  size: 5Gi
+
+# Trim the server's memory request from the 4Gi chart default so the whole stack fits the lab VM.
+resources:
+  requests:
+    cpu: 500m
+    memory: ${coroot_server_memory}
+
+# Bundled Prometheus (metrics).
+prometheus:
+  storage:
+    size: ${coroot_prometheus_storage}
+
+# Bundled ClickHouse (traces/logs/profiles). Single shard/replica for a single-node lab, and the
+# storage size MUST be overridden — the chart default of 100Gi exceeds the VM disk.
+clickhouse:
+  shards: 1
+  replicas: 1
+  storage:
+    size: ${coroot_clickhouse_storage}

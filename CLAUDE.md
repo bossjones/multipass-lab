@@ -36,7 +36,19 @@ just open  centralized_monitoring        # open the core dashboards in Chrome
 just open  centralized_monitoring --full # + every enabled /metrics endpoint (debug)
 just locust centralized_monitoring       # host-run Locust web UI (localhost:8089) drives live traffic
 just locust-check centralized_monitoring # short headless smoke run -> exit code (see below)
+just coroot-status centralized_logging   # Coroot stack pods on the k0s node (see below)
+just coroot-deploy centralized_logging   # re-run the Coroot installer (idempotent repair)
 ```
+
+**Coroot (opt-in eBPF observability on k0s).** `enable_coroot` deploys the self-hosted
+[Coroot](https://github.com/coroot/coroot) stack (server + eBPF node-agent + cluster-agent +
+bundled Prometheus + ClickHouse) onto the `centralized_logging` k0s node via Helm, declaratively
+in cloud-init (no cloud account, no secrets; arm64-native). `enable_ingress` adds an ingress-nginx
+controller and exposes Coroot's UI through it (also always on a NodePort, `http://<k0s_ip>:30080`).
+Both default **off**; enabling Coroot auto-bumps the k0s VM to 4 vCPU / 8G / 50G (`local.k0s_size`
+in `main.tf`). Because it lives in cloud-init, enabling it needs `just recreate centralized_logging`
+(not `just up`). Full design in `specs/coroot.md`; flag reference in
+`clusters/centralized_logging/docs/feature-flags.md`.
 
 A failed `just up` (e.g. a `multipass launch` timeout) leaves an orphaned VM that OpenTofu
 never recorded in state, so plain `tofu destroy` can't remove it and the next `up` collides
