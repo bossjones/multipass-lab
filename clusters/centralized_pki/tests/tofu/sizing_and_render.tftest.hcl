@@ -85,6 +85,15 @@ run "services_stack_renders" {
     condition     = strcontains(local_file.services_ci.content, "defaultCertificate") && strcontains(local_file.services_ci.content, "/etc/traefik/certs/services.crt")
     error_message = "Traefik must serve the step-ca-issued cert as its defaultCertificate"
   }
+  # Routing is via the file provider (no docker provider / socket), reaching apps by container name.
+  assert {
+    condition     = strcontains(local_file.services_ci.content, "Host(`auth.lab.theblacktonystark.com`)") && strcontains(local_file.services_ci.content, "http://authelia:9091")
+    error_message = "Traefik must route auth.<domain> to the Authelia container via the file provider"
+  }
+  assert {
+    condition     = strcontains(local_file.services_ci.content, "http://vaultwarden:80")
+    error_message = "Traefik must route vault.<domain> to the Vaultwarden container via the file provider"
+  }
   # The services VM fetches + trusts step-ca's root.
   assert {
     condition     = strcontains(local_file.services_ci.content, "roots.pem") && strcontains(local_file.services_ci.content, "update-ca-certificates")

@@ -4,7 +4,10 @@
 # step-ca's JWK provisioner (password auth, no ACME challenge — the DNS-less lab can't do reachback)
 # and a timer renews it; Traefik's file provider watches the cert dir. See specs/centralized_pki.md.
 package_update: true
-package_upgrade: true
+# No full package_upgrade: the apt dist-upgrade + Docker install + 4 image pulls pushed first-boot
+# past the multipass provider's launch timeout (an orphaned VM). The base 24.04 image is recent
+# enough for a lab.
+package_upgrade: false
 
 timezone: Etc/UTC
 ntp:
@@ -117,7 +120,9 @@ write_files:
       update-ca-certificates || true
       # 2. Issue the Traefik leaf (SANs auth./vault.<domain>). Retry until the CA is ready.
       for i in $(seq 1 30); do
-        if docker run --rm \
+        # --user 0:0: the step-cli image runs as uid 1000, but the mounted provisioner-password
+        # file is root-owned 0600; run as root so it can read it (keeps the secret non-world-readable).
+        if docker run --rm --user 0:0 \
              --add-host "ca.${domain}:${ca_ip}" \
              -v "$CERT_DIR:/certs" -v "$SECRETS:/secrets:ro" \
              "$STEP_IMG" \
@@ -131,6 +136,9 @@ write_files:
       done
       chmod 644 "$CERT_DIR/services.crt" || true
       chmod 600 "$CERT_DIR/services.key" || true
+      # On renewal, nudge Traefik to reload the rotated cert. No-op on first boot (Traefik not up
+      # yet — it starts after this with the cert already present).
+      docker restart traefik >/dev/null 2>&1 || true
 
   - path: /etc/systemd/system/pki-cert-renew.service
     permissions: '0644'

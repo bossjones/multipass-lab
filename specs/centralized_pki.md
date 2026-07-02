@@ -132,14 +132,29 @@ Promote to **production** by swapping the Traefik `caServer` to
 `https://acme-v02.api.letsencrypt.org/directory` once staging validates end-to-end. GoDaddy
 DNS-01 is slow/flaky — the config already sets long propagation timeouts.
 
-## Live-validation notes (first `up`)
+## Live-validation notes
 
-The hermetic layers (tofu render + all CLI unit suites) are fully green offline. The following
-are pinned to plausible current versions but should be confirmed on the first live `just up`
-(a lab, easy to bump): the `smallstep/step-ca`, `smallstep/step-cli`, `traefik`,
-`authelia/authelia`, and `vaultwarden/server` image tags; that the docker image's initial JWK
-provisioner is named `admin` (`DOCKER_STEPCA_INIT_PROVISIONER_NAME`); and the `step ca
-certificate` flags. `just verify` + `just verify-pki` are the gates.
+Validated end-to-end on Multipass (Docker 29.6.1): `just up` → `just verify` (19 testinfra
+tests) → `just verify-pki` (step-ca/Authelia/Vaultwarden + both TLS chain checks) all green.
+Gotchas found and fixed along the way, worth knowing when bumping images:
+
+- **step-ca password** must be passed as `DOCKER_STEPCA_INIT_PASSWORD` (the entrypoint writes it
+  into the writable volume). A read-only mounted password file crash-loops the container.
+- **Traefik cert issuance** runs the `smallstep/step-cli` container with `--user 0:0` so it can
+  read the root-owned `0600` provisioner-password file.
+- **Traefik routing uses the file provider, not the docker provider.** Traefik v3.1's docker
+  provider speaks API v1.24, which Docker ≥28 rejects (`client version too old`), and it ignores
+  `DOCKER_API_VERSION`. The file provider needs no docker socket and reaches apps by container name.
+- **`package_upgrade: false`** — the full apt dist-upgrade pushed the heavier services VM past the
+  multipass provider's launch timeout (an orphaned VM); the recent base image doesn't need it.
+- **Authelia enforcement** is verified by hitting the protected route (`vault.<domain>/admin`) and
+  asserting the 302 redirect to the portal — Traefik strips client-supplied `X-Forwarded-*`, so the
+  authz endpoint can't be driven directly from outside.
+
+Image tags (`step-ca:0.28.1`, `step-cli:0.28.2`, `traefik:v3.1`, `authelia:4.38`,
+`vaultwarden/server:1.32.0`) and the JWK provisioner name (`admin`) are all confirmed working.
+The launch timeout can still recur under slow image pulls — `just recreate` (destroy+prune+up) is
+the remedy, per the repo-wide orphan note in the root `Justfile`.
 
 ## Future work
 

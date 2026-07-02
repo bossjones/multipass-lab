@@ -1,7 +1,11 @@
 # Services stack for the services VM: Traefik terminates TLS in front of Authelia (forward-auth
 # SSO) and Vaultwarden. Traefik serves step-ca's directly-issued default cert (default mode) or a
-# Let's Encrypt staging wildcard via DNS-01 (enable_letsencrypt_staging). Routers just set tls=true
-# and pick up whichever default cert the TLS store provides.
+# Let's Encrypt staging wildcard via DNS-01 (enable_letsencrypt_staging).
+#
+# Routing is defined in Traefik's FILE provider (traefik/dynamic.yaml), not the docker provider —
+# Traefik v3.1's docker provider speaks an API version modern Docker (>=28) rejects, and the file
+# provider needs no docker socket. Traefik reaches the apps by container name over the compose
+# network (Docker's embedded DNS resolves authelia/vaultwarden).
 name: pki-services
 
 services:
@@ -23,7 +27,6 @@ services:
       - GODADDY_POLLING_INTERVAL=30
 %{ endif ~}
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - /opt/stack/traefik:/etc/traefik
 
   authelia:
@@ -34,12 +37,6 @@ services:
       - "9091"
     volumes:
       - /opt/stack/authelia:/config
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.authelia.rule=Host(`auth.${domain}`)"
-      - "traefik.http.routers.authelia.entrypoints=websecure"
-      - "traefik.http.routers.authelia.tls=true"
-      - "traefik.http.services.authelia.loadbalancer.server.port=9091"
 
   vaultwarden:
     image: vaultwarden/server:1.32.0
@@ -51,20 +48,10 @@ services:
 %{ if vaultwarden_admin_token != "" ~}
       - ADMIN_TOKEN=${vaultwarden_admin_token}
 %{ endif ~}
+    expose:
+      - "80"
     volumes:
       - vaultwarden_data:/data
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.vault.rule=Host(`vault.${domain}`)"
-      - "traefik.http.routers.vault.entrypoints=websecure"
-      - "traefik.http.routers.vault.tls=true"
-      - "traefik.http.services.vault.loadbalancer.server.port=80"
-      # /admin is gated by Authelia forward-auth (higher-priority router for the /admin path).
-      - "traefik.http.routers.vaultadmin.rule=Host(`vault.${domain}`) && PathPrefix(`/admin`)"
-      - "traefik.http.routers.vaultadmin.entrypoints=websecure"
-      - "traefik.http.routers.vaultadmin.tls=true"
-      - "traefik.http.routers.vaultadmin.service=vault"
-      - "traefik.http.routers.vaultadmin.middlewares=authelia@file"
 
 volumes:
   vaultwarden_data:

@@ -21,10 +21,13 @@ services:
       # it (password-authenticated, no ACME challenge).
       - DOCKER_STEPCA_INIT_PROVISIONER_NAME=admin
       - DOCKER_STEPCA_INIT_REMOTE_MANAGEMENT=false
-      - DOCKER_STEPCA_INIT_PASSWORD_FILE=/home/step/secrets/password
+      # Plaintext password (dev default): the entrypoint writes it into the writable step_data
+      # volume itself and reuses it at runtime. A read-only mounted file fails — the entrypoint
+      # can't write the canonical /home/step/secrets/password and the step user (uid 1000) can't
+      # read a root-owned 0600 mount. Same value the services VM uses for the JWK provisioner.
+      - DOCKER_STEPCA_INIT_PASSWORD=${stepca_ca_password}
     volumes:
       - step_data:/home/step
-      - /opt/pki/secrets/ca_password:/home/step/secrets/password:ro
     ports:
       - "9000:9000"
     healthcheck:

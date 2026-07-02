@@ -3,7 +3,10 @@
 # :9000. Root + intermediate are generated at first boot; the root is fetched by the services VM
 # to seed Traefik's trust. See specs/centralized_pki.md.
 package_update: true
-package_upgrade: true
+# No full package_upgrade: on the heavier services VM the apt dist-upgrade pushed first-boot past
+# the multipass provider's launch timeout (an orphaned VM). The base 24.04 image is recent enough
+# for a lab; kept symmetric across both VMs.
+package_upgrade: false
 
 # Time sync — pin every VM to UTC and keep the clock disciplined via systemd-timesyncd.
 # Declared here (not left to the image default) so cert notBefore/notAfter align cluster-wide.
@@ -23,12 +26,6 @@ ssh_authorized_keys:
   - ${ssh_pubkey}
 
 write_files:
-  # step-ca key password. |- strips the trailing newline so the password file is exactly the value.
-  - path: /opt/pki/secrets/ca_password
-    permissions: '0600'
-    content: |-
-      ${stepca_ca_password}
-
   - path: /opt/pki/compose.yaml
     permissions: '0644'
     content: |
@@ -72,7 +69,6 @@ runcmd:
   # Enforce UTC late: Multipass injects the host timezone during first boot and can beat the
   # declarative `timezone:` key above. runcmd runs after the config modules, so it wins. See specs/ntp.md.
   - timedatectl set-timezone Etc/UTC
-  - mkdir -p /opt/pki/secrets
   # step-ca needs its own IP in the cert SAN, but tofu can't self-reference this VM's IP. Compute it
   # at boot and hand it to docker compose via /opt/pki/.env ($${SELF_IP} in the CA compose).
   - |

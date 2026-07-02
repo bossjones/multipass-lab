@@ -35,8 +35,9 @@ locals {
   # The CA's own IP can't be self-referenced in tofu, so DNS names carry a $${SELF_IP}
   # placeholder substituted at boot by a runcmd (the __SELF_IP__ pattern from docker-client).
   ca_compose = templatefile("${path.module}/cloud-init/step-ca/compose.yaml.tftpl", {
-    ca_name = local.ca_name
-    domain  = var.domain
+    ca_name            = local.ca_name
+    domain             = var.domain
+    stepca_ca_password = var.stepca_ca_password
   })
 
   # --- services VM sub-configs -------------------------------------------
@@ -75,10 +76,9 @@ locals {
 resource "local_file" "ca_ci" {
   filename = "${local.render_dir}/ca.yaml"
   content = templatefile("${path.module}/cloud-init/ca.yaml.tftpl", merge(local.flags, {
-    ssh_pubkey         = local.ssh_pubkey
-    domain             = var.domain
-    ca_compose         = local.ca_compose
-    stepca_ca_password = var.stepca_ca_password
+    ssh_pubkey = local.ssh_pubkey
+    domain     = var.domain
+    ca_compose = local.ca_compose
   }))
 }
 

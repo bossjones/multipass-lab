@@ -47,6 +47,7 @@ class Options:
 class Ctx:
     base_url: str
     host_header: str | None
+    domain: str
     as_json: bool
     timeout: float
     insecure: bool
@@ -88,6 +89,7 @@ def resolve(opts: Options) -> Ctx:
     return Ctx(
         base_url=target.base_url,
         host_header=host_header,
+        domain=target.domain,
         as_json=opts.as_json,
         timeout=opts.timeout,
         insecure=opts.insecure,
@@ -159,13 +161,22 @@ def check(ctx: typer.Context):
         _render_check(c, report)
         raise typer.Exit(report.exit_code)
 
-    # 2. Forward-auth endpoint is enforcing (401/403/redirect for an unauthenticated request),
-    #    i.e. present and protecting — a 404 would mean it's misconfigured/absent.
+    # 2. Forward-auth enforces end to end: an unauthenticated GET to a protected route
+    #    (vault.<domain>/admin) redirects to the Authelia portal. We exercise the REAL middleware
+    #    chain rather than calling /api/authz/forward-auth directly — Traefik strips client-supplied
+    #    X-Forwarded-* headers, so Authelia can't be driven that way from outside.
+    protected_host = f"vault.{c.domain}" if c.domain else None
     try:
         with c.client() as client:
-            resp = client.get("/api/authz/forward-auth")
-            enforcing = resp.status_code in (401, 403) or 300 <= resp.status_code < 400
-            report.add("forward-auth enforcing", enforcing, f"status={resp.status_code}")
+            headers = {"Host": protected_host} if protected_host else None
+            resp = client.get("/admin", headers=headers)
+        loc = resp.headers.get("location", "")
+        redirected = 300 <= resp.status_code < 400 and "auth." in loc
+        report.add(
+            "forward-auth enforcing",
+            redirected,
+            f"status={resp.status_code} -> {loc[:60] or '(no redirect)'}",
+        )
     except httpx.HTTPError as exc:
         report.add("forward-auth enforcing", False, str(exc))
 

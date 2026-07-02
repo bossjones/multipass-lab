@@ -42,13 +42,13 @@ def test_served_leaf_issued_by_step_ca(_internal_only, services, domain):
 
 
 def test_served_leaf_chains_to_step_ca_root(_internal_only, services, domain):
-    # Pull the served chain and verify it against the fetched step-ca root on the VM.
+    # Let openssl verify the FULL served chain (leaf + step-ca intermediate) against the fetched
+    # root. `-verify_return_error` makes a bad chain a nonzero exit; "Verify return code: 0" confirms.
     verify = (
-        "openssl s_client -connect localhost:443 "
-        f"-servername vault.{domain} -showcerts </dev/null 2>/dev/null "
-        "| openssl x509 > /tmp/leaf.pem && "
-        "openssl verify -CAfile /opt/stack/traefik/certs/root_ca.crt "
-        "-untrusted /opt/stack/traefik/certs/root_ca.crt /tmp/leaf.pem"
+        "echo | openssl s_client -connect localhost:443 "
+        f"-servername vault.{domain} "
+        "-CAfile /opt/stack/traefik/certs/root_ca.crt -verify_return_error 2>&1 "
+        "| grep -q 'Verify return code: 0 (ok)'"
     )
     got = _wait(lambda: services.run(verify).rc == 0)
     assert got, "served leaf does not verify against the step-ca root"
