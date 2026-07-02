@@ -1,0 +1,39 @@
+# Managed by OpenTofu — SHARED cross-cluster snippet (clusters/_shared/cloud-init).
+# Derived from centralized_monitoring's k0s-collector-config.yaml.tftpl, trimmed to the host-log
+# path so ANY cluster's VM can push its OS logs to the monitoring hub's OpenObserve over OTLP/HTTP.
+# Rendered with the monitoring server IP baked in (openobserve_ip); a cluster that boots BEFORE the
+# monitoring hub gets this pushed on the second up-connected pass (see specs/cross-cluster.md).
+receivers:
+  # Host logs — the VM's OS syslog. start_at: beginning ingests existing content too.
+  filelog/host:
+    include:
+      - /var/log/syslog
+    include_file_path: true
+    start_at: beginning
+    # Persist read offsets across restarts so a unit restart doesn't re-ship every file
+    # (which would duplicate rows in the ${stream_name} stream).
+    storage: file_storage
+
+extensions:
+  # Persistent filelog read offsets. The unit runs as root, so this dir is writable.
+  file_storage:
+    directory: /var/lib/otelcol-contrib/storage
+
+processors:
+  batch: {}
+
+exporters:
+  # OpenObserve names the destination stream from the `stream-name` header.
+  otlphttp/host:
+    endpoint: http://${openobserve_ip}:${openobserve_port}/api/${openobserve_org}
+    headers:
+      Authorization: "Basic ${base64encode("admin@example.com:${openobserve_password}")}"
+      stream-name: ${stream_name}
+
+service:
+  extensions: [file_storage]
+  pipelines:
+    logs/host:
+      receivers: [filelog/host]
+      processors: [batch]
+      exporters: [otlphttp/host]

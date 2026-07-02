@@ -141,6 +141,12 @@ scrape_configs:
 %{ if enable_otel ~}
           - "otel-collector:8888"
 %{ endif ~}
+%{ for t in extra_scrape_targets ~}
+  # cross-cluster: a VM in another cluster (populated by `just up-connected`).
+  - job_name: ${t.job}
+    static_configs:
+      - targets: ["${t.ip}:${t.port}"]
+%{ endfor ~}
 %{ if enable_openobserve ~}
 
 # --- metrics ingestion: ship every scraped series into OpenObserve ----------
