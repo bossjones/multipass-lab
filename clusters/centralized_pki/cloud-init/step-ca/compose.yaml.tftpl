@@ -1,0 +1,40 @@
+# step-ca stack for the ca VM. The smallstep/step-ca image's entrypoint runs a non-interactive
+# `step ca init` on first boot (empty config volume) driven by the DOCKER_STEPCA_INIT_* env, then
+# runs step-ca with the mounted password file. DOCKER_STEPCA_INIT_ACME=true adds the ACME
+# provisioner named "acme" -> directory at https://ca.<domain>:9000/acme/acme/directory.
+#
+# $${SELF_IP} is substituted by docker compose from /opt/pki/.env (written at boot with this VM's
+# own IP) so the CA leaf served on :9000 is valid for the IP the host/laptop dial by. ca.<domain>
+# is always in the SAN, which is what the services VM's Traefik connects to (via extra_hosts).
+name: pki-ca
+
+services:
+  step-ca:
+    image: smallstep/step-ca:0.28.1
+    container_name: step-ca
+    restart: unless-stopped
+    environment:
+      - DOCKER_STEPCA_INIT_NAME=${ca_name}
+      - DOCKER_STEPCA_INIT_DNS_NAMES=ca.${domain},localhost,$${SELF_IP}
+      - DOCKER_STEPCA_INIT_ACME=true
+      # Names the initial JWK provisioner "admin" — the services VM issues Traefik's cert through
+      # it (password-authenticated, no ACME challenge).
+      - DOCKER_STEPCA_INIT_PROVISIONER_NAME=admin
+      - DOCKER_STEPCA_INIT_REMOTE_MANAGEMENT=false
+      # Plaintext password (dev default): the entrypoint writes it into the writable step_data
+      # volume itself and reuses it at runtime. A read-only mounted file fails — the entrypoint
+      # can't write the canonical /home/step/secrets/password and the step user (uid 1000) can't
+      # read a root-owned 0600 mount. Same value the services VM uses for the JWK provisioner.
+      - DOCKER_STEPCA_INIT_PASSWORD=${stepca_ca_password}
+    volumes:
+      - step_data:/home/step
+    ports:
+      - "9000:9000"
+    healthcheck:
+      test: ["CMD", "step", "ca", "health", "--ca-url", "https://localhost:9000", "--root", "/home/step/certs/root_ca.crt"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  step_data:

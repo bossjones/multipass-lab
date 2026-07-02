@@ -1,0 +1,10 @@
+# Authelia file backend — one user. The password is an argon2id hash (never the plaintext); the
+# dev default hashes 'password' (see DEFAULT_PASSWORDS.md). Override via TF_VAR_authelia_password_hash.
+users:
+  ${authelia_user}:
+    disabled: false
+    displayname: 'Lab Admin'
+    password: '${authelia_password_hash}'
+    email: '${authelia_user}@${domain}'
+    groups:
+      - admins

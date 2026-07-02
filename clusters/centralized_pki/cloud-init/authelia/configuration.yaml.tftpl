@@ -1,0 +1,44 @@
+# Authelia 4.38 config-as-code (file backend, single user). Secrets are rendered from tofu vars
+# into .rendered/ (gitignored) and mounted read-only at /config. access_control denies by default
+# and requires one_factor for vault.<domain> (the /admin route Traefik protects via forward-auth).
+theme: light
+
+server:
+  address: 'tcp://0.0.0.0:9091/'
+
+log:
+  level: info
+
+identity_validation:
+  reset_password:
+    jwt_secret: '${authelia_jwt_secret}'
+
+authentication_backend:
+  file:
+    path: /config/users_database.yml
+
+access_control:
+  default_policy: deny
+  rules:
+    - domain: 'vault.${domain}'
+      policy: one_factor
+
+session:
+  secret: '${authelia_session_secret}'
+  cookies:
+    - domain: '${domain}'
+      authelia_url: 'https://auth.${domain}'
+
+regulation:
+  max_retries: 3
+  find_time: 2m
+  ban_time: 5m
+
+storage:
+  encryption_key: '${authelia_storage_key}'
+  local:
+    path: /config/db.sqlite3
+
+notifier:
+  filesystem:
+    filename: /config/notification.txt

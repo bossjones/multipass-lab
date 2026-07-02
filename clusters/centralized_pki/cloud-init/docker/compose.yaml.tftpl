@@ -1,0 +1,57 @@
+# Services stack for the services VM: Traefik terminates TLS in front of Authelia (forward-auth
+# SSO) and Vaultwarden. Traefik serves step-ca's directly-issued default cert (default mode) or a
+# Let's Encrypt staging wildcard via DNS-01 (enable_letsencrypt_staging).
+#
+# Routing is defined in Traefik's FILE provider (traefik/dynamic.yaml), not the docker provider —
+# Traefik v3.1's docker provider speaks an API version modern Docker (>=28) rejects, and the file
+# provider needs no docker socket. Traefik reaches the apps by container name over the compose
+# network (Docker's embedded DNS resolves authelia/vaultwarden).
+name: pki-services
+
+services:
+  traefik:
+    image: traefik:v3.1
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - "--configfile=/etc/traefik/traefik.yaml"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+%{ if enable_letsencrypt_staging ~}
+    environment:
+      - GODADDY_API_KEY=${godaddy_api_key}
+      - GODADDY_API_SECRET=${godaddy_api_secret}
+      - GODADDY_PROPAGATION_TIMEOUT=600
+      - GODADDY_POLLING_INTERVAL=30
+%{ endif ~}
+    volumes:
+      - /opt/stack/traefik:/etc/traefik
+
+  authelia:
+    image: authelia/authelia:4.38
+    container_name: authelia
+    restart: unless-stopped
+    expose:
+      - "9091"
+    volumes:
+      - /opt/stack/authelia:/config
+
+  vaultwarden:
+    image: vaultwarden/server:1.32.0
+    container_name: vaultwarden
+    restart: unless-stopped
+    environment:
+      - DOMAIN=https://vault.${domain}
+      - SIGNUPS_ALLOWED=false
+%{ if vaultwarden_admin_token != "" ~}
+      - ADMIN_TOKEN=${vaultwarden_admin_token}
+%{ endif ~}
+    expose:
+      - "80"
+    volumes:
+      - vaultwarden_data:/data
+
+volumes:
+  vaultwarden_data:

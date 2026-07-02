@@ -1,0 +1,37 @@
+# Traefik static config.
+#
+# Default mode: Traefik serves a cert issued directly by step-ca (see dynamic.yaml's
+# defaultCertificate); no ACME resolver, because the DNS-less lab can't satisfy step-ca's
+# ACME challenge reachback. The file provider watches the cert dir so a renewed cert is
+# picked up without a restart.
+#
+# enable_letsencrypt_staging mode: an ACME resolver named "stepca" points at Let's Encrypt
+# STAGING via DNS-01 (GoDaddy) — DNS-01 needs no inbound reachback, so it works from the lab.
+api:
+  dashboard: true
+  insecure: true # dashboard on :8080 — lab only
+
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yaml
+    watch: true
+%{ if enable_letsencrypt_staging ~}
+
+certificatesResolvers:
+  stepca:
+    acme:
+      email: "${acme_email}"
+      storage: /etc/traefik/acme/acme.json
+      caServer: "https://acme-staging-v02.api.letsencrypt.org/directory"
+      dnsChallenge:
+        provider: godaddy
+        delayBeforeCheck: 300
+        resolvers:
+          - "8.8.8.8:53"
+%{ endif ~}
