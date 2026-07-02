@@ -293,3 +293,135 @@ run "docker_prometheus_scrape_and_grafana_render" {
     error_message = "docker cloud-init must stay valid YAML after adding scrape jobs + dashboards"
   }
 }
+
+# --- Coroot (opt-in eBPF observability on the k0s node) — default OFF -----------------
+
+run "coroot_and_ingress_absent_by_default" {
+  command = plan
+
+  # No Coroot/ingress footprint on the default cluster.
+  assert {
+    condition     = !strcontains(local_file.k0s_ci.content, "coroot/coroot-ce")
+    error_message = "coroot must not render when enable_coroot is false (default)"
+  }
+  assert {
+    condition     = !strcontains(local_file.k0s_ci.content, "openebs-operator-lite")
+    error_message = "the OpenEBS StorageClass must not render when enable_coroot is false"
+  }
+  assert {
+    condition     = !strcontains(local_file.k0s_ci.content, "ingress-nginx/controller")
+    error_message = "ingress-nginx must not render when enable_ingress is false (default)"
+  }
+
+  # Default cluster keeps the small k0s VM (no auto-bump).
+  assert {
+    condition     = multipass_instance.k0s.memory == "2G" && multipass_instance.k0s.disk == "20G"
+    error_message = "k0s must keep its small default sizing when enable_coroot is false"
+  }
+
+  # enabled_features output reflects both flags off.
+  assert {
+    condition     = output.enabled_features.coroot == false && output.enabled_features.ingress == false
+    error_message = "enabled_features must report coroot=false, ingress=false by default"
+  }
+
+  # core dashboards stay at 5 (no Coroot tile).
+  assert {
+    condition     = length(output.web_urls.core) == 5
+    error_message = "web_urls.core must stay 5 when Coroot is off"
+  }
+}
+
+run "coroot_and_ingress_render_when_enabled" {
+  command = plan
+
+  variables {
+    enable_coroot  = true
+    enable_ingress = true
+  }
+
+  # Helm install of the operator + coroot-ce, with the pinned chart versions.
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "coroot/coroot-operator") && strcontains(local_file.k0s_ci.content, "coroot/coroot-ce")
+    error_message = "enable_coroot must render the operator + coroot-ce helm installs"
+  }
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "--version 0.9.7") && strcontains(local_file.k0s_ci.content, "--version 0.3.3")
+    error_message = "enable_coroot must pin the operator (0.9.7) and coroot-ce (0.3.3) chart versions"
+  }
+
+  # Default StorageClass for the PVCs.
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "openebs-operator-lite") && strcontains(local_file.k0s_ci.content, "is-default-class")
+    error_message = "enable_coroot must install the OpenEBS default StorageClass"
+  }
+
+  # The rendered values file must override the chart's laptop-hostile defaults.
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "shards: 1")
+    error_message = "coroot values must set ClickHouse shards: 1 for the single-node lab"
+  }
+  assert {
+    condition     = !strcontains(local_file.k0s_ci.content, "size: 100Gi")
+    error_message = "coroot values must override the 100Gi ClickHouse storage default (would exceed the VM disk)"
+  }
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "size: 10Gi")
+    error_message = "coroot ClickHouse storage must render the overridden 10Gi size"
+  }
+
+  # ingress-nginx installed + Coroot wired to it.
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "ingress-nginx/controller-v1.15.1")
+    error_message = "enable_ingress must install ingress-nginx (pinned controller-v1.15.1)"
+  }
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "className: nginx") && strcontains(local_file.k0s_ci.content, "host: coroot.local")
+    error_message = "with ingress on, the Coroot values must reference the nginx ingress class + host"
+  }
+
+  # k0s VM auto-bumped for the Coroot stack.
+  assert {
+    condition     = multipass_instance.k0s.memory == "8G" && multipass_instance.k0s.disk == "50G" && multipass_instance.k0s.cpus == 4
+    error_message = "enable_coroot must auto-bump the k0s VM to 4 vCPU / 8G / 50G"
+  }
+
+  # Outputs reflect the enabled feature + add the Coroot UI tile.
+  assert {
+    condition     = output.enabled_features.coroot == true && output.enabled_features.ingress == true
+    error_message = "enabled_features must report coroot=true, ingress=true"
+  }
+  assert {
+    condition     = length(output.web_urls.core) == 6 && anytrue([for u in output.web_urls.core : strcontains(u, ":30080")])
+    error_message = "enabling Coroot must add its :30080 NodePort UI to web_urls.core"
+  }
+
+  # cloud-init must stay valid YAML with the Coroot/ingress write_files + values spliced in.
+  assert {
+    condition     = can(yamldecode(local_file.k0s_ci.content))
+    error_message = "k0s cloud-init must stay valid YAML after adding the Coroot + ingress blocks"
+  }
+}
+
+run "ingress_without_coroot" {
+  command = plan
+
+  variables {
+    enable_ingress = true
+  }
+
+  # ingress can be adopted on its own — controller renders, Coroot does not.
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "ingress-nginx/controller-v1.15.1")
+    error_message = "enable_ingress alone must still install ingress-nginx"
+  }
+  assert {
+    condition     = !strcontains(local_file.k0s_ci.content, "coroot/coroot-ce")
+    error_message = "enable_ingress must not drag in Coroot"
+  }
+  # k0s not bumped when only ingress is on (Coroot is what needs the RAM).
+  assert {
+    condition     = multipass_instance.k0s.memory == "2G"
+    error_message = "ingress-only must not bump the k0s VM sizing"
+  }
+}

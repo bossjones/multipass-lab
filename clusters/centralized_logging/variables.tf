@@ -104,6 +104,69 @@ variable "enable_kube_state_metrics" {
   default     = true
 }
 
+# --- Coroot (self-hosted eBPF observability) + ingress ----------------------
+# Coroot is deployed declaratively onto the single-node k0s cluster (operator + coroot-ce
+# Helm charts) in the k0s cloud-init — no cloud account, no secrets. Heavy (bundles
+# Prometheus + ClickHouse), so it defaults OFF. See specs/coroot.md.
+
+variable "enable_coroot" {
+  description = "k0s only — deploy the Coroot stack (server + eBPF node-agent + cluster-agent + bundled Prometheus + ClickHouse) via the coroot-operator / coroot-ce Helm charts. Installs a default StorageClass (OpenEBS) for its PVCs. Default off (resource-heavy)."
+  type        = bool
+  default     = false
+}
+
+variable "enable_ingress" {
+  description = "k0s only — install an ingress-nginx controller (hostNetwork, binds the k0s VM's :80/:443) and expose Coroot's UI through it. Independent of enable_coroot; when off, Coroot's UI is still reachable via its NodePort. Default off."
+  type        = bool
+  default     = false
+}
+
+variable "coroot_host" {
+  description = "Ingress host for the Coroot UI (reach via `curl -H 'Host: <this>' http://<k0s_ip>/` or an /etc/hosts entry). Only used when enable_ingress."
+  type        = string
+  default     = "coroot.local"
+}
+
+variable "coroot_nodeport" {
+  description = "NodePort for the Coroot UI (always exposed as a fallback so the UI is reachable without ingress). Must be in the 30000-32767 range."
+  type        = number
+  default     = 30080
+  validation {
+    condition     = var.coroot_nodeport >= 30000 && var.coroot_nodeport <= 32767
+    error_message = "coroot_nodeport must be in the Kubernetes NodePort range 30000-32767."
+  }
+}
+
+variable "coroot_server_memory" {
+  description = "Memory request for the Coroot server pod. The chart default is 4Gi — trimmed here to fit the lab VM."
+  type        = string
+  default     = "2Gi"
+}
+
+variable "coroot_prometheus_storage" {
+  description = "PVC size for Coroot's bundled Prometheus. Chart default is 10Gi."
+  type        = string
+  default     = "8Gi"
+}
+
+variable "coroot_clickhouse_storage" {
+  description = "PVC size for Coroot's bundled ClickHouse (traces/logs/profiles). The chart default is 100Gi — far larger than the lab VM disk, so it MUST be overridden."
+  type        = string
+  default     = "10Gi"
+}
+
+variable "coroot_operator_chart_version" {
+  description = "Pinned coroot/coroot-operator Helm chart version for reproducible installs. Empty string = latest."
+  type        = string
+  default     = "0.9.7"
+}
+
+variable "coroot_ce_chart_version" {
+  description = "Pinned coroot/coroot-ce Helm chart version for reproducible installs. Empty string = latest."
+  type        = string
+  default     = "0.3.3"
+}
+
 variable "central" {
   description = "Resource sizing for the central logging VM."
   type = object({

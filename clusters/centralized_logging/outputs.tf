@@ -73,13 +73,17 @@ output "shell_hints" {
 locals {
   _docker_ip = multipass_instance.docker.ipv4
 
-  web_urls_core = [
+  # The 5 always-on docker-VM dashboards, plus the Coroot UI when enable_coroot. The Coroot URL
+  # uses its NodePort (browser-friendly: no Host header needed, unlike the ingress path).
+  web_urls_core = concat([
     "http://${local._docker_ip}",      # Heimdall (link homepage, fronted by Traefik :80)
     "http://${local._docker_ip}:3000", # Grafana (admin/admin)
     "http://${local._docker_ip}:9090", # Prometheus
     "http://${local._docker_ip}:9093", # Alertmanager
     "http://${local._docker_ip}:8080", # Traefik dashboard
-  ]
+    ], var.enable_coroot ? [
+    "http://${multipass_instance.k0s.ipv4}:${var.coroot_nodeport}", # Coroot UI (eBPF observability)
+  ] : [])
 
   # One {url, on} candidate per (role, exporter); the same port map as metrics_targets.
   web_urls_metrics_candidates = [
@@ -114,5 +118,27 @@ output "web_urls" {
   value = {
     core = local.web_urls_core
     all  = concat(local.web_urls_core, local.web_urls_metrics)
+  }
+}
+
+# Opt-in non-exporter features (Coroot + ingress). tests/testinfra/conftest.py reads this so the
+# live Coroot suite is *skipped* (not failed) when the feature is off — mirrors enabled_exporters.
+output "enabled_features" {
+  description = "Opt-in feature flags beyond the exporter layer: { coroot, ingress }."
+  value = {
+    coroot  = var.enable_coroot
+    ingress = var.enable_ingress
+  }
+}
+
+# Coroot deployment info — consumed by the `just coroot-*` recipes and the live test suite.
+output "coroot" {
+  description = "Coroot deployment info: enabled flags, the browser-friendly NodePort UI URL, and the ingress host."
+  value = {
+    enabled      = var.enable_coroot
+    ingress      = var.enable_ingress
+    nodeport     = var.coroot_nodeport
+    nodeport_url = "http://${multipass_instance.k0s.ipv4}:${var.coroot_nodeport}"
+    ingress_host = var.coroot_host
   }
 }

@@ -14,8 +14,14 @@ for the full design.
 | VM | Role | Sizing |
 |----|------|--------|
 | `centralized-logging-central` | syslog-ng **server** → `/var/log/remote/<host>/<prog>.log` | 2 vCPU / 2G / 40G |
-| `centralized-logging-k0s` | syslog-ng client + single-node k0s | 2 vCPU / 2G / 20G |
+| `centralized-logging-k0s` | syslog-ng client + single-node k0s | 2 vCPU / 2G / 20G † |
 | `centralized-logging-docker` | syslog-ng client + Docker stack | 2 vCPU / 4G / 25G |
+
+† Auto-bumped to 4 vCPU / 8G / 50G when `enable_coroot=true` — the opt-in [Coroot](https://github.com/coroot/coroot)
+eBPF observability stack (server + node-agent + cluster-agent + bundled Prometheus + ClickHouse)
+deploys onto this node, optionally fronted by an `ingress-nginx` (`enable_ingress`). Both default
+off; see [feature flags](docs/feature-flags.md#coroot--ingress-opt-in-not-exporters) and
+[`specs/coroot.md`](../../specs/coroot.md).
 
 ## Quickstart (from the repo root)
 

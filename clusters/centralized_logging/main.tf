@@ -32,6 +32,37 @@ locals {
   # tests/testinfra/conftest.py so the live suite asserts only what is on.
   enabled_exporters = sort([for k, v in local.flags : k if v])
 
+  # Coroot (opt-in, k0s only). Kept out of local.flags on purpose so enabled_exporters stays
+  # the metrics-exporter set; enable_coroot/enable_ingress are threaded straight into the k0s
+  # templatefile below and surfaced separately via the enabled_features output. See specs/coroot.md.
+
+  # Coroot bundles Prometheus + ClickHouse, so the k0s VM must be much larger when it is on.
+  # Auto-bump sizing on enable_coroot so the default (coroot-off) cluster stays small while an
+  # `enable_coroot=true` apply gets enough headroom without a manual tfvars edit. cpus takes the
+  # max of the configured value and the Coroot floor; memory/disk use the Coroot floor.
+  k0s_size = var.enable_coroot ? {
+    cpus   = max(var.k0s_client.cpus, 4)
+    memory = "8G"
+    disk   = "50G"
+  } : var.k0s_client
+
+  # coroot-ce Helm values (sizing/ingress/nodeport overrides), rendered unconditionally but only
+  # written to the VM + used when enable_coroot. Overrides the chart's laptop-hostile defaults
+  # (ClickHouse storage 100Gi, server memory request 4Gi). See cloud-init/coroot/.
+  coroot_values = templatefile("${path.module}/cloud-init/coroot/coroot-values.yaml.tftpl", {
+    enable_ingress            = var.enable_ingress
+    coroot_host               = var.coroot_host
+    coroot_nodeport           = var.coroot_nodeport
+    coroot_server_memory      = var.coroot_server_memory
+    coroot_prometheus_storage = var.coroot_prometheus_storage
+    coroot_clickhouse_storage = var.coroot_clickhouse_storage
+  })
+
+  # Pre-computed `helm --version` flags (empty when the version var is "" = unpinned/latest), so
+  # the in-VM install script stays free of nested template interpolation.
+  coroot_operator_version_flag = var.coroot_operator_chart_version != "" ? "--version ${var.coroot_operator_chart_version}" : ""
+  coroot_ce_version_flag       = var.coroot_ce_chart_version != "" ? "--version ${var.coroot_ce_chart_version}" : ""
+
   # How central resolves $HOST for remote senders (see var.hostname_source).
   hostname_opts = {
     keep = "keep-hostname(yes)"
@@ -94,15 +125,22 @@ resource "local_file" "k0s_ci" {
   content = templatefile("${path.module}/cloud-init/k0s-client.yaml.tftpl", merge(local.flags, {
     ssh_pubkey  = local.ssh_pubkey
     client_conf = local.client_conf
+    # Coroot (opt-in). enable_coroot/enable_ingress gate the %{ if } blocks; the rendered
+    # coroot-ce values + pinned chart versions drive the in-VM Helm install. See specs/coroot.md.
+    enable_coroot                = var.enable_coroot
+    enable_ingress               = var.enable_ingress
+    coroot_values                = local.coroot_values
+    coroot_operator_version_flag = local.coroot_operator_version_flag
+    coroot_ce_version_flag       = local.coroot_ce_version_flag
   }))
 }
 
 resource "multipass_instance" "k0s" {
   name           = local.k0s_name
   image          = var.image
-  cpus           = var.k0s_client.cpus
-  memory         = var.k0s_client.memory
-  disk           = var.k0s_client.disk
+  cpus           = local.k0s_size.cpus
+  memory         = local.k0s_size.memory
+  disk           = local.k0s_size.disk
   cloudinit_file = local_file.k0s_ci.filename
 }
 

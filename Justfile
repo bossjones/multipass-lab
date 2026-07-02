@@ -219,3 +219,16 @@ open CLUSTER *FLAGS:
 logs CLUSTER:
     @ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.central.ipv4'); \
      ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" 'sudo find /var/log/remote -type f'
+
+# --- Coroot (opt-in eBPF observability on the k0s node; see specs/coroot.md) --------------
+# These target the k0s VM. Requires the cluster up with enable_coroot=true.
+
+# show the Coroot stack pod status (k0s VM):  just coroot-status centralized_logging
+coroot-status CLUSTER:
+    @ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.k0s.ipv4'); \
+     ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" 'sudo /usr/local/bin/k0s kubectl get pods -n coroot -o wide'
+
+# (re)run the Coroot installer on the k0s VM — idempotent repair without a full recreate:  just coroot-deploy centralized_logging
+coroot-deploy CLUSTER:
+    @ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.k0s.ipv4'); \
+     ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" 'sudo /usr/local/sbin/coroot-install.sh'
