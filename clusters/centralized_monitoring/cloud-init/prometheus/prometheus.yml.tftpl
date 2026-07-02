@@ -141,3 +141,15 @@ scrape_configs:
 %{ if enable_otel ~}
           - "otel-collector:8888"
 %{ endif ~}
+%{ if enable_openobserve ~}
+
+# --- metrics ingestion: ship every scraped series into OpenObserve ----------
+# OpenObserve exposes a Prometheus remote-write endpoint; this is the pull->OpenObserve
+# bridge, so all server- AND k0s-side metrics land in OpenObserve (org "${openobserve_org}")
+# alongside the logs shipped by the OTel Collector. Auth is the OpenObserve root user.
+remote_write:
+  - url: http://openobserve:5080/api/${openobserve_org}/prometheus/api/v1/write
+    basic_auth:
+      username: admin@example.com
+      password: ${openobserve_password}
+%{ endif ~}

@@ -107,8 +107,9 @@ Defaults: **MVP + Reach ON, Nice-to-have OFF.**
 | Prometheus | *(spine)* | server | `9090` | scrape + metrics TSDB |
 | Alertmanager | *(spine)* | server | `9093` | alert routing |
 | Grafana | *(spine)* | server | `3000` | dashboards |
-| OTel Collector | `enable_otel` | server | `4317`/`4318`/`8888` | OTLP gateway → Prometheus + OpenObserve |
-| OpenObserve | `enable_openobserve` | server | `5080` | OTLP traces/metrics/logs store; Grafana datasource |
+| OTel Collector | `enable_otel` | server | `4317`/`4318`/`8888` | OTLP gateway + filelog → OpenObserve (container/host logs) |
+| OpenObserve | `enable_openobserve` | server | `5080` | metrics (remote_write) + logs + traces store; Grafana datasource |
+| otelcol-contrib (k0s agent) | `enable_k0s_log_shipping` | k0s | *(push)* | ships k0s host + pod logs to OpenObserve (endpoint injected post-apply) |
 | blackbox_exporter | `enable_blackbox` | server | `9115` | HTTP/TCP/ICMP probes |
 | node_exporter (`--collector.systemd`) | `enable_node_exporter` | both | `9100` | OS host + systemd-unit metrics |
 | cAdvisor | `enable_cadvisor` | both | `8080` | container metrics |
@@ -199,15 +200,27 @@ value that forces the client-before-server ordering.
   independent of the Prometheus path. The two overlap deliberately: Kuma for the dashboard,
   blackbox for alertable time-series.
 
-### OpenTelemetry & OpenObserve
+### OpenTelemetry & OpenObserve (ingestion)
 
-- The **OTel Collector** runs on the server as a gateway: OTLP receivers on `4317` (gRPC) /
-  `4318` (HTTP) → exports metrics to Prometheus (scraped via the collector's `:8888`) and
-  traces/logs to **OpenObserve**.
-- **OpenObserve** is the unified OTLP store and a **Grafana datasource** alongside Prometheus.
-- The **k0s-client does not push OTLP** in this MVP: client-side OTLP would make the client
-  depend on the server IP while the server already depends on the client IP — a Terraform
-  dependency cycle. Server-side OTLP intake is built; client push is Future work.
+OpenObserve is the unified store for **metrics + logs** and a **Grafana datasource** alongside
+Prometheus. Three ingestion paths feed it (see `specs/openobserve.md` for the full TDD design):
+
+- **Metrics — Prometheus `remote_write`.** Prometheus already scrapes every exporter (server +
+  k0s); a `remote_write` block (gated on `enable_openobserve`) forwards all of it to
+  `/api/default/prometheus/api/v1/write`. This is the pull→OpenObserve bridge, so k0s metrics
+  land in OpenObserve without any client→server dependency.
+- **Server logs — the OTel Collector.** The collector (`enable_otel`) runs as a gateway on
+  `4317`/`4318` (OTLP push) **and** tails the server's own Docker container logs
+  (`/var/lib/docker/containers`) + host syslog (`/var/log`) via `filelog` receivers, exporting to
+  OpenObserve as the `container_logs` / `host_logs` streams. The exporter auth token + org are
+  rendered from OpenTofu (the config is now `collector-config.yaml.tftpl`).
+- **k0s logs — an otelcol-contrib agent (`enable_k0s_log_shipping`).** The k0s VM runs a systemd
+  otelcol-contrib that ships host syslog + Kubernetes pod logs (`/var/log/pods`) to the server's
+  OpenObserve as `k0s_host` / `k0s_pods`. Because the k0s VM is created **before** the server, its
+  agent boots with a `127.0.0.1` placeholder endpoint; `terraform_data.k0s_log_shipper` re-renders
+  the config with the real server IP and pushes it post-apply via `multipass exec`.
+
+Collector self-metrics stay on `:8888` (scraped by the `selfmetrics` job).
 
 ### Grafana provisioning
 
@@ -228,7 +241,7 @@ multipass-lab/
     │   ├── server.yaml.tftpl  k0s-client.yaml.tftpl
     │   ├── prometheus/{prometheus.yml.tftpl, alert.rules.yml, blackbox.yml}
     │   ├── alertmanager/alertmanager.yml
-    │   ├── otel/collector-config.yaml
+    │   ├── otel/{collector-config.yaml.tftpl, k0s-collector-config.yaml.tftpl}
     │   ├── grafana/provisioning/{datasources,dashboards}/...
     │   └── docker/compose.yaml.tftpl
     ├── tests/tofu/sizing_and_render.tftest.hcl     # Layer 0/1 hermetic (mock_provider)
@@ -259,7 +272,8 @@ validated vars). Defaults encode the tier posture — **MVP + Reach `true`, Nice
 | flag | tier | default | governs |
 |------|------|---------|---------|
 | `enable_otel` | MVP | `true` | OTel Collector service + OTLP wiring |
-| `enable_openobserve` | MVP | `true` | OpenObserve service + Grafana datasource |
+| `enable_openobserve` | MVP | `true` | OpenObserve service + Grafana datasource + Prometheus remote_write + OTel filelog export |
+| `enable_k0s_log_shipping` | MVP | `true` | otelcol-contrib agent on k0s (host + pod logs → OpenObserve, endpoint injected post-apply) |
 | `enable_blackbox` | MVP | `true` | blackbox_exporter service + `blackbox` job |
 | `enable_node_exporter` | MVP | `true` | node_exporter (both VMs) + `node` job |
 | `enable_cadvisor` | MVP | `true` | cAdvisor (both VMs) + `cadvisor` job |
@@ -354,9 +368,9 @@ server baked into `prometheus.yml`. To apply config changes, recreate the whole 
 - **Converge with logging**: ship `centralized_logging`'s syslog-ng RFC5424 stream into
   **OpenObserve** so logs, metrics, and traces share one backend and one Grafana — the
   motivating reason OpenObserve is the sink here.
-- **Client-side OTLP push**: have the k0s-client's OTel agent push traces/metrics to the server
-  gateway. Needs the server→client dependency cycle broken — e.g. Prometheus `file_sd_configs`
-  written post-apply, a two-pass apply, or `lifecycle { replace_triggered_by }`.
+- **Client-side OTLP traces/metrics push**: the k0s agent now ships *logs* (the dependency cycle
+  is broken via the post-apply `terraform_data.k0s_log_shipper` inject — see
+  `specs/openobserve.md`); extending it to push app traces/metrics over OTLP is the remaining step.
 - **Vector pipeline** (`enable_vector`, default off): stand Vector up as an alternative/complement
   to the OTel Collector — a natural carrier for the future `centralized_logging → OpenObserve`
   route. `fluentd_exporter` is intentionally **not** included (this lab ships syslog-ng).

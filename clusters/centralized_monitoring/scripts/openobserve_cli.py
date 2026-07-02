@@ -20,8 +20,10 @@ OpenObserve is healthy and authentication works. Resolves the server from `tofu 
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import _obs_common as oc
 import typer
@@ -31,6 +33,10 @@ from rich.table import Table
 PORT = 5080
 DEFAULT_USER = "admin@example.com"
 DEFAULT_PASSWORD = "Complexpass#123"
+
+# openobserve dashboards live alongside this script, one folder per OpenObserve folder:
+# scripts/openobserve_cli.py -> <cluster>/openobserve/dashboards/<Folder>/*.json
+DASHBOARDS_DIR = Path(__file__).resolve().parent.parent / "openobserve" / "dashboards"
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help=__doc__)
 console = Console()
@@ -248,6 +254,249 @@ def orgs(ctx: typer.Context):
     _emit(c, data.get("data", data) if isinstance(data, dict) else data, title="orgs")
 
 
+# --- dashboards --------------------------------------------------------------
+# OpenObserve stores dashboards in folders and exposes /api/{org}/{folders,dashboards}.
+# Response + payload shapes vary across OpenObserve versions (the image is :latest), so
+# extraction is deliberately tolerant — mirror the existing `data.get("list", data)` idiom.
+
+dashboards_app = typer.Typer(
+    add_completion=False, no_args_is_help=True, help="Manage OpenObserve dashboards."
+)
+app.add_typer(dashboards_app, name="dashboards")
+
+
+def _extract_list(data, *keys) -> list:
+    """Pull a list out of a response under any of `keys`, else the first list value."""
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in keys:
+            if key in data:
+                return data[key] or []
+        for value in data.values():
+            if isinstance(value, list):
+                return value
+    return []
+
+
+def _dash_title(item) -> str | None:
+    """Best-effort dashboard title (may be nested under a version key, e.g. `v5`)."""
+    if not isinstance(item, dict):
+        return None
+    if item.get("title"):
+        return item["title"]
+    for value in item.values():
+        if isinstance(value, dict) and value.get("title"):
+            return value["title"]
+    return None
+
+
+def _dash_id(item) -> str | None:
+    """Best-effort dashboard id across schema versions."""
+    if not isinstance(item, dict):
+        return None
+    for key in ("dashboardId", "dashboard_id", "id"):
+        if item.get(key):
+            return item[key]
+    for value in item.values():
+        if isinstance(value, dict):
+            for key in ("dashboardId", "dashboard_id", "id"):
+                if value.get(key):
+                    return value[key]
+    return None
+
+
+def _folder_id(item) -> str | None:
+    return (
+        item.get("folderId") or item.get("folder_id")
+        if isinstance(item, dict)
+        else None
+    )
+
+
+def _list_dashboards(client, org: str, folder: str = "default") -> list:
+    resp = client.get(f"/api/{org}/dashboards", params={"folder": folder})
+    resp.raise_for_status()
+    return _extract_list(resp.json(), "dashboards", "list")
+
+
+def _folders_path(org: str) -> str:
+    # v0.91+: dashboard folders live under the v2 API (dashboards themselves stay on v1).
+    return f"/api/v2/{org}/folders/dashboards"
+
+
+def _folders(client, org: str) -> list[tuple[str, str]]:
+    """Return [(name, folderId)] including the implicit `default` folder."""
+    out = [("default", "default")]
+    resp = client.get(_folders_path(org))
+    resp.raise_for_status()
+    for f in _extract_list(resp.json(), "list", "folders"):
+        fid = _folder_id(f)
+        if fid and fid != "default":
+            out.append((f.get("name") or fid, fid))
+    return out
+
+
+def _ensure_folder(client, org: str, name: str) -> str:
+    """Return the folderId for `name`, creating the folder if absent. `default` is implicit."""
+    if not name or name == "default":
+        return "default"
+    resp = client.get(_folders_path(org))
+    resp.raise_for_status()
+    for f in _extract_list(resp.json(), "list", "folders"):
+        if isinstance(f, dict) and f.get("name") == name:
+            return _folder_id(f) or "default"
+    resp = client.post(_folders_path(org), json={"name": name, "description": ""})
+    resp.raise_for_status()
+    return _folder_id(resp.json()) or "default"
+
+
+def _installed_titles(client, org: str) -> set[str]:
+    """Every dashboard title across all folders (best-effort; folder errors are ignored)."""
+    titles: set[str] = set()
+    try:
+        folders = _folders(client, org)
+    except Exception:  # noqa: BLE001 - fall back to the default folder only
+        folders = [("default", "default")]
+    seen: set[str] = set()
+    for _name, fid in folders:
+        if fid in seen:
+            continue
+        seen.add(fid)
+        try:
+            for d in _list_dashboards(client, org, fid):
+                title = _dash_title(d)
+                if title:
+                    titles.add(title)
+        except Exception:  # noqa: BLE001 - skip an unreadable folder
+            continue
+    return titles
+
+
+def _expected_titles(root: Path) -> set[str]:
+    """Titles declared by the dashboard JSON files under `root`."""
+    titles: set[str] = set()
+    for f in sorted(Path(root).glob("**/*.json")):
+        try:
+            title = json.loads(f.read_text()).get("title")
+        except Exception:  # noqa: BLE001 - a malformed file simply contributes no title
+            title = None
+        if title:
+            titles.add(title)
+    return titles
+
+
+@dashboards_app.command("list")
+def dashboards_list(ctx: typer.Context):
+    """List installed dashboards across folders (GET /api/{org}/dashboards)."""
+    c = resolve(ctx.obj)
+    import httpx
+
+    rows: list[dict] = []
+    try:
+        with c.client() as client:
+            try:
+                folders = _folders(client, c.org)
+            except httpx.HTTPError:
+                folders = [("default", "default")]
+            for fname, fid in folders:
+                for d in _list_dashboards(client, c.org, fid):
+                    rows.append(
+                        {
+                            "title": _dash_title(d) or "",
+                            "folder": fname,
+                            "dashboardId": _dash_id(d) or "",
+                        }
+                    )
+    except httpx.HTTPError as exc:
+        _die(f"could not list dashboards: {exc}")
+    _emit(c, rows, columns=["title", "folder", "dashboardId"], title="dashboards")
+
+
+@dashboards_app.command("import")
+def dashboards_import(
+    ctx: typer.Context,
+    path: Path = typer.Argument(
+        None, help=f"dashboards dir or file (default: {DASHBOARDS_DIR})"
+    ),
+):
+    """Load dashboard JSON into OpenObserve, upserting by title (idempotent)."""
+    c = resolve(ctx.obj)
+    import httpx
+
+    root = path or DASHBOARDS_DIR
+    files = [root] if root.is_file() else sorted(root.glob("**/*.json"))
+    if not files:
+        _die(f"no dashboard JSON found under {root}")
+
+    rows: list[dict] = []
+    with c.client() as client:
+        for f in files:
+            folder_name = "default" if f.parent == root else f.parent.name
+            try:
+                spec = json.loads(f.read_text())
+            except Exception as exc:  # noqa: BLE001 - surface a bad file clearly
+                _die(f"{f}: invalid JSON: {exc}")
+            title = spec.get("title")
+            try:
+                fid = _ensure_folder(client, c.org, folder_name)
+                # title -> (dashboardId, hash); hash is required by the PUT (update) API.
+                existing = {
+                    _dash_title(d): (
+                        _dash_id(d),
+                        d.get("hash") if isinstance(d, dict) else None,
+                    )
+                    for d in _list_dashboards(client, c.org, fid)
+                }
+                if title in existing and existing[title][0]:
+                    did, dhash = existing[title]
+                    params = {"folder": fid}
+                    if dhash:
+                        params["hash"] = dhash
+                    resp = client.put(
+                        f"/api/{c.org}/dashboards/{did}", params=params, json=spec
+                    )
+                    action = "updated"
+                else:
+                    resp = client.post(
+                        f"/api/{c.org}/dashboards", params={"folder": fid}, json=spec
+                    )
+                    action = "created"
+                resp.raise_for_status()
+            except httpx.HTTPError as exc:
+                _die(f"import {f.name} failed: {exc}")
+            rows.append(
+                {
+                    "file": f.name,
+                    "folder": folder_name,
+                    "title": title or "",
+                    "action": action,
+                }
+            )
+    _emit(c, rows, columns=["file", "folder", "title", "action"], title="import")
+
+
+@dashboards_app.command("delete")
+def dashboards_delete(
+    ctx: typer.Context,
+    dashboard_id: str = typer.Argument(...),
+    folder: str = typer.Option("default", "--folder"),
+):
+    """Delete a dashboard by id (DELETE /api/{org}/dashboards/<id>)."""
+    c = resolve(ctx.obj)
+    import httpx
+
+    try:
+        with c.client() as client:
+            resp = client.delete(
+                f"/api/{c.org}/dashboards/{dashboard_id}", params={"folder": folder}
+            )
+            resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        _die(f"delete failed: {exc}")
+    _emit(c, {"deleted": dashboard_id, "folder": folder}, title="delete")
+
+
 # --- check -------------------------------------------------------------------
 
 
@@ -255,8 +504,28 @@ def orgs(ctx: typer.Context):
 def check(
     ctx: typer.Context,
     require_streams: bool = typer.Option(False, "--require-streams"),
+    require_metrics: bool = typer.Option(
+        False,
+        "--require-metrics",
+        help="fail unless PromQL `up` returns a series (metrics are being ingested)",
+    ),
+    require_logs: bool = typer.Option(
+        False,
+        "--require-logs",
+        help="fail unless a logs stream has recent rows (logs are being ingested)",
+    ),
+    require_dashboards: bool = typer.Option(
+        False,
+        "--require-dashboards",
+        help="fail unless every dashboard in --dashboards-dir is installed",
+    ),
+    dashboards_dir: Path = typer.Option(
+        None,
+        "--dashboards-dir",
+        help=f"expected dashboards (default: {DASHBOARDS_DIR})",
+    ),
 ):
-    """Assert OpenObserve health + auth (+ optional streams); exit nonzero on failure."""
+    """Assert OpenObserve health + auth (+ optional streams/metrics/logs/dashboards); exit nonzero on failure."""
     c = resolve(ctx.obj)
     import httpx
 
@@ -276,6 +545,7 @@ def check(
 
     # 2. Auth works (streams endpoint requires basic auth).
     stream_count = None
+    stream_items: list = []
     try:
         with c.client() as client:
             resp = client.get(f"/api/{c.org}/streams")
@@ -285,8 +555,10 @@ def check(
             resp.raise_for_status()
             report.add("auth", True, f"status={resp.status_code}")
             data = resp.json()
-            items = data.get("list", []) if isinstance(data, dict) else (data or [])
-            stream_count = len(items)
+            stream_items = (
+                data.get("list", []) if isinstance(data, dict) else (data or [])
+            )
+            stream_count = len(stream_items)
     except httpx.HTTPError as exc:
         report.add("auth", False, str(exc))
 
@@ -297,6 +569,71 @@ def check(
         report.add("streams present", stream_count >= 1, f"{stream_count} streams")
     else:
         report.skip("streams present", f"{stream_count} streams (informational)")
+
+    # 4. Metrics ingested — PromQL `up` returns at least one series (via remote_write).
+    if require_metrics:
+        try:
+            with c.client() as client:
+                resp = client.get(
+                    f"/api/{c.org}/prometheus/api/v1/query", params={"query": "up"}
+                )
+                resp.raise_for_status()
+                result = (resp.json().get("data") or {}).get("result") or []
+            report.add(
+                "metrics present", len(result) >= 1, f"{len(result)} series for up"
+            )
+        except httpx.HTTPError as exc:
+            report.add("metrics present", False, str(exc))
+
+    # 5. Logs ingested — a logs stream exists and has ≥1 recent row.
+    if require_logs:
+        logs_streams = [
+            s
+            for s in stream_items
+            if isinstance(s, dict) and (s.get("stream_type") or s.get("type")) == "logs"
+        ]
+        if not logs_streams:
+            report.add("logs present", False, "no logs streams")
+        else:
+            name = logs_streams[0].get("name")
+            now_us = int(time.time() * 1_000_000)
+            body = {
+                "query": {
+                    "sql": f'SELECT * FROM "{name}"',
+                    "start_time": now_us - 3_600_000_000,
+                    "end_time": now_us,
+                    "size": 1,
+                }
+            }
+            try:
+                with c.client() as client:
+                    resp = client.post(f"/api/{c.org}/_search", json=body)
+                    resp.raise_for_status()
+                    hits = resp.json().get("hits") or []
+                report.add(
+                    "logs present", len(hits) >= 1, f'{len(hits)} rows in "{name}"'
+                )
+            except httpx.HTTPError as exc:
+                report.add("logs present", False, str(exc))
+
+    # 6. Dashboards installed — every expected dashboard title resolves.
+    if require_dashboards:
+        expected = _expected_titles(dashboards_dir or DASHBOARDS_DIR)
+        if not expected:
+            report.add("dashboards present", False, "no expected dashboards found")
+        else:
+            try:
+                with c.client() as client:
+                    installed = _installed_titles(client, c.org)
+                missing = expected - installed
+                report.add(
+                    "dashboards present",
+                    not missing,
+                    f"{len(expected & installed)}/{len(expected)} present"
+                    + (f", missing {sorted(missing)}" if missing else ""),
+                )
+            except httpx.HTTPError as exc:
+                report.add("dashboards present", False, str(exc))
 
     _render_check(c, report)
     raise typer.Exit(report.exit_code)

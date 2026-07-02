@@ -34,6 +34,8 @@ just status                      # multipass list
 just ssh   centralized_logging central   # shell onto the <name>-<role> VM
 just open  centralized_monitoring        # open the core dashboards in Chrome
 just open  centralized_monitoring --full # + every enabled /metrics endpoint (debug)
+just locust centralized_monitoring       # host-run Locust web UI (localhost:8089) drives live traffic
+just locust-check centralized_monitoring # short headless smoke run -> exit code (see below)
 just coroot-status centralized_logging   # Coroot stack pods on the k0s node (see below)
 just coroot-deploy centralized_logging   # re-run the Coroot installer (idempotent repair)
 ```
@@ -76,6 +78,16 @@ Design docs: `specs/cli-grafana.md`, `specs/cli-prometheus.md`, `specs/cli-openo
 query clients are `grafana-client`, `prometheus-api-client`, and raw `httpx` (OpenObserve has no
 read SDK) — **not** the ingestion/IaC libraries (`grafana-foundation-sdk`, `client_python`,
 `openobserve-python-sdk`), which are reserved for the opt-in e2e inject→query loop.
+
+**Locust load generators.** `centralized_monitoring/scripts/locust_cli.py` (uv single-file, typer +
+rich, wrapping `locust`) is a **host-run** load generator — no in-cluster deployment, no `enable_locust`
+flag, no cloud-init/compose changes. It resolves VM IPs from `tofu output` (or `--server-url`) via the
+same `_obs_common.py`, then drives a cluster's ingest/query surfaces (OpenObserve `:5080` `_json`, OTLP
+`:4318`, StatsD `udp:8125`, Prometheus `:9090`, Grafana `:3000`) so dashboards show live traffic.
+Recipes: `just locust` (web UI on `localhost:8089`), `just locust-headless` (pass `-u/-r/-t`),
+`just locust-check` (CI smoke, exits nonzero), `just locust-targets` (print resolved endpoints, no
+load). Hermetic suite in `tests/locust/` (pytest-httpserver + stub UDP socket, no VMs). Design doc:
+`specs/locustio.md`.
 
 Run a single hermetic test from the cluster dir:
 `tofu -chdir=clusters/<name> test -test-directory=tests/tofu`.

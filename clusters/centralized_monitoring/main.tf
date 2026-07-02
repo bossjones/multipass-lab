@@ -13,6 +13,19 @@ locals {
   # OpenObserve root user and the Grafana OpenObserve-datasource basic auth (must match).
   openobserve_password = "Complexpass#123"
 
+  # OpenObserve organization every ingest/query path targets (root user's built-in org).
+  # Threaded into prometheus.yml remote_write, the OTel exporter endpoint, and the k0s agent.
+  openobserve_org = "default"
+
+  # k0s log-shipping agent config, rendered with a 127.0.0.1 PLACEHOLDER endpoint and baked
+  # into the k0s cloud-init (the k0s VM boots before the server, so its IP is unknown here).
+  # terraform_data.k0s_log_shipper re-renders it with the real server IP and pushes it post-apply.
+  k0s_otel_placeholder = templatefile("${path.module}/cloud-init/otel/k0s-collector-config.yaml.tftpl", {
+    server_ip            = "127.0.0.1"
+    openobserve_org      = local.openobserve_org
+    openobserve_password = local.openobserve_password
+  })
+
   # One map of every enable_* flag, threaded into every templatefile() call so each
   # template renders its own %{ if enable_x ~}…%{ endif ~} blocks. A disabled flag is
   # therefore neither installed/composed on the VM nor scraped by Prometheus.
@@ -20,6 +33,7 @@ locals {
     # MVP
     enable_otel             = var.enable_otel
     enable_openobserve      = var.enable_openobserve
+    enable_k0s_log_shipping = var.enable_k0s_log_shipping
     enable_blackbox         = var.enable_blackbox
     enable_node_exporter    = var.enable_node_exporter
     enable_cadvisor         = var.enable_cadvisor
@@ -57,7 +71,8 @@ locals {
 resource "local_file" "k0s_ci" {
   filename = "${local.render_dir}/k0s-client.yaml"
   content = templatefile("${path.module}/cloud-init/k0s-client.yaml.tftpl", merge(local.flags, {
-    ssh_pubkey = local.ssh_pubkey
+    ssh_pubkey      = local.ssh_pubkey
+    k0s_otel_config = local.k0s_otel_placeholder
   }))
 }
 
@@ -77,8 +92,10 @@ resource "multipass_instance" "k0s" {
 
 locals {
   prometheus_yml = templatefile("${path.module}/cloud-init/prometheus/prometheus.yml.tftpl", merge(local.flags, {
-    k0s_ip          = multipass_instance.k0s.ipv4
-    scrape_interval = var.prometheus_scrape_interval
+    k0s_ip               = multipass_instance.k0s.ipv4
+    scrape_interval      = var.prometheus_scrape_interval
+    openobserve_org      = local.openobserve_org
+    openobserve_password = local.openobserve_password
   }))
 
   compose_conf = templatefile("${path.module}/cloud-init/docker/compose.yaml.tftpl", merge(local.flags, {
@@ -90,11 +107,17 @@ locals {
     openobserve_password = local.openobserve_password
   }))
 
+  # OTel Collector config is templated so the OpenObserve auth token + org are injected
+  # (rendered filelog receivers ship the server's container + host logs to OpenObserve).
+  otel_config = templatefile("${path.module}/cloud-init/otel/collector-config.yaml.tftpl", merge(local.flags, {
+    openobserve_org      = local.openobserve_org
+    openobserve_password = local.openobserve_password
+  }))
+
   # Static (non-templated) configs spliced verbatim into the server cloud-init.
   alert_rules       = file("${path.module}/cloud-init/prometheus/alert.rules.yml")
   blackbox_yml      = file("${path.module}/cloud-init/prometheus/blackbox.yml")
   alertmanager_yml  = file("${path.module}/cloud-init/alertmanager/alertmanager.yml")
-  otel_config       = file("${path.module}/cloud-init/otel/collector-config.yaml")
   grafana_dash_prov = file("${path.module}/cloud-init/grafana/provisioning/dashboards/dashboards.yaml")
   ssh_exporter_conf = file("${path.module}/cloud-init/ssh/ssh_exporter.yaml")
 
@@ -142,4 +165,48 @@ resource "multipass_instance" "server" {
   memory         = var.server.memory
   disk           = var.server.disk
   cloudinit_file = local_file.server_ci.filename
+}
+
+# --- k0s log shipping: post-apply endpoint injection ------------------------
+# The k0s VM boots before the server, so its otelcol agent ships to a 127.0.0.1 placeholder
+# until now. Re-render the agent config with the server's real IP, then push it onto the k0s
+# VM and restart the unit. This is the one step that must happen AFTER both VMs exist — cloud
+# -init alone can't express it. local-exec runs only at apply, so hermetic `command = plan`
+# tests never shell out to multipass.
+
+# Gated on the same condition as the consumer below: without count, the rendered config
+# (which embeds openobserve_password) would be written to render_dir on disk even when log
+# shipping is disabled.
+resource "local_file" "k0s_otel_config" {
+  count = var.enable_openobserve && var.enable_k0s_log_shipping ? 1 : 0
+
+  filename = "${local.render_dir}/k0s-collector-config.yaml"
+  content = templatefile("${path.module}/cloud-init/otel/k0s-collector-config.yaml.tftpl", {
+    server_ip            = multipass_instance.server.ipv4
+    openobserve_org      = local.openobserve_org
+    openobserve_password = local.openobserve_password
+  })
+}
+
+resource "terraform_data" "k0s_log_shipper" {
+  count = var.enable_openobserve && var.enable_k0s_log_shipping ? 1 : 0
+
+  # Re-run whenever the server IP, the credential, or the rendered config changes.
+  triggers_replace = [
+    multipass_instance.server.ipv4,
+    local.openobserve_password,
+    local_file.k0s_otel_config[0].content,
+  ]
+
+  # Wait for the k0s VM's cloud-init to finish (the otelcol-contrib unit is installed there)
+  # before pushing config + restarting; a slow k0s boot would otherwise fail the restart. The
+  # `|| systemctl start` fallback covers the case where the unit isn't active yet.
+  provisioner "local-exec" {
+    command = <<-EOT
+      multipass exec ${local.k0s_name} -- cloud-init status --wait || true
+      multipass transfer ${local_file.k0s_otel_config[0].filename} ${local.k0s_name}:/tmp/otelcol-config.yaml
+      multipass exec ${local.k0s_name} -- sudo cp /tmp/otelcol-config.yaml /etc/otelcol/collector-config.yaml
+      multipass exec ${local.k0s_name} -- sudo systemctl restart otelcol-contrib || multipass exec ${local.k0s_name} -- sudo systemctl start otelcol-contrib
+    EOT
+  }
 }

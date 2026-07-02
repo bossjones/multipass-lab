@@ -83,6 +83,12 @@ variable "enable_openobserve" {
   default     = true
 }
 
+variable "enable_k0s_log_shipping" {
+  description = "otelcol-contrib log-shipping agent on the k0s VM (host + pod logs -> server OpenObserve). Endpoint injected post-apply. Requires enable_openobserve."
+  type        = bool
+  default     = true
+}
+
 variable "enable_blackbox" {
   description = "blackbox_exporter service + blackbox probe job."
   type        = bool

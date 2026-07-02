@@ -65,6 +65,11 @@ so the bundle works on Apple-Silicon Multipass and amd64 Proxmox alike.
 | ffmpeg_exporter | `v0.1.0` | `enable_ffmpeg_exporter` (off) | [releases](https://github.com/projectkudu/ffmpeg_exporter/releases/tag/v0.1.0) |
 | script_exporter | `v2.18.0` | `enable_script_exporter` (off) | [releases](https://github.com/ricoberger/script_exporter/releases/tag/v2.18.0) |
 | netdata | latest (kickstart) | `enable_netdata` | [get.netdata.cloud](https://get.netdata.cloud/) · [repo](https://github.com/netdata/netdata) |
+| otelcol-contrib (log-shipping agent) | `v0.117.0` | `enable_k0s_log_shipping` | [releases](https://github.com/open-telemetry/opentelemetry-collector-releases/releases/tag/v0.117.0) |
+
+> The `otelcol-contrib` agent ships the k0s node's host syslog + Kubernetes pod logs to the server's
+> OpenObserve (streams `k0s_host` / `k0s_pods`); its server endpoint is injected post-apply. See
+> [architecture.md](architecture.md#data-flow) and [endpoints.md](endpoints.md#openobserve-ingestion-what-actually-lands).
 
 > Some of the off-by-default exporter release URLs may need version bumps over time (upstream tags
 > move/disappear). If a target shows `down`, check the install block in
@@ -103,6 +108,17 @@ Live tests under [`tests/testinfra/`](../tests/testinfra/) (managed by `uv`):
 |------|---------|----------|
 | pytest | test runner | https://github.com/pytest-dev/pytest |
 | pytest-testinfra | assert over SSH against running VMs | https://github.com/pytest-dev/pytest-testinfra |
+| pytest-httpserver | canned HTTP responses for the hermetic CLI suites (`tests/{grafana,prometheus,openobserve,locust}/`) | https://github.com/csernazs/pytest-httpserver |
 
 Hermetic tests use OpenTofu's native `tofu test` with `mock_provider "multipass" {}` — no extra
 dependency. See [operations.md](operations.md#testing).
+
+## Host tooling — verification & load-generation CLIs
+
+Run from the host (not deployed into the VMs) as `uv` single-file scripts under
+[`scripts/`](../scripts/); their dependencies are declared inline in each script's PEP 723 header.
+
+| Tool | Key deps | Purpose | Upstream |
+|------|----------|---------|----------|
+| `grafana_cli.py` / `prometheus_cli.py` / `openobserve_cli.py` | `typer`, `rich`, `grafana-client` / `prometheus-api-client` / `httpx` | verify + introspect the running services | see [`specs/cli-*.md`](../../../specs/) |
+| `locust_cli.py` | `typer`, `rich`, `httpx`, `locust`, `faker` | host-run load generator driving live traffic into the cluster | [locust](https://github.com/locustio/locust) · [`specs/locustio.md`](../../../specs/locustio.md) |

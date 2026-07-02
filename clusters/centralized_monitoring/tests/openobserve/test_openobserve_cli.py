@@ -12,12 +12,16 @@ from typer.testing import CliRunner
 
 runner = CliRunner()
 
-DEFAULT_AUTH = "Basic " + base64.b64encode(b"admin@example.com:Complexpass#123").decode()
+DEFAULT_AUTH = (
+    "Basic " + base64.b64encode(b"admin@example.com:Complexpass#123").decode()
+)
 
 
 def _server(httpserver, *, streams=None):
     httpserver.expect_request("/healthz").respond_with_json({"status": "ok"})
-    st = streams if streams is not None else [{"name": "default", "stream_type": "logs"}]
+    st = (
+        streams if streams is not None else [{"name": "default", "stream_type": "logs"}]
+    )
     httpserver.expect_request("/api/default/streams").respond_with_json({"list": st})
     return httpserver.url_for("")
 
@@ -64,10 +68,14 @@ def test_search_returns_hits(httpserver):
 
 def test_query_promql(httpserver):
     base = _server(httpserver)
-    httpserver.expect_request(
-        "/api/default/prometheus/api/v1/query"
-    ).respond_with_json(
-        {"status": "success", "data": {"resultType": "vector", "result": [{"metric": {}, "value": [1, "1"]}]}}
+    httpserver.expect_request("/api/default/prometheus/api/v1/query").respond_with_json(
+        {
+            "status": "success",
+            "data": {
+                "resultType": "vector",
+                "result": [{"metric": {}, "value": [1, "1"]}],
+            },
+        }
     )
     r = _run(base, "--json", "query", "up")
     assert r.exit_code == 0, r.output
@@ -112,3 +120,55 @@ def test_check_require_streams_fails_when_empty(httpserver):
 def test_check_fails_on_connection_refused():
     r = runner.invoke(oo.app, ["--server-url", "http://127.0.0.1:1", "--json", "check"])
     assert r.exit_code == 2
+
+
+# ---------------------------------------------------- check --require-metrics/logs
+
+
+def test_check_require_metrics_passes_when_up_returns_series(httpserver):
+    base = _server(httpserver)
+    httpserver.expect_request("/api/default/prometheus/api/v1/query").respond_with_json(
+        {
+            "status": "success",
+            "data": {
+                "resultType": "vector",
+                "result": [{"metric": {"__name__": "up"}, "value": [1, "1"]}],
+            },
+        }
+    )
+    r = _run(base, "--json", "check", "--require-metrics")
+    assert r.exit_code == 0, r.output
+    checks = json.loads(r.output)["checks"]
+    assert any(c["name"] == "metrics present" and c["status"] == "pass" for c in checks)
+
+
+def test_check_require_metrics_fails_when_no_series(httpserver):
+    base = _server(httpserver)
+    httpserver.expect_request("/api/default/prometheus/api/v1/query").respond_with_json(
+        {"status": "success", "data": {"resultType": "vector", "result": []}}
+    )
+    r = _run(base, "--json", "check", "--require-metrics")
+    assert r.exit_code == 2
+    checks = json.loads(r.output)["checks"]
+    assert any(c["name"] == "metrics present" and c["status"] == "fail" for c in checks)
+
+
+def test_check_require_logs_passes_when_stream_has_rows(httpserver):
+    base = _server(
+        httpserver, streams=[{"name": "container_logs", "stream_type": "logs"}]
+    )
+    httpserver.expect_request("/api/default/_search", method="POST").respond_with_json(
+        {"hits": [{"_timestamp": 1, "body": "hello"}], "total": 1}
+    )
+    r = _run(base, "--json", "check", "--require-logs")
+    assert r.exit_code == 0, r.output
+    checks = json.loads(r.output)["checks"]
+    assert any(c["name"] == "logs present" and c["status"] == "pass" for c in checks)
+
+
+def test_check_require_logs_fails_when_no_logs_streams(httpserver):
+    base = _server(httpserver, streams=[{"name": "up", "stream_type": "metrics"}])
+    r = _run(base, "--json", "check", "--require-logs")
+    assert r.exit_code == 2
+    checks = json.loads(r.output)["checks"]
+    assert any(c["name"] == "logs present" and c["status"] == "fail" for c in checks)
