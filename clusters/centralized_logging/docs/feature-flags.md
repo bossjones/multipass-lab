@@ -9,6 +9,7 @@ run one (see [architecture decision](#install-only-not-install--scrape) below).
 - [The full flag matrix](#the-full-flag-matrix)
 - [`enabled_exporters` and the test suite](#enabled_exporters-and-the-test-suite)
 - [Changing the footprint](#changing-the-footprint)
+- [Coroot + ingress (opt-in, not exporters)](#coroot--ingress-opt-in-not-exporters)
 - [Future monitoring integration](#future-monitoring-integration)
 
 ## Install-only, not install + scrape
@@ -82,6 +83,46 @@ tofu -chdir=clusters/centralized_logging apply \
 > flag re-renders `.rendered/*.yaml` but does **not** recreate a running VM. To apply, recreate
 > the cluster: `just destroy centralized_logging && just up centralized_logging`. See
 > [operations.md](operations.md#applying-config-changes).
+
+## Coroot + ingress (opt-in, not exporters)
+
+Two flags beyond the exporter layer deploy [Coroot](https://github.com/coroot/coroot) — a
+self-hosted, eBPF-based observability platform (metrics, logs, traces, continuous profiling, a
+service map, SLOs) — onto the **k0s node**, and an ingress controller to expose its UI. Both
+default **off** and are deliberately kept **out of `local.flags`/`enabled_exporters`** (they are
+not `/metrics` exporters); they are surfaced separately via the `enabled_features` output, which
+the live [`test_coroot.py`](../tests/testinfra/test_coroot.py) reads to skip when off. Full design:
+[`specs/coroot.md`](../../../specs/coroot.md).
+
+| Flag | Default | Scope | What it does |
+|------|:-------:|-------|--------------|
+| `enable_coroot` | ⬜ | k0s only | Deploys the Coroot stack (server + eBPF node-agent + cluster-agent + bundled Prometheus + ClickHouse) via the `coroot-operator` / `coroot-ce` Helm charts, declaratively in cloud-init. Installs an OpenEBS default `StorageClass` for the PVCs. |
+| `enable_ingress` | ⬜ | k0s only | Installs an `ingress-nginx` controller (hostNetwork, binds the k0s VM's `:80`/`:443`) and exposes Coroot's UI through it. Independent of `enable_coroot`; when off, the UI is still reachable via its NodePort. |
+
+Key differences from the exporter flags:
+
+- **Self-hosted, no secrets.** Coroot needs no cloud account or API keys, so the whole install is
+  declarative in the k0s cloud-init (no host-driven step). Unlike Pixie (the rejected alternative),
+  arm64 is fully supported.
+- **Auto-sizing.** Coroot bundles Prometheus + ClickHouse, so `enable_coroot=true` **auto-bumps**
+  the k0s VM to 4 vCPU / 8G / 50G (`local.k0s_size` in [`main.tf`](../main.tf)). The default
+  (coroot-off) cluster keeps the small 2 vCPU / 2G / 20G k0s VM — no manual `tfvars` edit.
+- **Chart-default overrides.** The rendered
+  [`coroot-values.yaml.tftpl`](../cloud-init/coroot/coroot-values.yaml.tftpl) trims the chart's
+  laptop-hostile defaults: ClickHouse storage `100Gi → 10Gi` (would exceed the VM disk) and the
+  server memory request `4Gi → 2Gi`.
+- **UI exposure.** Always on a NodePort (`http://<k0s_ip>:30080`, browser-friendly); additionally
+  via ingress (`curl -H 'Host: coroot.local' http://<k0s_ip>/`) when `enable_ingress`.
+
+```sh
+# turn both on (the VM auto-resizes; requires a recreate to apply cloud-init)
+tofu -chdir=clusters/centralized_logging apply -var enable_coroot=true -var enable_ingress=true
+# or uncomment the block in terraform.tfvars, then: just recreate centralized_logging
+
+just coroot-status centralized_logging   # Coroot pods on the k0s node
+just coroot-deploy centralized_logging   # re-run the installer (idempotent repair)
+just open centralized_logging            # opens the Coroot UI alongside the other dashboards
+```
 
 ## Future monitoring integration
 

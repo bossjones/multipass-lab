@@ -56,8 +56,9 @@ Legend: **Default** ✅ on / ⬜ off · **Host** = where it runs.
 
 | Flag | Default | Host | Port | Role |
 |------|:-------:|------|------|------|
-| `enable_otel` | ✅ | server | 4317/4318/8888 | OTel Collector OTLP gateway → Prometheus + OpenObserve |
-| `enable_openobserve` | ✅ | server | 5080 | OTLP traces/metrics/logs store + Grafana datasource |
+| `enable_otel` | ✅ | server | 4317/4318/8888 | OTel Collector: OTLP gateway + filelog → OpenObserve (container_logs/host_logs) |
+| `enable_openobserve` | ✅ | server | 5080 | metrics (Prometheus remote_write) + logs + traces store + Grafana datasource |
+| `enable_k0s_log_shipping` | ✅ | k0s | *(push)* | otelcol-contrib agent: k0s host + pod logs → OpenObserve (endpoint injected post-apply) |
 | `enable_blackbox` | ✅ | server | 9115 | HTTP/TCP/ICMP endpoint probes |
 | `enable_node_exporter` | ✅ | both | 9100 | OS host + systemd-unit metrics |
 | `enable_cadvisor` | ✅ | both | 8080 (server) / 8089 (k0s) | container metrics |

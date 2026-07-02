@@ -147,6 +147,59 @@ write_files:
                   path: /etc/kube-state-metrics
                   type: Directory
 %{ endif ~}
+%{ if enable_ingress ~}
+  # ingress-nginx installer — bare-metal manifest patched to hostNetwork so the controller binds
+  # the k0s VM's :80/:443 directly (the docker VM owns :80 on its own host, so no clash). Gives
+  # Coroot's UI (and any future in-cluster HTTP service) a real ingress. See specs/coroot.md.
+  - path: /usr/local/sbin/ingress-install.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      k="/usr/local/bin/k0s kubectl"
+      mkdir -p /root/.kube && /usr/local/bin/k0s kubeconfig admin > /root/.kube/config
+      export KUBECONFIG=/root/.kube/config
+      until $k get --raw='/readyz' >/dev/null 2>&1; do sleep 5; done
+      $k apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.15.1/deploy/static/provider/baremetal/deploy.yaml
+      $k -n ingress-nginx patch deployment ingress-nginx-controller --type=json -p '[{"op":"add","path":"/spec/template/spec/hostNetwork","value":true},{"op":"replace","path":"/spec/template/spec/dnsPolicy","value":"ClusterFirstWithHostNet"}]'
+%{ endif ~}
+%{ if enable_coroot ~}
+  # Coroot Helm values (rendered by OpenTofu — overrides the chart's laptop-hostile defaults:
+  # ClickHouse storage 100Gi and server memory 4Gi are both trimmed to fit the lab VM).
+  - path: /etc/coroot/values.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, coroot_values)}
+  # Coroot installer — helm (arch-matched) + a default StorageClass (OpenEBS) + the coroot-operator
+  # and coroot-ce charts. Self-hosted: no cloud account, no secrets. See specs/coroot.md.
+  - path: /usr/local/sbin/coroot-install.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      k="/usr/local/bin/k0s kubectl"
+      mkdir -p /root/.kube && /usr/local/bin/k0s kubeconfig admin > /root/.kube/config
+      export KUBECONFIG=/root/.kube/config
+      until $k get --raw='/readyz' >/dev/null 2>&1; do sleep 5; done
+      # helm (arch-matched: arm64 on the lab's Apple-Silicon VMs, amd64 on Proxmox)
+      if ! command -v helm >/dev/null 2>&1; then
+        arch="$(dpkg --print-architecture)"
+        curl -sSLf "https://get.helm.sh/helm-v3.21.2-linux-$arch.tar.gz" -o /tmp/helm.tgz
+        tar -xzf /tmp/helm.tgz -C /tmp
+        install -m0755 "/tmp/linux-$arch/helm" /usr/local/bin/helm
+      fi
+      # Default StorageClass for Coroot's bundled Prometheus/ClickHouse PVCs (k0s ships none).
+      $k apply -f https://openebs.github.io/charts/openebs-operator-lite.yaml
+      $k apply -f https://openebs.github.io/charts/openebs-lite-sc.yaml
+      $k patch storageclass openebs-hostpath -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+      # Coroot: operator first (installs the Coroot CRD), then coroot-ce (creates a Coroot CR the
+      # operator reconciles into server + node-agent + cluster-agent + Prometheus + ClickHouse).
+      helm repo add --force-update coroot https://coroot.github.io/helm-charts
+      helm repo update coroot
+      helm upgrade --install -n coroot --create-namespace coroot-operator coroot/coroot-operator ${coroot_operator_version_flag}
+      for i in $(seq 1 30); do $k get crd coroots.coroot.com >/dev/null 2>&1 && break; sleep 5; done
+      helm upgrade --install -n coroot coroot coroot/coroot-ce -f /etc/coroot/values.yaml ${coroot_ce_version_flag}
+%{ endif ~}
 
 runcmd:
   # Enforce UTC late: Multipass injects the host timezone during first boot and can beat the
@@ -200,6 +253,15 @@ runcmd:
   - until /usr/local/bin/k0s kubectl get --raw='/readyz' >/dev/null 2>&1; do sleep 5; done
   - mkdir -p /etc/kube-state-metrics && /usr/local/bin/k0s kubeconfig admin > /etc/kube-state-metrics/kubeconfig
   - /usr/local/bin/k0s kubectl apply -f /etc/kube-state-metrics/deployment.yaml
+%{ endif ~}
+%{ if enable_ingress ~}
+  # ingress-nginx (hostNetwork; binds :80/:443). Runs before Coroot so its Ingress has a class.
+  - /usr/local/sbin/ingress-install.sh
+%{ endif ~}
+%{ if enable_coroot ~}
+  # Coroot stack (helm: operator + coroot-ce). Deploys asynchronously — pods come up after boot;
+  # `just coroot-status` / `just verify` watch for readiness. UI on the NodePort (+ ingress).
+  - /usr/local/sbin/coroot-install.sh
 %{ endif ~}
 
 final_message: "k0s client ready — k0s status; shipping logs to central; exporters on :9100/:9558/:9256/:8089 (+kube :10249/:10255/:8081)"

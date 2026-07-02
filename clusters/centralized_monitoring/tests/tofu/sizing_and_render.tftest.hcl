@@ -77,6 +77,47 @@ run "defaults_sizing_names_and_render" {
     error_message = "default scrape interval (15s) must render"
   }
 
+  # --- metrics ingestion: Prometheus remote_write -> OpenObserve ----------
+  assert {
+    condition = alltrue([for marker in [
+      "remote_write:",
+      "http://openobserve:5080/api/default/prometheus/api/v1/write",
+      "username: admin@example.com",
+      "password: Complexpass#123",
+    ] : strcontains(local_file.server_ci.content, marker)])
+    error_message = "prometheus.yml must remote_write scraped metrics into OpenObserve (default-on)"
+  }
+
+  # --- log ingestion: OTel Collector ships host + container logs ----------
+  # Auth header is the OpenObserve root basic-auth token (rendered from the password,
+  # replacing the old wrong root@example.com:admin literal).
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "Basic ${base64encode("admin@example.com:Complexpass#123")}")
+    error_message = "collector config must carry the correct OpenObserve basic-auth token"
+  }
+  assert {
+    condition = alltrue([for marker in [
+      "/var/lib/docker/containers/*/*.log", # container logs receiver
+      "/var/log/syslog",                    # host logs receiver
+      "stream-name: container_logs",        # OpenObserve stream for docker logs
+      "stream-name: host_logs",             # OpenObserve stream for host logs
+    ] : strcontains(local_file.server_ci.content, marker)])
+    error_message = "collector config must tail container + host logs and route them to named OpenObserve streams"
+  }
+  # The otel-collector container must mount the host log sources read-only.
+  assert {
+    condition = alltrue([for mount in [
+      "/var/lib/docker/containers:/var/lib/docker/containers:ro",
+      "/var/log:/var/log:ro",
+    ] : strcontains(local_file.server_ci.content, mount)])
+    error_message = "compose must mount docker container logs + /var/log into otel-collector"
+  }
+  # Splicing the expanded collector config must keep the cloud-init valid YAML.
+  assert {
+    condition     = can(yamldecode(local_file.server_ci.content))
+    error_message = "rendered server cloud-init must stay valid YAML after collector changes"
+  }
+
   # --- compose carries the default-on server services ---------------------
   assert {
     condition = alltrue([for img in [
@@ -105,6 +146,28 @@ run "defaults_sizing_names_and_render" {
   assert {
     condition     = strcontains(local_file.k0s_ci.content, "ssh-ed25519 AAAATESTKEY")
     error_message = "k0s cloud-init must inject the SSH public key"
+  }
+
+  # --- k0s log shipping: otelcol-contrib agent installs (endpoint injected post-apply) ---
+  assert {
+    condition = alltrue([for marker in [
+      "otelcol-contrib",                    # agent binary + systemd unit
+      "/etc/otelcol/collector-config.yaml", # config path the unit reads
+      "/var/log/pods/*/*/*.log",            # kubernetes pod logs
+    ] : strcontains(local_file.k0s_ci.content, marker)])
+    error_message = "k0s cloud-init must install the otelcol-contrib log-shipping agent"
+  }
+  # The post-apply-pushed config carries the real server IP (mock 10.99.99.99) + OpenObserve auth
+  # and the k0s_host / k0s_pods stream tags.
+  assert {
+    condition = alltrue([for marker in [
+      "http://10.99.99.99:5080/api/default",
+      "Basic ${base64encode("admin@example.com:Complexpass#123")}",
+      "k0s_host",
+      "k0s_pods",
+      "file_storage", # persistent filelog offsets so restarts don't re-ship every file
+    ] : strcontains(local_file.k0s_otel_config[0].content, marker)])
+    error_message = "the pushed k0s agent config must target the server IP with OpenObserve auth"
   }
 
   # --- Nice-to-have jobs are NOT rendered by default ----------------------
@@ -181,6 +244,38 @@ run "nut_toggle_on_renders_install_and_job" {
   assert {
     condition     = strcontains(local_file.server_ci.content, "job_name: nut")
     error_message = "enabling nut must render its scrape job"
+  }
+}
+
+run "openobserve_off_omits_remote_write" {
+  command = plan
+
+  variables {
+    enable_openobserve = false
+  }
+
+  # No OpenObserve -> Prometheus must not remote_write to it, and the OTLP exporter
+  # endpoint must be gone from the collector config.
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "remote_write:")
+    error_message = "disabling OpenObserve must omit the prometheus remote_write block"
+  }
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "http://openobserve:5080")
+    error_message = "disabling OpenObserve must omit every OpenObserve endpoint (remote_write + OTel exporters)"
+  }
+}
+
+run "k0s_log_shipping_off_omits_agent" {
+  command = plan
+
+  variables {
+    enable_k0s_log_shipping = false
+  }
+
+  assert {
+    condition     = !strcontains(local_file.k0s_ci.content, "otelcol-contrib")
+    error_message = "disabling k0s log shipping must omit the otelcol agent from k0s cloud-init"
   }
 }
 

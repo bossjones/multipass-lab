@@ -141,7 +141,10 @@ verify-api CLUSTER:
     rc=0
     for svc in grafana prometheus openobserve; do
       echo "=== $svc check: {{CLUSTER}} ==="
-      uv run {{cluster_root}}/{{CLUSTER}}/scripts/${svc}_cli.py --cluster {{CLUSTER}} check || rc=1
+      # OpenObserve additionally asserts ingestion is live (metrics via remote_write, logs via OTel).
+      extra=""
+      [ "$svc" = openobserve ] && extra="--require-metrics --require-logs"
+      uv run {{cluster_root}}/{{CLUSTER}}/scripts/${svc}_cli.py --cluster {{CLUSTER}} check $extra || rc=1
     done
     exit "$rc"
 
@@ -169,9 +172,9 @@ prometheus-query CLUSTER PROMQL:
 prometheus-targets CLUSTER:
     uv run {{cluster_root}}/{{CLUSTER}}/scripts/prometheus_cli.py --cluster {{CLUSTER}} targets
 
-# OpenObserve health + auth, exit nonzero on failure:  just openobserve-check centralized_monitoring
+# OpenObserve health + auth + ingestion (metrics + logs), exit nonzero:  just openobserve-check centralized_monitoring
 openobserve-check CLUSTER:
-    uv run {{cluster_root}}/{{CLUSTER}}/scripts/openobserve_cli.py --cluster {{CLUSTER}} check
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/openobserve_cli.py --cluster {{CLUSTER}} check --require-metrics --require-logs
 
 # list OpenObserve ingest streams:  just openobserve-streams centralized_monitoring
 openobserve-streams CLUSTER:
@@ -225,6 +228,35 @@ vaultwarden-check CLUSTER:
 tls-check CLUSTER HOST *ARGS:
     uv run {{cluster_root}}/{{CLUSTER}}/scripts/tls_cli.py --cluster {{CLUSTER}} check {{HOST}} {{ARGS}}
 
+# import the OpenObserve log dashboards (idempotent; see specs/openobserve-dashboards.md):  just openobserve-dashboards centralized_monitoring
+# afterwards `... check --require-dashboards` asserts they resolve (not in verify-api since import is on-demand).
+openobserve-dashboards CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/openobserve_cli.py --cluster {{CLUSTER}} dashboards import
+
+# list installed OpenObserve dashboards:  just openobserve-dashboards-list centralized_monitoring
+openobserve-dashboards-list CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/openobserve_cli.py --cluster {{CLUSTER}} dashboards list
+
+# --- Locust load generators (host-run; resolve VM IPs from tofu; see specs/locustio.md) ---
+# Drive live traffic into a cluster's dashboards. `*FLAGS` pass through to the CLI's callback
+# (e.g. -u/-r/-t, --server-url). No flag = interactive web UI on http://localhost:8089.
+
+# launch Locust web UI against a cluster:  just locust centralized_monitoring
+locust CLUSTER *FLAGS:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/locust_cli.py --cluster {{CLUSTER}} {{FLAGS}} run
+
+# headless run (pass -u/-r/-t via FLAGS):  just locust-headless centralized_monitoring -u 20 -r 5 -t 2m
+locust-headless CLUSTER *FLAGS:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/locust_cli.py --cluster {{CLUSTER}} --headless {{FLAGS}} run
+
+# short smoke run -> exit code (requests fired, zero failures):  just locust-check centralized_monitoring
+locust-check CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/locust_cli.py --cluster {{CLUSTER}} check
+
+# print the resolved endpoints Locust will drive (no load):  just locust-targets centralized_monitoring
+locust-targets CLUSTER *FLAGS:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/locust_cli.py --cluster {{CLUSTER}} {{FLAGS}} targets
+
 # multipass list
 status:
     multipass list
@@ -263,3 +295,16 @@ open CLUSTER *FLAGS:
 logs CLUSTER:
     @ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.central.ipv4'); \
      ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" 'sudo find /var/log/remote -type f'
+
+# --- Coroot (opt-in eBPF observability on the k0s node; see specs/coroot.md) --------------
+# These target the k0s VM. Requires the cluster up with enable_coroot=true.
+
+# show the Coroot stack pod status (k0s VM):  just coroot-status centralized_logging
+coroot-status CLUSTER:
+    @ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.k0s.ipv4'); \
+     ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" 'sudo /usr/local/bin/k0s kubectl get pods -n coroot -o wide'
+
+# (re)run the Coroot installer on the k0s VM — idempotent repair without a full recreate:  just coroot-deploy centralized_logging
+coroot-deploy CLUSTER:
+    @ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.k0s.ipv4'); \
+     ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" 'sudo /usr/local/sbin/coroot-install.sh'

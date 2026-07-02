@@ -1,0 +1,122 @@
+# Managed by OpenTofu (clusters/centralized_monitoring) — RENDERED (.tftpl): the OpenObserve
+# org + basic-auth token are injected from OpenTofu locals (was previously a wrong hardcoded
+# root@example.com:admin literal that 401'd). OpenTelemetry Collector runs as a gateway on the
+# server: OTLP receivers (4317 gRPC / 4318 HTTP) for app push, plus filelog receivers that tail
+# the server's own Docker container logs and host syslog. Logs + traces go to OpenObserve;
+# collector self-metrics are exposed on :8888 and scraped by Prometheus's `selfmetrics` job.
+# (Scraped metrics reach OpenObserve via Prometheus remote_write, not this collector.)
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+%{ if enable_openobserve ~}
+  # Docker container logs — every container's json-file log on the host (mounted read-only).
+  # start_at: beginning so existing log content is ingested, not just lines written after boot.
+  filelog/container:
+    include:
+      - /var/lib/docker/containers/*/*.log
+    include_file_path: true
+    start_at: beginning
+    # Persist read offsets so a collector restart resumes where it left off instead of
+    # re-shipping every file from the top (start_at: beginning) — see file_storage below.
+    storage: file_storage/filelog
+    operators:
+      # docker json-file lines look like {"log":"...","stream":"stdout","time":"..."}
+      - type: json_parser
+        parse_from: body
+      - type: move
+        from: attributes.log
+        to: body
+  # Host logs — the OS syslog stream (mounted read-only via /var/log).
+  filelog/host:
+    include:
+      - /var/log/syslog
+    include_file_path: true
+    start_at: beginning
+    storage: file_storage/filelog
+%{ endif ~}
+
+%{ if enable_openobserve ~}
+extensions:
+  # Persistent filelog read offsets. Without this, offsets live only in memory and every
+  # collector restart re-reads each file from the top (start_at: beginning) -> duplicate
+  # rows in container_logs/host_logs. Backed by a Docker volume (see compose.yaml).
+  file_storage/filelog:
+    directory: /var/lib/otelcol/storage
+%{ endif ~}
+
+processors:
+  batch: {}
+
+exporters:
+  # Collector self-telemetry + pipeline metrics are exposed on :8888 and scraped by
+  # Prometheus's `selfmetrics` job.
+  prometheus:
+    endpoint: 0.0.0.0:8889
+%{ if enable_openobserve ~}
+  # Logs to OpenObserve over OTLP HTTP. OpenObserve names the destination stream from the
+  # `stream-name` header (NOT the service.name attribute — that lands everything in "default"),
+  # so we use one exporter per stream. Auth is base64(user:password) for the OpenObserve root
+  # user, rendered from OpenTofu (must match the container env + remote_write).
+  otlphttp/container:
+    endpoint: http://openobserve:5080/api/${openobserve_org}
+    headers:
+      Authorization: "Basic ${base64encode("admin@example.com:${openobserve_password}")}"
+      stream-name: container_logs
+  otlphttp/host:
+    endpoint: http://openobserve:5080/api/${openobserve_org}
+    headers:
+      Authorization: "Basic ${base64encode("admin@example.com:${openobserve_password}")}"
+      stream-name: host_logs
+  # App-pushed OTLP logs + traces.
+  otlphttp/otlp:
+    endpoint: http://openobserve:5080/api/${openobserve_org}
+    headers:
+      Authorization: "Basic ${base64encode("admin@example.com:${openobserve_password}")}"
+      stream-name: otlp_logs
+%{ endif ~}
+
+service:
+%{ if enable_openobserve ~}
+  extensions: [file_storage/filelog]
+%{ endif ~}
+  telemetry:
+    metrics:
+      # Collector self-metrics on :8888 (scraped by Prometheus's `selfmetrics` job). Recent
+      # collectors require the `readers` form; the old `address: 0.0.0.0:8888` is rejected.
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: '0.0.0.0'
+                port: 8888
+  pipelines:
+%{ if enable_openobserve ~}
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/otlp]
+    # App-pushed OTLP logs -> otlp_logs stream.
+    logs/otlp:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/otlp]
+    # Docker container logs -> container_logs stream.
+    logs/container:
+      receivers: [filelog/container]
+      processors: [batch]
+      exporters: [otlphttp/container]
+    # Host syslog -> host_logs stream.
+    logs/host:
+      receivers: [filelog/host]
+      processors: [batch]
+      exporters: [otlphttp/host]
+%{ endif ~}
+    # OTLP metrics relay to the collector's Prometheus endpoint (scraped on :8888/:8889).
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]

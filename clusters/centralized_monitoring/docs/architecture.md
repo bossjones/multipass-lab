@@ -181,13 +181,29 @@ Companion outputs:
 
 1. **Metrics (pull):** Prometheus scrapes `/metrics` from k0s exporters at `${k0s_ip}:<port>` and
    from the server's own stack over the Compose network (service DNS names like `grafana:3000`).
-2. **Traces/logs (push, optional):** apps send OTLP to the OTel Collector (`:4317`/`:4318`), which
-   forwards traces and logs to OpenObserve and exposes pipeline metrics for Prometheus to scrape.
-3. **Probing:** the `blackbox` job hands target URLs to `blackbox_exporter`, which probes them and
+2. **Metrics → OpenObserve (`remote_write`):** when `enable_openobserve` is on, Prometheus
+   `remote_write`s **every** scraped series (server + k0s) to
+   `http://openobserve:5080/api/default/prometheus/api/v1/write` (basic auth) → OpenObserve `metrics`
+   stream. This is the pull→OpenObserve bridge; Grafana can then query either datasource.
+3. **Server logs → OpenObserve:** the server OTel Collector's `filelog` receivers tail Docker
+   container logs (`/var/lib/docker/containers/*/*.log`) and host `/var/log/syslog`, exporting to
+   OpenObserve streams `container_logs` / `host_logs` (per-stream `stream-name` header).
+4. **k0s logs → OpenObserve:** an `otelcol-contrib` agent on the k0s VM ships node syslog + Kubernetes
+   pod logs (`/var/log/pods/*`) to the server's OpenObserve (streams `k0s_host` / `k0s_pods`). The k0s
+   VM is created before the server, so the agent boots with a `127.0.0.1` placeholder and is
+   re-pointed at the real server IP **post-apply** by `terraform_data.k0s_log_shipper`
+   (`multipass transfer` + `systemctl restart`). Gated on `enable_openobserve` + `enable_k0s_log_shipping`.
+5. **Traces/logs (push, optional):** apps send OTLP to the OTel Collector (`:4317`/`:4318`), which
+   forwards traces and logs to OpenObserve (`otlp_logs`) and exposes pipeline metrics.
+6. **Probing:** the `blackbox` job hands target URLs to `blackbox_exporter`, which probes them and
    returns `probe_success`/`probe_duration_seconds` for Prometheus.
-4. **Visualization:** Grafana queries the auto-provisioned Prometheus (and OpenObserve) datasources.
-5. **Alerting:** Prometheus evaluates `alert.rules.yml` and routes to Alertmanager (null receiver in
+7. **Visualization:** Grafana queries the auto-provisioned Prometheus (and OpenObserve) datasources.
+8. **Alerting:** Prometheus evaluates `alert.rules.yml` and routes to Alertmanager (null receiver in
    the lab).
+
+`just verify-api centralized_monitoring` asserts ingestion is actually live — `openobserve_cli.py
+check --require-metrics --require-logs` fails unless PromQL `up` returns series and a logs stream has
+recent rows.
 
 See [endpoints.md](endpoints.md) for every port and scrape job, and [dependencies.md](dependencies.md)
 for the projects behind each component.
