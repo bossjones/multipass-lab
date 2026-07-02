@@ -1,0 +1,36 @@
+# Traefik dynamic (file-provider) config: the Authelia forward-auth middleware, plus the TLS
+# default certificate.
+#
+# Default mode: the default cert is the step-ca-issued leaf (SANs auth.<domain> + vault.<domain>),
+# renewed in place by a host timer — the file provider's watch reloads it. Routers just set
+# tls=true and get this cert.
+#
+# enable_letsencrypt_staging mode: instead of a static file, Traefik auto-generates a wildcard
+# *.<domain> via the "stepca" ACME resolver (LE staging). Routers still just set tls=true.
+http:
+  middlewares:
+    authelia:
+      forwardAuth:
+        address: "http://authelia:9091/api/authz/forward-auth"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - "Remote-User"
+          - "Remote-Groups"
+          - "Remote-Email"
+          - "Remote-Name"
+
+tls:
+  stores:
+    default:
+%{ if enable_letsencrypt_staging ~}
+      defaultGeneratedCert:
+        resolver: stepca
+        domain:
+          main: "${domain}"
+          sans:
+            - "*.${domain}"
+%{ else ~}
+      defaultCertificate:
+        certFile: /etc/traefik/certs/services.crt
+        keyFile: /etc/traefik/certs/services.key
+%{ endif ~}

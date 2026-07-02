@@ -1,0 +1,179 @@
+#cloud-config
+# Services VM — Traefik (TLS termination) in front of Authelia (forward-auth SSO) and Vaultwarden,
+# via Docker Compose. In the default mode a boot-time script issues Traefik's cert directly from
+# step-ca's JWK provisioner (password auth, no ACME challenge — the DNS-less lab can't do reachback)
+# and a timer renews it; Traefik's file provider watches the cert dir. See specs/centralized_pki.md.
+package_update: true
+package_upgrade: true
+
+timezone: Etc/UTC
+ntp:
+  enabled: true
+  ntp_client: systemd-timesyncd
+
+packages:
+  - curl
+  - tar
+  - vim
+  - htop
+  - jq
+  - ca-certificates
+
+ssh_authorized_keys:
+  - ${ssh_pubkey}
+
+write_files:
+  - path: /etc/docker/daemon.json
+    permissions: '0644'
+    content: |
+      {
+        "log-driver": "journald"
+      }
+
+  # Generic exporter installer (copied from the centralized_logging cluster).
+  - path: /usr/local/sbin/install-exporter.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      name="$1"; url="$2"; bin="$3"; shift 3; args="$*"
+      arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+      case "$arch" in aarch64) arch=arm64 ;; x86_64) arch=amd64 ;; esac
+      url="$${url//\{ARCH\}/$arch}"
+      tmp="$(mktemp -d)"
+      curl -sSLf "$url" -o "$tmp/dl"
+      if tar -tzf "$tmp/dl" >/dev/null 2>&1; then
+        tar -xzf "$tmp/dl" -C "$tmp"
+        found="$(find "$tmp" -type f -name "$bin" | head -n1)"
+      else
+        found="$tmp/dl"
+      fi
+      install -m0755 "$found" "/usr/local/bin/$name"
+      cat >/etc/systemd/system/$name.service <<UNIT
+      [Unit]
+      Description=$name
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      ExecStart=/usr/local/bin/$name $args
+      Restart=always
+      RestartSec=5
+      [Install]
+      WantedBy=multi-user.target
+      UNIT
+      systemctl daemon-reload
+      systemctl enable --now "$name"
+
+  - path: /opt/stack/compose.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, compose_conf)}
+
+  - path: /opt/stack/traefik/traefik.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, traefik_static)}
+
+  - path: /opt/stack/traefik/dynamic.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, traefik_dynamic)}
+
+  - path: /opt/stack/authelia/configuration.yml
+    permissions: '0644'
+    content: |
+      ${indent(6, authelia_conf)}
+
+  - path: /opt/stack/authelia/users_database.yml
+    permissions: '0644'
+    content: |
+      ${indent(6, authelia_users)}
+%{ if !enable_letsencrypt_staging ~}
+
+  # step-ca JWK provisioner password (same as the CA key password). |- strips the trailing newline.
+  - path: /opt/stack/secrets/provisioner_password
+    permissions: '0600'
+    content: |-
+      ${stepca_ca_password}
+
+  # Fetch step-ca's root (TOFU bootstrap) and issue Traefik's leaf via the JWK provisioner "admin"
+  # — password-authenticated, no ACME challenge, so no inbound reachback is needed. Re-runnable:
+  # the renew timer calls it again and Traefik's file-watch reloads the rotated cert.
+  - path: /usr/local/sbin/issue-cert.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      CERT_DIR=/opt/stack/traefik/certs
+      SECRETS=/opt/stack/secrets
+      STEP_IMG=smallstep/step-cli:0.28.2
+      mkdir -p "$CERT_DIR"
+      # 1. Fetch the root (self-authenticating; -k is step-ca's documented TOFU bootstrap).
+      for i in $(seq 1 60); do
+        if curl -fsSk ${ca_url}/roots.pem -o "$CERT_DIR/root_ca.crt"; then break; fi
+        echo "waiting for step-ca at ${ca_url} ($i)"; sleep 5
+      done
+      cp "$CERT_DIR/root_ca.crt" /usr/local/share/ca-certificates/step-ca-root.crt
+      update-ca-certificates || true
+      # 2. Issue the Traefik leaf (SANs auth./vault.<domain>). Retry until the CA is ready.
+      for i in $(seq 1 30); do
+        if docker run --rm \
+             --add-host "ca.${domain}:${ca_ip}" \
+             -v "$CERT_DIR:/certs" -v "$SECRETS:/secrets:ro" \
+             "$STEP_IMG" \
+             step ca certificate services /certs/services.crt /certs/services.key \
+               --ca-url ${ca_url} --root /certs/root_ca.crt \
+               --provisioner ${jwk_provisioner} --provisioner-password-file /secrets/provisioner_password \
+               --san "auth.${domain}" --san "vault.${domain}" --force; then
+          break
+        fi
+        echo "cert issuance retry ($i)"; sleep 5
+      done
+      chmod 644 "$CERT_DIR/services.crt" || true
+      chmod 600 "$CERT_DIR/services.key" || true
+
+  - path: /etc/systemd/system/pki-cert-renew.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Reissue the Traefik cert from step-ca
+      After=docker.service
+      Wants=docker.service
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/issue-cert.sh
+
+  - path: /etc/systemd/system/pki-cert-renew.timer
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Renew the Traefik cert from step-ca every 12h
+      [Timer]
+      OnBootSec=12h
+      OnUnitActiveSec=12h
+      [Install]
+      WantedBy=timers.target
+%{ endif ~}
+
+runcmd:
+  - timedatectl set-timezone Etc/UTC
+  - mkdir -p /opt/stack/traefik/certs /opt/stack/traefik/acme /opt/stack/secrets
+  # Resolve ca.<domain> to the CA's IP on the host (a convenience for manual `step`/curl use).
+  - grep -q "ca.${domain}" /etc/hosts || echo "${ca_ip} ca.${domain}" >> /etc/hosts
+  # Docker first (the cert issuance uses `docker run smallstep/step-cli`).
+  - curl -fsSL https://get.docker.com | sh
+  - systemctl enable docker
+  - systemctl restart docker
+%{ if !enable_letsencrypt_staging ~}
+  # Issue Traefik's cert from step-ca BEFORE the stack starts, then arm the renew timer.
+  - /usr/local/sbin/issue-cert.sh
+  - systemctl daemon-reload
+  - systemctl enable --now pki-cert-renew.timer
+%{ endif ~}
+  - docker compose -f /opt/stack/compose.yaml up -d
+%{ if enable_node_exporter ~}
+  # node_exporter — OS host metrics (:9100), parity with the other clusters' metrics tests.
+  - /usr/local/sbin/install-exporter.sh node_exporter https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-{ARCH}.tar.gz node_exporter
+%{ endif ~}
+
+final_message: "services ready — Traefik on :80/:443/:8080; auth.${domain} (Authelia) + vault.${domain} (Vaultwarden)"

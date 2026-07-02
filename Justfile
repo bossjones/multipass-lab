@@ -181,6 +181,50 @@ openobserve-streams CLUSTER:
 openobserve-search CLUSTER SQL:
     uv run {{cluster_root}}/{{CLUSTER}}/scripts/openobserve_cli.py --cluster {{CLUSTER}} search {{quote(SQL)}}
 
+# --- PKI verification CLIs (see specs/cli-{stepca,authelia,vaultwarden,tls}.md) --------------
+# Host-side API + TLS verification for step-ca/Authelia/Vaultwarden. Each resolves the server
+# from `tofu output` (VMs must be up) or accepts --server-url. The `*-check` recipes exit nonzero
+# on failure (CI-friendly). --cluster precedes the subcommand (global options live on the callback).
+
+# run all PKI service checks + cert-chain checks for auth./vault.:  just verify-pki centralized_pki
+verify-pki CLUSTER:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=0
+    for svc in stepca authelia vaultwarden; do
+      echo "=== $svc check: {{CLUSTER}} ==="
+      uv run {{cluster_root}}/{{CLUSTER}}/scripts/${svc}_cli.py --cluster {{CLUSTER}} check || rc=1
+    done
+    domain=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -raw domain 2>/dev/null || true)
+    svc_ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -raw services_ipv4 2>/dev/null || true)
+    if [ -n "$domain" ] && [ -n "$svc_ip" ]; then
+      for h in auth vault; do
+        echo "=== tls check: $h.$domain ==="
+        uv run {{cluster_root}}/{{CLUSTER}}/scripts/tls_cli.py --cluster {{CLUSTER}} check "$svc_ip" --sni "$h.$domain" || rc=1
+      done
+    fi
+    exit "$rc"
+
+# step-ca health + ACME provisioner + served root, exit nonzero on failure:  just stepca-check centralized_pki
+stepca-check CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/stepca_cli.py --cluster {{CLUSTER}} check
+
+# list step-ca provisioners:  just stepca-provisioners centralized_pki
+stepca-provisioners CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/stepca_cli.py --cluster {{CLUSTER}} provisioners
+
+# Authelia up + forward-auth enforcing, exit nonzero on failure:  just authelia-check centralized_pki
+authelia-check CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/authelia_cli.py --cluster {{CLUSTER}} check
+
+# Vaultwarden liveness, exit nonzero on failure:  just vaultwarden-check centralized_pki
+vaultwarden-check CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/vaultwarden_cli.py --cluster {{CLUSTER}} check
+
+# assert a Traefik-served host's cert (chains to step-ca root, or is LE staging):  just tls-check centralized_pki <services-ip> --sni vault.<domain>
+tls-check CLUSTER HOST *ARGS:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/tls_cli.py --cluster {{CLUSTER}} check {{HOST}} {{ARGS}}
+
 # multipass list
 status:
     multipass list

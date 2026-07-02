@@ -1,0 +1,91 @@
+#cloud-config
+# step-ca VM — private internal CA (smallstep/step-ca in Docker) exposing an ACME provisioner on
+# :9000. Root + intermediate are generated at first boot; the root is fetched by the services VM
+# to seed Traefik's trust. See specs/centralized_pki.md.
+package_update: true
+package_upgrade: true
+
+# Time sync — pin every VM to UTC and keep the clock disciplined via systemd-timesyncd.
+# Declared here (not left to the image default) so cert notBefore/notAfter align cluster-wide.
+timezone: Etc/UTC
+ntp:
+  enabled: true
+  ntp_client: systemd-timesyncd
+
+packages:
+  - curl
+  - tar
+  - vim
+  - htop
+  - jq
+
+ssh_authorized_keys:
+  - ${ssh_pubkey}
+
+write_files:
+  # step-ca key password. |- strips the trailing newline so the password file is exactly the value.
+  - path: /opt/pki/secrets/ca_password
+    permissions: '0600'
+    content: |-
+      ${stepca_ca_password}
+
+  - path: /opt/pki/compose.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, ca_compose)}
+
+  # Generic exporter installer (copied from the centralized_logging cluster).
+  - path: /usr/local/sbin/install-exporter.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      name="$1"; url="$2"; bin="$3"; shift 3; args="$*"
+      arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+      case "$arch" in aarch64) arch=arm64 ;; x86_64) arch=amd64 ;; esac
+      url="$${url//\{ARCH\}/$arch}"
+      tmp="$(mktemp -d)"
+      curl -sSLf "$url" -o "$tmp/dl"
+      if tar -tzf "$tmp/dl" >/dev/null 2>&1; then
+        tar -xzf "$tmp/dl" -C "$tmp"
+        found="$(find "$tmp" -type f -name "$bin" | head -n1)"
+      else
+        found="$tmp/dl"
+      fi
+      install -m0755 "$found" "/usr/local/bin/$name"
+      cat >/etc/systemd/system/$name.service <<UNIT
+      [Unit]
+      Description=$name
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      ExecStart=/usr/local/bin/$name $args
+      Restart=always
+      RestartSec=5
+      [Install]
+      WantedBy=multi-user.target
+      UNIT
+      systemctl daemon-reload
+      systemctl enable --now "$name"
+
+runcmd:
+  # Enforce UTC late: Multipass injects the host timezone during first boot and can beat the
+  # declarative `timezone:` key above. runcmd runs after the config modules, so it wins. See specs/ntp.md.
+  - timedatectl set-timezone Etc/UTC
+  - mkdir -p /opt/pki/secrets
+  # step-ca needs its own IP in the cert SAN, but tofu can't self-reference this VM's IP. Compute it
+  # at boot and hand it to docker compose via /opt/pki/.env ($${SELF_IP} in the CA compose).
+  - |
+    SELF_IP=$(ip -4 route get 1.1.1.1 | awk '{print $7; exit}')
+    echo "SELF_IP=$SELF_IP" > /opt/pki/.env
+  # Docker + step-ca stack
+  - curl -fsSL https://get.docker.com | sh
+  - systemctl enable docker
+  - systemctl restart docker
+  - docker compose -f /opt/pki/compose.yaml up -d
+%{ if enable_node_exporter ~}
+  # node_exporter — OS host metrics (:9100), parity with the other clusters' metrics tests.
+  - /usr/local/sbin/install-exporter.sh node_exporter https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-{ARCH}.tar.gz node_exporter
+%{ endif ~}
+
+final_message: "step-ca ready — ACME directory at https://ca.${domain}:9000/acme/acme/directory"
