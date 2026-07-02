@@ -64,7 +64,7 @@ fields.)
 
 | Folder | Purpose |
 |---|---|
-| `Logs` | Day-to-day log analysis — volume, errors, per-host, containers, pods. |
+| `LogAnalysis` | Day-to-day log analysis — volume, errors, per-host, containers, pods. (Named `LogAnalysis`, not `Logs`, to avoid the `**/logs` gitignore rule on case-insensitive filesystems.) |
 | `Correlation` | Cross-signal boards that line logs up against metrics and traces. |
 
 ## Dashboard inventory
@@ -74,11 +74,11 @@ Files live under `clusters/centralized_monitoring/openobserve/dashboards/<Folder
 
 | File | Title | Purpose / key panels |
 |---|---|---|
-| `Logs/log-overview.json` | **Log Overview** | Total ingest at a glance: stacked volume-by-stream timeseries, ingest rate, 24h total stat tiles, top noisy sources table (`log_file_path`). |
-| `Logs/error-triage.json` | **Error Triage** | Flagship. Error/warn count timeseries across streams; error rate by stream (bar); recent-errors table; **top error messages** (`GROUP BY body ORDER BY count DESC`). |
-| `Logs/per-host.json` | **Per-Host / Per-Stream** | `$stream` variable; volume + error split for the selected host/stream, recent drill table. |
-| `Logs/container-logs.json` | **Container Logs** | Volume + errors by container (derived from `log_file_path`), stdout vs stderr split (`stream`), recent table. |
-| `Logs/k0s-pods.json` | **Kubernetes Pod Logs** | Volume by `k8s_namespace_name` / `k8s_pod_name`, per-pod error table, `$namespace` variable. |
+| `LogAnalysis/log-overview.json` | **Log Overview** | Total ingest at a glance: stacked volume-by-stream timeseries, ingest rate, 24h total stat tiles, top noisy sources table (`log_file_path`). |
+| `LogAnalysis/error-triage.json` | **Error Triage** | Flagship. Error/warn count timeseries across streams; error rate by stream (bar); recent-errors table; **top error messages** (`GROUP BY body ORDER BY count DESC`). |
+| `LogAnalysis/per-host.json` | **Per-Host / Per-Stream** | `$stream` variable; volume + error split for the selected host/stream, recent drill table. |
+| `LogAnalysis/container-logs.json` | **Container Logs** | Volume + errors by container (derived from `log_file_path`), stdout vs stderr split (`stream`), recent table. |
+| `LogAnalysis/k0s-pods.json` | **Kubernetes Pod Logs** | Volume by `k8s_namespace_name` / `k8s_pod_name`, per-pod error table, `$namespace` variable. |
 | `Correlation/cause-effect.json` | **Cause & Effect** | Shared-time board: log-error spikes (SQL) beside node CPU / mem / disk (PromQL over `metrics`) and a recent-traces panel (`otlp_logs`), for eyeballing cause→effect. |
 
 Representative queries (log panels are SQL over `_search`; metric panels are PromQL):
