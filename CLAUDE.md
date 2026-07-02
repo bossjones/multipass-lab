@@ -41,6 +41,13 @@ never recorded in state, so plain `tofu destroy` can't remove it and the next `u
 `tofu state` no longer tracks (safe anytime — it won't touch a managed VM); `just destroy`
 runs it automatically after `tofu destroy`, and `just recreate` chains destroy→up.
 
+**Editing cloud-init requires `just recreate`, not `just up`.** OpenTofu does not recreate a
+`multipass_instance` when only the rendered cloud-init (`local_file`) content changes, so a plain
+`just up` after editing a `.tftpl` silently reuses the old VM — `just verify` then runs against
+**stale** cloud-init (hermetic tests pass, live tests fail confusingly). Use `just recreate <name>`
+to redeploy cloud-init to running VMs. (Also note: Multipass injects the **host** timezone into
+guests at first boot, overriding a declarative cloud-init `timezone:` — see `specs/ntp.md`.)
+
 `just open` reads the cluster's `web_urls` output (`{core, all}`, both flag-aware) and
 opens each URL via `open -a "Google Chrome"` (override with `BROWSER_APP=...`; falls back
 to the default browser). No flag opens `core` (human dashboards); `--full`/`--all` opens
