@@ -1,0 +1,125 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["instance", "processes", "systemd"],
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "label": "Process host",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(namedprocess_namegroup_num_procs, instance)",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(namedprocess_namegroup_num_procs, instance)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2, "sort": 1, "includeAll": false, "multi": false, "current": {}, "options": []
+      },
+      {
+        "name": "node",
+        "label": "systemd host",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(node_systemd_unit_state, instance)",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(node_systemd_unit_state, instance)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2, "sort": 1, "includeAll": false, "multi": false, "current": {}, "options": []
+      }
+    ]
+  },
+  "time": { "from": "now-3h", "to": "now" },
+  "title": "Processes & systemd",
+  "uid": "processes-systemd",
+  "version": 1,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "Top processes by CPU (cores)",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "expr": "topk(10, sum by (groupname) (rate(namedprocess_namegroup_cpu_seconds_total{instance=~\"$instance\"}[5m])))", "legendFormat": "{{groupname}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "title": "Top processes by memory (RSS)",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        { "expr": "topk(10, sum by (groupname) (namedprocess_namegroup_memory_bytes{instance=~\"$instance\", memtype=\"resident\"}))", "legendFormat": "{{groupname}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 9 },
+      "id": 3,
+      "title": "Process count by group",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "expr": "topk(10, sum by (groupname) (namedprocess_namegroup_num_procs{instance=~\"$instance\"}))", "legendFormat": "{{groupname}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 9 },
+      "id": 4,
+      "title": "Open file descriptors by group",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "expr": "topk(10, sum by (groupname) (namedprocess_namegroup_open_filedesc{instance=~\"$instance\"}))", "legendFormat": "{{groupname}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 9 },
+      "id": 5,
+      "title": "Threads by group",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "expr": "topk(10, sum by (groupname) (namedprocess_namegroup_num_threads{instance=~\"$instance\"}))", "legendFormat": "{{groupname}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 17 },
+      "id": 6,
+      "title": "systemd units by state",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 20 } }, "overrides": [] },
+      "targets": [
+        { "expr": "sum by (state) (node_systemd_unit_state{instance=~\"$node\"} == 1)", "legendFormat": "{{state}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 17 },
+      "id": 7,
+      "title": "Failed systemd units",
+      "type": "table",
+      "fieldConfig": { "defaults": { "custom": { "align": "auto" } }, "overrides": [] },
+      "options": { "showHeader": true },
+      "targets": [
+        { "expr": "node_systemd_unit_state{instance=~\"$node\", state=\"failed\"} == 1", "format": "table", "instant": true, "legendFormat": "{{name}}", "refId": "A" }
+      ],
+      "transformations": [
+        { "id": "organize", "options": { "excludeByName": { "Time": true, "Value": true, "job": true, "__name__": true, "type": true, "state": true }, "renameByName": { "name": "Unit", "instance": "Instance" } } }
+      ]
+    }
+  ]
+}

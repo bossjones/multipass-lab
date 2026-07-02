@@ -8,6 +8,13 @@
 package_update: true
 package_upgrade: true
 
+# Time sync — pin every VM to UTC and keep the clock disciplined via systemd-timesyncd.
+# Declared here (not left to the image default) so log/metric timestamps align cluster-wide.
+timezone: Etc/UTC
+ntp:
+  enabled: true
+  ntp_client: systemd-timesyncd
+
 packages:
   - curl
   - vim
@@ -46,15 +53,15 @@ write_files:
     content: |
       ${indent(6, grafana_dash_prov)}
 
-  - path: /opt/stack/grafana/dashboards/node-exporter.json
+  # --- Grafana dashboards (drop-a-file; gz+b64 keeps large JSON compact) ------
+  # One entry per *.json under cloud-init/grafana/dashboards; the relative path is
+  # preserved so foldersFromFilesStructure files each into its subdir's Grafana folder.
+%{ for d in grafana_dashboards ~}
+  - path: /opt/stack/grafana/dashboards/${d.name}
     permissions: '0644'
-    content: |
-      ${indent(6, grafana_dash_node)}
-
-  - path: /opt/stack/grafana/dashboards/cadvisor-k8s.json
-    permissions: '0644'
-    content: |
-      ${indent(6, grafana_dash_cad)}
+    encoding: gz+b64
+    content: ${base64gzip(d.content)}
+%{ endfor ~}
 %{ if enable_blackbox ~}
   # --- blackbox_exporter ----------------------------------------------------
   - path: /opt/stack/blackbox/blackbox.yml
@@ -92,6 +99,10 @@ write_files:
 %{ endif ~}
 
 runcmd:
+  # Enforce UTC late: Multipass injects the host timezone during first boot and can beat the
+  # declarative `timezone:` key above. runcmd runs after the config modules, so it wins.
+  # Harmless on Proxmox (already UTC). See specs/ntp.md.
+  - timedatectl set-timezone Etc/UTC
   - mkdir -p /opt/stack
   - curl -fsSL https://get.docker.com | sh
   - usermod -aG docker ubuntu  # let the SSH user reach the docker socket (heimdall CLI remote transport)

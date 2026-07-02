@@ -12,6 +12,13 @@
 package_update: true
 package_upgrade: true
 
+# Time sync — pin every VM to UTC and keep the clock disciplined via systemd-timesyncd.
+# Declared here (not left to the image default) so log/metric timestamps align cluster-wide.
+timezone: Etc/UTC
+ntp:
+  enabled: true
+  ntp_client: systemd-timesyncd
+
 packages:
   - curl
   - tar
@@ -129,6 +136,10 @@ write_files:
 %{ endif ~}
 
 runcmd:
+  # Enforce UTC late: Multipass injects the host timezone during first boot and can beat the
+  # declarative `timezone:` key above. runcmd runs after the config modules, so it wins.
+  # Harmless on Proxmox (already UTC). See specs/ntp.md.
+  - timedatectl set-timezone Etc/UTC
   # --- single-node k0s (controller + worker in one). The kubelet read-only port (10255,
   # http, no auth) is enabled so the server can scrape kubelet/cAdvisor without a token.
   - curl -sSLf https://get.k0s.sh | sh

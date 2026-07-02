@@ -49,6 +49,17 @@ locals {
   # under %{ if enable_traefik_metrics ~}.
   compose_conf = templatefile("${path.module}/cloud-init/docker/compose.yaml.tftpl", local.flags)
 
+  # Grafana provisioning for the docker VM's Grafana: a Prometheus datasource (uid:
+  # prometheus) + a foldersFromFilesStructure dashboard provider, plus the drop-a-file
+  # dashboard sweep (mirrors centralized_monitoring). See specs/dashboards.md.
+  grafana_datasources   = file("${path.module}/cloud-init/grafana/provisioning/datasources/datasources.yaml")
+  grafana_dash_prov     = file("${path.module}/cloud-init/grafana/provisioning/dashboards/dashboards.yaml")
+  grafana_dashboard_dir = "${path.module}/cloud-init/grafana/dashboards"
+  grafana_dashboards = [for f in fileset(local.grafana_dashboard_dir, "**/*.json") : {
+    name    = f
+    content = file("${local.grafana_dashboard_dir}/${f}")
+  }]
+
   # syslog-ng client config — references the central VM's runtime IP, which forces
   # OpenTofu to create `central` (and learn its ipv4) before rendering/launching clients.
   client_conf = templatefile("${path.module}/cloud-init/syslog-ng/client.conf.tftpl", {
@@ -103,6 +114,14 @@ resource "local_file" "docker_ci" {
     ssh_pubkey   = local.ssh_pubkey
     client_conf  = local.client_conf
     compose_conf = local.compose_conf
+    # Peer IPs for the local Prometheus scrape config. Referencing central/k0s here forces
+    # both to be created (and their DHCP IPs known) before the docker VM renders — the same
+    # runtime IP-injection edge the syslog-ng client_conf already creates for central.
+    central_ip          = multipass_instance.central.ipv4
+    k0s_ip              = multipass_instance.k0s.ipv4
+    grafana_datasources = local.grafana_datasources
+    grafana_dash_prov   = local.grafana_dash_prov
+    grafana_dashboards  = local.grafana_dashboards
   }))
 }
 

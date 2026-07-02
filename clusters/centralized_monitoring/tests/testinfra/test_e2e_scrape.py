@@ -36,11 +36,7 @@ def test_all_prometheus_targets_up(server):
         data = _curl_json(server, "http://localhost:9090/api/v1/targets")
         active = data.get("data", {}).get("activeTargets", [])
         if active:
-            down = [
-                t["scrapeUrl"]
-                for t in active
-                if t.get("health") != "up"
-            ]
+            down = [t["scrapeUrl"] for t in active if t.get("health") != "up"]
             if not down:
                 return
         time.sleep(10)
@@ -60,9 +56,7 @@ def test_client_instance_up_and_has_metrics(server, hosts, enabled_exporters):
     results = up.get("data", {}).get("result", [])
     assert any(r["value"][1] == "1" for r in results), f"no up==1 for {k0s_ip}"
 
-    load = _curl_json(
-        server, "http://localhost:9090/api/v1/query?query=node_load1"
-    )
+    load = _curl_json(server, "http://localhost:9090/api/v1/query?query=node_load1")
     assert load.get("data", {}).get("result"), "node_load1 returned no data"
 
 
@@ -81,10 +75,44 @@ def test_blackbox_probe_succeeds(server, enabled_exporters):
 
 def test_grafana_datasources_provisioned(server, enabled_exporters):
     """Grafana API lists Prometheus (always) and OpenObserve (when enabled)."""
-    data = _curl_json(
-        server, "http://admin:admin@localhost:3000/api/datasources"
-    )
+    data = _curl_json(server, "http://admin:admin@localhost:3000/api/datasources")
     names = {ds.get("name") for ds in data}
     assert "Prometheus" in names, f"Prometheus datasource missing: {names}"
+    # The Prometheus datasource must carry the fixed uid every dashboard binds to.
+    uids = {ds.get("uid") for ds in data if ds.get("name") == "Prometheus"}
+    assert "prometheus" in uids, (
+        f"Prometheus datasource uid should be 'prometheus': {uids}"
+    )
     if "enable_openobserve" in enabled_exporters:
         assert "OpenObserve" in names, f"OpenObserve datasource missing: {names}"
+
+
+def test_grafana_dashboards_provisioned(server):
+    """Grafana loaded the provisioned dashboards (custom flagship + community imports).
+
+    Asserts the file provider imported the dashboards dropped via cloud-init: the
+    per-instance overview, the process/systemd view, and representative community
+    imports across the Infrastructure/Platform/Kubernetes folders. Each must resolve
+    by uid, which only succeeds when its datasource binds (uid: prometheus).
+    """
+    search = _curl_json(
+        server, "http://admin:admin@localhost:3000/api/search?type=dash-db"
+    )
+    uids = {d.get("uid") for d in search}
+    expected = {
+        "instance-overview",
+        "processes-systemd",
+        "node-exporter-full",
+        "cadvisor",
+        "alertmanager",
+        "kubernetes-monitor",
+    }
+    missing = expected - uids
+    assert not missing, f"dashboards not provisioned: {missing} (have {uids})"
+
+    # The flagship must resolve by uid (proves it parsed + loaded, not just indexed).
+    res = server.run(
+        "curl -fsS -o /dev/null -w '%{http_code}' "
+        "http://admin:admin@localhost:3000/api/dashboards/uid/instance-overview"
+    )
+    assert res.stdout.strip() == "200", f"instance-overview not loadable: {res.stdout}"

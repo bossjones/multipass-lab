@@ -242,6 +242,43 @@ run "heimdall_off_omits_seed" {
   }
 }
 
+# --- time sync: every VM pins UTC + systemd-timesyncd (unconditional) --------
+
+run "ntp_timezone_render" {
+  command = plan
+
+  # Both VMs must carry the UTC timezone + systemd-timesyncd NTP client.
+  assert {
+    condition = alltrue([for c in [
+      local_file.server_ci.content, local_file.k0s_ci.content,
+    ] : strcontains(c, "timezone: Etc/UTC")])
+    error_message = "every VM cloud-init must pin timezone: Etc/UTC"
+  }
+  assert {
+    condition = alltrue([for c in [
+      local_file.server_ci.content, local_file.k0s_ci.content,
+    ] : strcontains(c, "ntp_client: systemd-timesyncd")])
+    error_message = "every VM cloud-init must set the NTP client to systemd-timesyncd"
+  }
+
+  # runcmd enforces UTC late (Multipass injects the host timezone during first boot and can
+  # beat the declarative timezone key; runcmd runs after config modules, so it wins).
+  assert {
+    condition = alltrue([for c in [
+      local_file.server_ci.content, local_file.k0s_ci.content,
+    ] : strcontains(c, "timedatectl set-timezone Etc/UTC")])
+    error_message = "every VM cloud-init runcmd must enforce timezone Etc/UTC"
+  }
+
+  # The injected timezone/ntp keys must keep the cloud-init valid YAML.
+  assert {
+    condition = alltrue([for c in [
+      local_file.server_ci.content, local_file.k0s_ci.content,
+    ] : can(yamldecode(c))])
+    error_message = "rendered cloud-init must stay valid YAML after adding timezone/ntp"
+  }
+}
+
 run "web_urls_core_and_flag_aware" {
   command = plan
 
@@ -276,5 +313,44 @@ run "web_urls_disable_drops_endpoints" {
   assert {
     condition     = alltrue([for u in output.web_urls.all : !strcontains(u, ":9100/metrics")])
     error_message = "disabling node_exporter must drop all :9100/metrics URLs from web_urls.all"
+  }
+}
+
+# --- Grafana dashboards: drop-a-file provisioning + fixed datasource uid ------
+# The fileset sweep must splice every dashboard JSON (custom + community imports)
+# into the server cloud-init under its folder subdir, and the Prometheus datasource
+# must declare uid: prometheus so every dashboard binds deterministically.
+
+run "grafana_dashboards_render" {
+  command = plan
+
+  # Custom flagship + a community import land under their folder subdirectories.
+  assert {
+    condition = alltrue([for p in [
+      "/opt/stack/grafana/dashboards/Instances/instance-overview.json",
+      "/opt/stack/grafana/dashboards/Instances/processes-systemd.json",
+      "/opt/stack/grafana/dashboards/Infrastructure/node-exporter-full.json",
+      "/opt/stack/grafana/dashboards/Platform/alertmanager.json",
+      "/opt/stack/grafana/dashboards/Kubernetes/kubernetes.json",
+    ] : strcontains(local_file.server_ci.content, p)])
+    error_message = "every dashboard JSON must be spliced into the server cloud-init under its folder subdir"
+  }
+
+  # Dashboards are embedded gzip+base64 (compact + keeps cloud-init valid YAML).
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "encoding: gz+b64")
+    error_message = "dashboard files must be written with gz+b64 encoding"
+  }
+
+  # The provisioned Prometheus datasource pins uid: prometheus (dashboards bind to it).
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "uid: prometheus")
+    error_message = "Grafana datasource must declare uid: prometheus"
+  }
+
+  # The file provider derives folders from the directory structure.
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "foldersFromFilesStructure: true")
+    error_message = "dashboard provider must set foldersFromFilesStructure: true"
   }
 }

@@ -96,9 +96,18 @@ locals {
   alertmanager_yml  = file("${path.module}/cloud-init/alertmanager/alertmanager.yml")
   otel_config       = file("${path.module}/cloud-init/otel/collector-config.yaml")
   grafana_dash_prov = file("${path.module}/cloud-init/grafana/provisioning/dashboards/dashboards.yaml")
-  grafana_dash_node = file("${path.module}/cloud-init/grafana/provisioning/dashboards/node-exporter.json")
-  grafana_dash_cad  = file("${path.module}/cloud-init/grafana/provisioning/dashboards/cadvisor-k8s.json")
   ssh_exporter_conf = file("${path.module}/cloud-init/ssh/ssh_exporter.yaml")
+
+  # Drop-a-file dashboard provisioning: every *.json under cloud-init/grafana/dashboards
+  # (any depth) is swept and written to /var/lib/grafana/dashboards/<relpath> on the VM,
+  # preserving the subdirectory so foldersFromFilesStructure files it into that Grafana
+  # folder. Adding a dashboard needs no edit here — just drop the JSON. See specs/dashboards.md.
+  grafana_dashboard_dir   = "${path.module}/cloud-init/grafana/dashboards"
+  grafana_dashboard_files = fileset(local.grafana_dashboard_dir, "**/*.json")
+  grafana_dashboards = [for f in local.grafana_dashboard_files : {
+    name    = f
+    content = file("${local.grafana_dashboard_dir}/${f}")
+  }]
 }
 
 # --- server (the observability hub) — created SECOND ------------------------
@@ -115,8 +124,7 @@ resource "local_file" "server_ci" {
     otel_config         = local.otel_config
     grafana_datasources = local.grafana_datasources
     grafana_dash_prov   = local.grafana_dash_prov
-    grafana_dash_node   = local.grafana_dash_node
-    grafana_dash_cad    = local.grafana_dash_cad
+    grafana_dashboards  = local.grafana_dashboards
     ssh_exporter_conf   = local.ssh_exporter_conf
     # Heimdall auto-seed (cloud-init). enable_heimdall comes from local.flags; the
     # seed toggle + script body + flag list are passed explicitly so enabled_exporters
