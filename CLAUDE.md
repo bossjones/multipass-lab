@@ -25,6 +25,7 @@ just check centralized_logging   # hermetic: tofu fmt + validate + test (no VMs)
 just up    centralized_logging   # tofu apply -> launches all VMs in one apply
 just verify centralized_logging  # live: pytest + testinfra over SSH against running VMs
 just verify-all                  # live: run every cluster's testinfra suite (glob-discovered)
+just verify-api centralized_monitoring # live: hit Grafana/Prometheus/OpenObserve HTTP APIs + assert (see below)
 just destroy centralized_logging # tofu destroy + prune orphaned VMs (see below)
 just recreate centralized_logging # destroy (incl. orphan cleanup) then up
 just prune centralized_logging   # delete VMs tofu no longer tracks (recover a failed up)
@@ -52,6 +53,17 @@ guests at first boot, overriding a declarative cloud-init `timezone:` — see `s
 opens each URL via `open -a "Google Chrome"` (override with `BROWSER_APP=...`; falls back
 to the default browser). No flag opens `core` (human dashboards); `--full`/`--all` opens
 `all` (core + every **enabled** exporter endpoint — disabled flags are skipped, not opened).
+
+**Observability verification CLIs.** `centralized_monitoring/scripts/{grafana,prometheus,openobserve}_cli.py`
+are uv single-file CLIs (typer + rich) that hit those services' HTTP APIs from the host for
+both introspection and a CI-style `check` (exits nonzero on failure). They resolve the server
+IP from `tofu output` (or `--server-url`) via the shared `scripts/_obs_common.py`, and share the
+repo's two-layer test split: hermetic suites in `tests/{grafana,prometheus,openobserve,obs_common}/`
+(pytest-httpserver, no VMs) and live use via `just verify-api` / `just {grafana,prometheus,openobserve}-check`.
+Design docs: `specs/cli-grafana.md`, `specs/cli-prometheus.md`, `specs/cli-openobserve.md`. The
+query clients are `grafana-client`, `prometheus-api-client`, and raw `httpx` (OpenObserve has no
+read SDK) — **not** the ingestion/IaC libraries (`grafana-foundation-sdk`, `client_python`,
+`openobserve-python-sdk`), which are reserved for the opt-in e2e inject→query loop.
 
 Run a single hermetic test from the cluster dir:
 `tofu -chdir=clusters/<name> test -test-directory=tests/tofu`.

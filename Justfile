@@ -128,6 +128,59 @@ heimdall-add CLUSTER TITLE URL:
 heimdall-rm CLUSTER TITLE:
     uv run {{cluster_root}}/{{CLUSTER}}/scripts/heimdall_cli.py remove --chdir {{cluster_root}}/{{CLUSTER}} --title {{quote(TITLE)}}
 
+# --- observability verification CLIs (see specs/cli-*.md) --------------------
+# Host-side API introspection + verification for Grafana/Prometheus/OpenObserve. Each
+# resolves the server from `tofu output` (VMs must be up) or accepts --server-url. The
+# `*-check` recipes exit nonzero on failure (CI-friendly). --cluster precedes the
+# subcommand because global options live on the CLI's callback.
+
+# run all three services' `check` (health/datasources/targets/streams):  just verify-api centralized_monitoring
+verify-api CLUSTER:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=0
+    for svc in grafana prometheus openobserve; do
+      echo "=== $svc check: {{CLUSTER}} ==="
+      uv run {{cluster_root}}/{{CLUSTER}}/scripts/${svc}_cli.py --cluster {{CLUSTER}} check || rc=1
+    done
+    exit "$rc"
+
+# Grafana health + datasources + dashboards, exit nonzero on failure:  just grafana-check centralized_monitoring
+grafana-check CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/grafana_cli.py --cluster {{CLUSTER}} check
+
+# list Grafana datasources:  just grafana-datasources centralized_monitoring
+grafana-datasources CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/grafana_cli.py --cluster {{CLUSTER}} datasources
+
+# list Grafana dashboards:  just grafana-dashboards centralized_monitoring
+grafana-dashboards CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/grafana_cli.py --cluster {{CLUSTER}} dashboards
+
+# Prometheus scrape health (fails on any down target), exit nonzero:  just prometheus-check centralized_monitoring
+prometheus-check CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/prometheus_cli.py --cluster {{CLUSTER}} check
+
+# instant PromQL:  just prometheus-query centralized_monitoring 'up'
+prometheus-query CLUSTER PROMQL:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/prometheus_cli.py --cluster {{CLUSTER}} query {{quote(PROMQL)}}
+
+# per-target scrape health:  just prometheus-targets centralized_monitoring
+prometheus-targets CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/prometheus_cli.py --cluster {{CLUSTER}} targets
+
+# OpenObserve health + auth, exit nonzero on failure:  just openobserve-check centralized_monitoring
+openobserve-check CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/openobserve_cli.py --cluster {{CLUSTER}} check
+
+# list OpenObserve ingest streams:  just openobserve-streams centralized_monitoring
+openobserve-streams CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/openobserve_cli.py --cluster {{CLUSTER}} streams
+
+# SQL search over a stream:  just openobserve-search centralized_monitoring 'SELECT * FROM default'
+openobserve-search CLUSTER SQL:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/openobserve_cli.py --cluster {{CLUSTER}} search {{quote(SQL)}}
+
 # multipass list
 status:
     multipass list
