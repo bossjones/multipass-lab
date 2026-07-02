@@ -1,0 +1,78 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["logging", "syslog-ng", "filestat"],
+  "templating": { "list": [] },
+  "time": { "from": "now-3h", "to": "now" },
+  "title": "Logging Pipeline",
+  "uid": "logging-pipeline",
+  "version": 1,
+  "description": "syslog-ng throughput/drops (node_exporter textfile collector) + per-client log freshness (filestat_exporter on central). Exact series names track the syslog-ng / filestat_exporter versions; see specs/dashboards.md.",
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "syslog-ng events/s (in vs out)",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "cps" }, "overrides": [] },
+      "targets": [
+        { "expr": "sum(rate(syslogng_input_events_total[5m]))", "legendFormat": "input", "refId": "A" },
+        { "expr": "sum(rate(syslogng_output_events_total[5m]))", "legendFormat": "output", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "title": "syslog-ng dropped events/s",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "cps", "custom": { "drawStyle": "bars", "fillOpacity": 50 } }, "overrides": [] },
+      "targets": [
+        { "expr": "sum by (instance) (rate(syslogng_dropped_events_total[5m]))", "legendFormat": "{{instance}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 8 },
+      "id": 3,
+      "title": "syslog-ng queued events",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "expr": "sum by (instance) (syslogng_queued_events)", "legendFormat": "{{instance}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 16, "x": 8, "y": 8 },
+      "id": 4,
+      "title": "Remote log file size (/var/log/remote)",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        { "expr": "file_stat_size_bytes", "legendFormat": "{{path}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 14 },
+      "id": 5,
+      "title": "Log freshness — seconds since last write (higher = client may have stopped shipping)",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 120 }, { "color": "red", "value": 600 } ] }
+        },
+        "overrides": []
+      },
+      "targets": [
+        { "expr": "time() - file_stat_modif_time_seconds", "legendFormat": "{{path}}", "refId": "A" }
+      ]
+    }
+  ]
+}

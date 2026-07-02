@@ -1,0 +1,13 @@
+# Managed by OpenTofu (clusters/centralized_logging). Grafana datasource provisioning:
+# the local Prometheus (on the docker VM) that now scrapes all three cluster VMs. The
+# fixed uid: prometheus is what every provisioned dashboard binds to (see specs/dashboards.md).
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true

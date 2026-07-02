@@ -173,6 +173,43 @@ run "disabled_flags_omit_install_blocks" {
   }
 }
 
+# --- time sync: every VM pins UTC + systemd-timesyncd (unconditional) --------
+
+run "ntp_timezone_render" {
+  command = plan
+
+  # All three VMs must carry the UTC timezone + systemd-timesyncd NTP client.
+  assert {
+    condition = alltrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : strcontains(c, "timezone: Etc/UTC")])
+    error_message = "every VM cloud-init must pin timezone: Etc/UTC"
+  }
+  assert {
+    condition = alltrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : strcontains(c, "ntp_client: systemd-timesyncd")])
+    error_message = "every VM cloud-init must set the NTP client to systemd-timesyncd"
+  }
+
+  # runcmd enforces UTC late (Multipass injects the host timezone during first boot and can
+  # beat the declarative timezone key; runcmd runs after config modules, so it wins).
+  assert {
+    condition = alltrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : strcontains(c, "timedatectl set-timezone Etc/UTC")])
+    error_message = "every VM cloud-init runcmd must enforce timezone Etc/UTC"
+  }
+
+  # The injected timezone/ntp keys must keep the cloud-init valid YAML.
+  assert {
+    condition = alltrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : can(yamldecode(c))])
+    error_message = "rendered cloud-init must stay valid YAML after adding timezone/ntp"
+  }
+}
+
 run "web_urls_core_and_flag_aware" {
   command = plan
 
@@ -203,5 +240,56 @@ run "web_urls_journald_on_adds_endpoint" {
   assert {
     condition     = anytrue([for u in output.web_urls.all : strcontains(u, ":12345/metrics")])
     error_message = "enabling journald-exporter must add its :12345 endpoint to web_urls.all"
+  }
+}
+
+# --- docker VM Prometheus now self-monitors all 3 VMs; Grafana is provisioned ---------
+# The docker VM's local Prometheus scrapes central/k0s (rendered IPs) + its own host
+# exporters (__SELF_IP__, substituted at boot), and Grafana ships the dashboard set.
+
+run "docker_prometheus_scrape_and_grafana_render" {
+  command = plan
+
+  # Default-on scrape jobs render, and the self-scrape placeholder is present for the
+  # boot-time sed. central/k0s targets come from the injected runtime IPs.
+  assert {
+    condition = alltrue([for j in ["logging-node", "logging-systemd", "logging-process", "logging-cadvisor", "logging-filestat", "logging-kube-state"] :
+    strcontains(local_file.docker_ci.content, "job_name: ${j}")])
+    error_message = "docker Prometheus must render the default-on logging-* scrape jobs"
+  }
+  assert {
+    condition     = strcontains(local_file.docker_ci.content, "__SELF_IP__:9100")
+    error_message = "docker Prometheus must carry the __SELF_IP__ placeholder for host self-scrape"
+  }
+  assert {
+    condition     = strcontains(local_file.docker_ci.content, "sed -i \"s/__SELF_IP__/$SELF_IP/g\"")
+    error_message = "docker runcmd must substitute __SELF_IP__ into prometheus.yml before the stack starts"
+  }
+
+  # Grafana provisioning: datasource uid, folder-structure provider, and the dashboards.
+  assert {
+    condition     = strcontains(local_file.docker_ci.content, "uid: prometheus")
+    error_message = "docker Grafana datasource must declare uid: prometheus"
+  }
+  assert {
+    condition     = strcontains(local_file.docker_ci.content, "foldersFromFilesStructure: true")
+    error_message = "docker Grafana dashboard provider must set foldersFromFilesStructure: true"
+  }
+  assert {
+    condition = alltrue([for p in [
+      "/opt/stack/grafana/dashboards/Instances/instance-overview.json",
+      "/opt/stack/grafana/dashboards/Logging/logging-pipeline.json",
+    ] : strcontains(local_file.docker_ci.content, p)])
+    error_message = "docker Grafana must splice the provisioned dashboards (overview + logging pipeline)"
+  }
+  assert {
+    condition     = strcontains(local_file.docker_ci.content, "encoding: gz+b64")
+    error_message = "dashboard files must be written with gz+b64 encoding"
+  }
+
+  # The gz+b64 dashboard loop + expanded prometheus.yml must keep cloud-init valid YAML.
+  assert {
+    condition     = can(yamldecode(local_file.docker_ci.content))
+    error_message = "docker cloud-init must stay valid YAML after adding scrape jobs + dashboards"
   }
 }

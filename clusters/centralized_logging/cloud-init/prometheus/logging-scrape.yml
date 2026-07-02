@@ -1,6 +1,11 @@
-# Reference artifact — NOT wired into any running Prometheus by this cluster.
-# Paste these jobs under `scrape_configs:` of the future centralized_monitoring Prometheus.
-# Replace <central_ip>/<docker_ip>/<k0s_ip> with the values from:
+# Reference artifact for CROSS-CLUSTER scraping (into the centralized_monitoring Prometheus).
+# The docker VM's OWN Prometheus already scrapes these three VMs — that config is rendered
+# inline in cloud-init/docker-client.yaml.tftpl (same logging-* jobs, with central/k0s IPs
+# injected at render time and this VM's own IP substituted at boot via __SELF_IP__). Use the
+# file below only to ALSO pull the logging cluster into the monitoring cluster's Prometheus.
+#
+# Paste these jobs under `scrape_configs:` of the centralized_monitoring Prometheus and
+# replace <central_ip>/<docker_ip>/<k0s_ip> with the values from:
 #   tofu -chdir=clusters/centralized_logging output -json metrics_targets
 # All logging-cluster exporters bind 0.0.0.0, so these targets are scrapable cross-cluster.
 #

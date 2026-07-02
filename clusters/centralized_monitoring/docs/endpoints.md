@@ -144,6 +144,14 @@ uses a null `devnull` receiver in the lab):
 | `http://<server>:5080/healthz` | OpenObserve health check |
 | `http://<server>:5080/api/default/prometheus` | OpenObserve PromQL-compatible API (the Grafana datasource URL) |
 
+These endpoints are wrapped by the host-side **verification CLIs** — `just grafana-check`,
+`just prometheus-check`, `just openobserve-check` (or `just verify-api` for all three), plus
+introspection recipes (`just prometheus-targets`, `just grafana-datasources`,
+`just openobserve-streams`, …). They resolve the server IP from `tofu output` and exit
+nonzero on failure. See [`specs/cli-grafana.md`](../../../specs/cli-grafana.md),
+[`specs/cli-prometheus.md`](../../../specs/cli-prometheus.md), and
+[`specs/cli-openobserve.md`](../../../specs/cli-openobserve.md).
+
 ## OpenTelemetry Collector endpoints
 
 From [`collector-config.yaml`](../cloud-init/otel/collector-config.yaml):

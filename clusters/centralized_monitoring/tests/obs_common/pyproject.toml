@@ -1,0 +1,18 @@
+[project]
+name = "obs-common-tests"
+version = "0.0.0"
+description = "Hermetic unit tests for _obs_common (shared observability-CLI helpers)"
+requires-python = ">=3.11"
+dependencies = [
+    "pytest>=8",
+    "pytest-httpserver>=1.0",
+    "pytest-mock>=3",
+    "pytest-cov>=5",
+    "pytest-randomly>=3",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["."]
+# Make the single-file helper importable as `_obs_common` from the cluster scripts dir.
+pythonpath = ["../../scripts"]

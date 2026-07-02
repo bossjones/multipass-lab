@@ -5,6 +5,13 @@
 package_update: true
 package_upgrade: true
 
+# Time sync — pin every VM to UTC and keep the clock disciplined via systemd-timesyncd.
+# Declared here (not left to the image default) so log/metric timestamps align cluster-wide.
+timezone: Etc/UTC
+ntp:
+  enabled: true
+  ntp_client: systemd-timesyncd
+
 packages:
   - syslog-ng
   - curl
@@ -102,6 +109,11 @@ write_files:
         "log-driver": "journald"
       }
 
+  # Prometheus now self-monitors all three cluster VMs. central/k0s IPs are injected at
+  # render time (the dependency edge); __SELF_IP__ is this docker VM's own host IP, which
+  # can't be self-referenced in tofu, so it is substituted at boot by a runcmd sed before
+  # the stack starts. Jobs mirror cloud-init/prometheus/logging-scrape.yml and are gated by
+  # the same enable_* flags that install each exporter. See specs/dashboards.md.
   - path: /opt/stack/prometheus.yml
     permissions: '0644'
     content: |
@@ -111,9 +123,55 @@ write_files:
         - job_name: prometheus
           static_configs:
             - targets: ["localhost:9090"]
-        - job_name: traefik
+%{ if enable_traefik_metrics ~}
+        - job_name: logging-traefik
           static_configs:
-            - targets: ["traefik:8080"]
+            - targets: ["traefik:8082"]
+%{ endif ~}
+%{ if enable_node_exporter ~}
+        - job_name: logging-node        # host metrics + syslog-ng textfile metrics
+          static_configs:
+            - targets: ["${central_ip}:9100", "__SELF_IP__:9100", "${k0s_ip}:9100"]
+%{ endif ~}
+%{ if enable_systemd_exporter ~}
+        - job_name: logging-systemd
+          static_configs:
+            - targets: ["${central_ip}:9558", "__SELF_IP__:9558", "${k0s_ip}:9558"]
+%{ endif ~}
+%{ if enable_journald_exporter ~}
+        - job_name: logging-journald    # only when enable_journald_exporter (amd64 hosts)
+          static_configs:
+            - targets: ["${central_ip}:12345", "__SELF_IP__:12345", "${k0s_ip}:12345"]
+%{ endif ~}
+%{ if enable_process_exporter ~}
+        - job_name: logging-process
+          static_configs:
+            - targets: ["${central_ip}:9256", "__SELF_IP__:9256", "${k0s_ip}:9256"]
+%{ endif ~}
+%{ if enable_filestat_exporter ~}
+        - job_name: logging-filestat    # central only (/var/log/remote freshness)
+          static_configs:
+            - targets: ["${central_ip}:9943"]
+%{ endif ~}
+%{ if enable_cadvisor ~}
+        - job_name: logging-cadvisor    # docker + k0s hosts
+          static_configs:
+            - targets: ["__SELF_IP__:8089", "${k0s_ip}:8089"]
+%{ endif ~}
+%{ if enable_kube_metrics ~}
+        - job_name: logging-kube        # kube-proxy on the k0s host
+          static_configs:
+            - targets: ["${k0s_ip}:10249"]
+        - job_name: logging-kubelet-cadvisor
+          metrics_path: /metrics/cadvisor
+          static_configs:
+            - targets: ["${k0s_ip}:10255"]
+%{ endif ~}
+%{ if enable_kube_state_metrics ~}
+        - job_name: logging-kube-state
+          static_configs:
+            - targets: ["${k0s_ip}:8081"]
+%{ endif ~}
 
   - path: /opt/stack/alertmanager.yml
     permissions: '0644'
@@ -123,12 +181,33 @@ write_files:
       receivers:
         - name: "devnull"
 
+  # --- Grafana provisioning (datasource + dashboard provider + drop-a-file dashboards) ---
+  - path: /opt/stack/grafana/provisioning/datasources/datasources.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, grafana_datasources)}
+
+  - path: /opt/stack/grafana/provisioning/dashboards/dashboards.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, grafana_dash_prov)}
+%{ for d in grafana_dashboards ~}
+  - path: /opt/stack/grafana/dashboards/${d.name}
+    permissions: '0644'
+    encoding: gz+b64
+    content: ${base64gzip(d.content)}
+%{ endfor ~}
+
   - path: /opt/stack/compose.yaml
     permissions: '0644'
     content: |
       ${indent(6, compose_conf)}
 
 runcmd:
+  # Enforce UTC late: Multipass injects the host timezone during first boot and can beat the
+  # declarative `timezone:` key above. runcmd runs after the config modules, so it wins.
+  # Harmless on Proxmox (already UTC). See specs/ntp.md.
+  - timedatectl set-timezone Etc/UTC
   # syslog-ng shipper
   - mkdir -p /var/lib/syslog-ng /opt/stack
   - grep -q 'conf.d/\*.conf' /etc/syslog-ng/syslog-ng.conf || echo '@include "/etc/syslog-ng/conf.d/*.conf"' >> /etc/syslog-ng/syslog-ng.conf
@@ -139,6 +218,11 @@ runcmd:
   - curl -fsSL https://get.docker.com | sh
   - systemctl enable docker
   - systemctl restart docker
+  # Substitute this VM's own LAN IP into prometheus.yml so the local Prometheus can scrape
+  # the host-level exporters running on this docker VM (they bind 0.0.0.0, not the compose net).
+  - |
+    SELF_IP=$(ip -4 route get 1.1.1.1 | awk '{print $7; exit}')
+    sed -i "s/__SELF_IP__/$SELF_IP/g" /opt/stack/prometheus.yml
   - docker compose -f /opt/stack/compose.yaml up -d
 %{ if enable_node_exporter || enable_syslogng_metrics ~}
   - mkdir -p /var/lib/node_exporter/textfile_collector

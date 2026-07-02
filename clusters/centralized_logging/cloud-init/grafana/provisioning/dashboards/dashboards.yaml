@@ -1,0 +1,16 @@
+# Managed by OpenTofu (clusters/centralized_logging). Loads any dashboard JSON dropped
+# under /var/lib/grafana/dashboards; foldersFromFilesStructure: true turns each
+# subdirectory (Instances/, Infrastructure/, Kubernetes/, Platform/, Logging/) into a
+# Grafana folder. Drop a JSON into the right subdir to publish it (see specs/dashboards.md).
+apiVersion: 1
+
+providers:
+  - name: default
+    orgId: 1
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: true

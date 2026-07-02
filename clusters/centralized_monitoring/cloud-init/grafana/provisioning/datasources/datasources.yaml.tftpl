@@ -5,6 +5,7 @@ apiVersion: 1
 datasources:
   - name: Prometheus
     type: prometheus
+    uid: prometheus
     access: proxy
     url: http://prometheus:9090
     isDefault: true
@@ -14,6 +15,7 @@ datasources:
   # cleanly as a built-in datasource type (no unsigned Grafana plugin to install).
   - name: OpenObserve
     type: prometheus
+    uid: openobserve
     access: proxy
     url: http://openobserve:5080/api/default/prometheus
     basicAuth: true

@@ -1,0 +1,35 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "Container CPU (rate)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "sum(rate(container_cpu_usage_seconds_total[5m])) by (name)", "legendFormat": "{{name}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "title": "Kubernetes pods (kube-state-metrics)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "sum(kube_pod_status_phase) by (phase)", "legendFormat": "{{phase}}", "refId": "A" }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["cadvisor", "kubernetes", "starter"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "title": "cAdvisor / k8s (starter)",
+  "uid": "cadvisor-k8s-starter",
+  "version": 1
+}

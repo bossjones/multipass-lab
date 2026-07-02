@@ -66,6 +66,8 @@ services:
       - "3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
+      - /opt/stack/grafana/provisioning:/etc/grafana/provisioning:ro
+      - /opt/stack/grafana/dashboards:/var/lib/grafana/dashboards:ro
     restart: unless-stopped
 
 volumes:

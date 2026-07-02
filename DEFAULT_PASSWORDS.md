@@ -19,6 +19,13 @@ just open centralized_monitoring --full   # + every enabled /metrics endpoint
 
 SSH onto any VM: `just ssh <cluster> <role>` (login user is `ubuntu`, key-based).
 
+**Verify the stack from the laptop:** the observability CLIs (`just grafana-check`,
+`just prometheus-check`, `just openobserve-check`, or all three via `just verify-api`)
+hit these services' HTTP APIs and default to the credentials below. Override per service
+with `GRAFANA_USER`/`GRAFANA_PASSWORD`, `OPENOBSERVE_USER`/`OPENOBSERVE_PASSWORD`
+(or `--user`/`--password`). See `specs/cli-grafana.md`, `specs/cli-prometheus.md`,
+`specs/cli-openobserve.md`.
+
 ---
 
 ## centralized_monitoring
