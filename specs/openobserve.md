@@ -282,3 +282,20 @@ two-layer split.
   the container env, the Grafana datasource, remote_write, and both collector auth headers.
 - OTLP→OpenObserve stream naming is the one empirical unknown; the live tests in Step 9 are the
   gate that forces the config to be correct rather than assumed.
+
+### Resolved during implementation (live verification, Step 9)
+
+Three things the live round-trip surfaced that the design left open:
+
+1. **Stream naming uses the `stream-name` HTTP header, not `service.name`.** OpenObserve files all
+   OTLP logs into `default` regardless of the `service.name` resource attribute. Fix: one otlphttp
+   exporter per stream, each with a `stream-name` header (`container_logs`, `host_logs`, `otlp_logs`
+   on the server; `k0s_host`, `k0s_pods` on k0s). The `resource` processors were dropped.
+2. **The server collector must run as root.** The `otel/opentelemetry-collector-contrib` image runs
+   as UID 10001, which cannot read `/var/log/syslog` (`0640 root:adm`) or the docker container logs
+   (`0640 root:root`). Fix: `user: "0:0"` on the compose service (the k0s systemd agent already runs
+   as root). Symptom before the fix: `open /var/log/syslog: permission denied`.
+3. **filelog needs `start_at: beginning`.** The default (`end`) ships only lines written after the
+   collector starts, so quiet sources (kube-system pod logs) never created a stream. Set
+   `start_at: beginning` on all filelog receivers. (No `file_storage` checkpoint, so a collector
+   restart re-reads from the start — acceptable for this lab; add `file_storage` if dedup matters.)

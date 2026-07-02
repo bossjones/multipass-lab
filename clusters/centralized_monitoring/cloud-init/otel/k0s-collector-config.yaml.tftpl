@@ -1,0 +1,51 @@
+# Managed by OpenTofu (clusters/centralized_monitoring) — k0s log-shipping agent config.
+# Rendered TWICE from the same template: (1) a 127.0.0.1 placeholder baked into the k0s
+# cloud-init at boot, then (2) re-rendered with the real server IP and pushed post-apply via
+# `multipass exec` (the k0s VM is created BEFORE the server, so its IP is unknown at cloud-init
+# time — hence the two-phase inject). Ships the k0s host syslog + Kubernetes pod logs to the
+# server's OpenObserve as the k0s_host / k0s_pods streams.
+receivers:
+  # Host logs — the k0s node's OS syslog. start_at: beginning ingests existing content too.
+  filelog/host:
+    include:
+      - /var/log/syslog
+    include_file_path: true
+    start_at: beginning
+  # Kubernetes pod logs — k0s writes CRI/containerd logs under /var/log/pods; the `container`
+  # operator auto-detects the CRI/docker log format and extracts k8s metadata. start_at:
+  # beginning so already-written pod logs (kube-system pods are quiet after startup) are shipped.
+  filelog/pods:
+    include:
+      - /var/log/pods/*/*/*.log
+    include_file_path: true
+    start_at: beginning
+    operators:
+      - type: container
+
+processors:
+  batch: {}
+
+exporters:
+  # OpenObserve names the destination stream from the `stream-name` header (service.name lands
+  # everything in "default"), so use one exporter per stream: k0s_host + k0s_pods.
+  otlphttp/host:
+    endpoint: http://${server_ip}:5080/api/${openobserve_org}
+    headers:
+      Authorization: "Basic ${base64encode("admin@example.com:${openobserve_password}")}"
+      stream-name: k0s_host
+  otlphttp/pods:
+    endpoint: http://${server_ip}:5080/api/${openobserve_org}
+    headers:
+      Authorization: "Basic ${base64encode("admin@example.com:${openobserve_password}")}"
+      stream-name: k0s_pods
+
+service:
+  pipelines:
+    logs/host:
+      receivers: [filelog/host]
+      processors: [batch]
+      exporters: [otlphttp/host]
+    logs/pods:
+      receivers: [filelog/pods]
+      processors: [batch]
+      exporters: [otlphttp/pods]

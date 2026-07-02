@@ -255,8 +255,18 @@ def orgs(ctx: typer.Context):
 def check(
     ctx: typer.Context,
     require_streams: bool = typer.Option(False, "--require-streams"),
+    require_metrics: bool = typer.Option(
+        False,
+        "--require-metrics",
+        help="fail unless PromQL `up` returns a series (metrics are being ingested)",
+    ),
+    require_logs: bool = typer.Option(
+        False,
+        "--require-logs",
+        help="fail unless a logs stream has recent rows (logs are being ingested)",
+    ),
 ):
-    """Assert OpenObserve health + auth (+ optional streams); exit nonzero on failure."""
+    """Assert OpenObserve health + auth (+ optional streams/metrics/logs); exit nonzero on failure."""
     c = resolve(ctx.obj)
     import httpx
 
@@ -276,6 +286,7 @@ def check(
 
     # 2. Auth works (streams endpoint requires basic auth).
     stream_count = None
+    stream_items: list = []
     try:
         with c.client() as client:
             resp = client.get(f"/api/{c.org}/streams")
@@ -285,8 +296,10 @@ def check(
             resp.raise_for_status()
             report.add("auth", True, f"status={resp.status_code}")
             data = resp.json()
-            items = data.get("list", []) if isinstance(data, dict) else (data or [])
-            stream_count = len(items)
+            stream_items = (
+                data.get("list", []) if isinstance(data, dict) else (data or [])
+            )
+            stream_count = len(stream_items)
     except httpx.HTTPError as exc:
         report.add("auth", False, str(exc))
 
@@ -297,6 +310,52 @@ def check(
         report.add("streams present", stream_count >= 1, f"{stream_count} streams")
     else:
         report.skip("streams present", f"{stream_count} streams (informational)")
+
+    # 4. Metrics ingested — PromQL `up` returns at least one series (via remote_write).
+    if require_metrics:
+        try:
+            with c.client() as client:
+                resp = client.get(
+                    f"/api/{c.org}/prometheus/api/v1/query", params={"query": "up"}
+                )
+                resp.raise_for_status()
+                result = (resp.json().get("data") or {}).get("result") or []
+            report.add(
+                "metrics present", len(result) >= 1, f"{len(result)} series for up"
+            )
+        except httpx.HTTPError as exc:
+            report.add("metrics present", False, str(exc))
+
+    # 5. Logs ingested — a logs stream exists and has ≥1 recent row.
+    if require_logs:
+        logs_streams = [
+            s
+            for s in stream_items
+            if isinstance(s, dict) and (s.get("stream_type") or s.get("type")) == "logs"
+        ]
+        if not logs_streams:
+            report.add("logs present", False, "no logs streams")
+        else:
+            name = logs_streams[0].get("name")
+            now_us = int(time.time() * 1_000_000)
+            body = {
+                "query": {
+                    "sql": f'SELECT * FROM "{name}"',
+                    "start_time": now_us - 3_600_000_000,
+                    "end_time": now_us,
+                    "size": 1,
+                }
+            }
+            try:
+                with c.client() as client:
+                    resp = client.post(f"/api/{c.org}/_search", json=body)
+                    resp.raise_for_status()
+                    hits = resp.json().get("hits") or []
+                report.add(
+                    "logs present", len(hits) >= 1, f'{len(hits)} rows in "{name}"'
+                )
+            except httpx.HTTPError as exc:
+                report.add("logs present", False, str(exc))
 
     _render_check(c, report)
     raise typer.Exit(report.exit_code)

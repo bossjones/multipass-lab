@@ -141,7 +141,10 @@ verify-api CLUSTER:
     rc=0
     for svc in grafana prometheus openobserve; do
       echo "=== $svc check: {{CLUSTER}} ==="
-      uv run {{cluster_root}}/{{CLUSTER}}/scripts/${svc}_cli.py --cluster {{CLUSTER}} check || rc=1
+      # OpenObserve additionally asserts ingestion is live (metrics via remote_write, logs via OTel).
+      extra=""
+      [ "$svc" = openobserve ] && extra="--require-metrics --require-logs"
+      uv run {{cluster_root}}/{{CLUSTER}}/scripts/${svc}_cli.py --cluster {{CLUSTER}} check $extra || rc=1
     done
     exit "$rc"
 
@@ -169,9 +172,9 @@ prometheus-query CLUSTER PROMQL:
 prometheus-targets CLUSTER:
     uv run {{cluster_root}}/{{CLUSTER}}/scripts/prometheus_cli.py --cluster {{CLUSTER}} targets
 
-# OpenObserve health + auth, exit nonzero on failure:  just openobserve-check centralized_monitoring
+# OpenObserve health + auth + ingestion (metrics + logs), exit nonzero:  just openobserve-check centralized_monitoring
 openobserve-check CLUSTER:
-    uv run {{cluster_root}}/{{CLUSTER}}/scripts/openobserve_cli.py --cluster {{CLUSTER}} check
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/openobserve_cli.py --cluster {{CLUSTER}} check --require-metrics --require-logs
 
 # list OpenObserve ingest streams:  just openobserve-streams centralized_monitoring
 openobserve-streams CLUSTER:
