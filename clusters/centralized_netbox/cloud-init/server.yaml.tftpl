@@ -1,0 +1,255 @@
+#cloud-config
+# NetBox server VM — runs the netbox-community/netbox-docker compose stack (NetBox + worker +
+# housekeeping + postgres + redis + redis-cache), creates the admin user + a pinned v1 API token,
+# and bootstraps a virtualization cluster so the client VM has a home. See specs/centralized_netbox.md.
+#
+# We pin netbox-docker to a NetBox 4.1 release (var.netbox_docker_ref, default 3.0.2): 4.2+ switched
+# API tokens to a hashed v2 (Bearer) scheme where a *known* token value cannot be set, which breaks
+# a deterministic lab. 4.1 uses v1 plaintext tokens (`Authorization: Token <40hex>`), so the pinned
+# token works everywhere (client self-registration, host CLI, testinfra).
+#
+# The heavy work (clone + pull ~6 images + migrations + provisioning) runs ASYNCHRONOUSLY via the
+# netbox-stack oneshot, started with `systemctl start --no-block` in runcmd. The larstobi/multipass
+# provider exposes no launch timeout, so `multipass launch` waits on the default 300s cloud-init
+# window — doing the bring-up inline blows past it. cloud-init therefore finishes in ~2 min; NetBox
+# comes up in the background and the testinfra suite polls for the /var/lib/netbox-bootstrap/done
+# marker. The whole provisioning is idempotent and wrapped in a retry loop, so a transient image-pull
+# reset (common) simply retries instead of failing the boot.
+package_update: true
+
+# Time sync — pin every VM to UTC and keep the clock disciplined via systemd-timesyncd.
+timezone: Etc/UTC
+ntp:
+  enabled: true
+  ntp_client: systemd-timesyncd
+
+packages:
+  - docker.io
+  - docker-compose-v2
+  - git
+  - curl
+  - jq
+
+ssh_authorized_keys:
+  - ${ssh_pubkey}
+
+write_files:
+  # netbox-docker override staged in a seed dir; netbox-stack.sh clones netbox-docker then copies
+  # it in (git clone refuses a non-empty target, so we cannot write straight into /opt).
+  - path: /opt/netbox-seed/docker-compose.override.yml
+    permissions: '0644'
+    content: |
+      ${indent(6, override_conf)}
+
+  # Async bring-up: clone + pull + up the stack, ensure the admin user + pinned v1 token via
+  # manage.py, then idempotently ensure the virtualization cluster-type + cluster exist. Every step
+  # is idempotent and the whole thing is retried, so a flaky registry pull just tries again.
+  - path: /usr/local/sbin/netbox-stack.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -uo pipefail
+      NETBOX_URL="http://localhost:${netbox_port}"
+      TOKEN="${netbox_api_token}"
+      auth=(-H "Authorization: Token $TOKEN" -H "Content-Type: application/json" -H "Accept: application/json")
+
+      provision() {
+        set -e
+
+        # 1. Clone netbox-docker + drop the override in place, then bring the stack up.
+        if [ ! -d /opt/netbox-docker/.git ]; then
+          git clone --depth 1 --branch ${netbox_docker_ref} https://github.com/netbox-community/netbox-docker.git /opt/netbox-docker
+        fi
+        cp /opt/netbox-seed/docker-compose.override.yml /opt/netbox-docker/docker-compose.override.yml
+        cd /opt/netbox-docker
+        docker compose pull
+        docker compose up -d
+
+        # 2. Wait until NetBox responds (200/401/403 all mean the app is up + migrations are done).
+        for _ in $(seq 1 180); do
+          code="$(curl -s -o /dev/null -w '%%{http_code}' "$NETBOX_URL/api/status/" || true)"
+          case "$code" in 200|401|403) break ;; esac
+          sleep 5
+        done
+
+        # 3. Ensure the admin superuser + the pinned v1 API token exist (manage.py, no auth needed).
+        docker compose exec -T netbox /opt/netbox/netbox/manage.py shell <<'PYEOF'
+      from django.apps import apps
+      from django.contrib.auth import get_user_model
+      Token = apps.get_model("users", "Token")
+      U = get_user_model()
+      u = U.objects.filter(username="${superuser_name}").first()
+      if u is None:
+          u = U.objects.create_superuser("${superuser_name}", "${superuser_name}@example.com", "${superuser_password}")
+      Token.objects.get_or_create(key="${netbox_api_token}", defaults={"user": u})
+      print("netbox-provisioned")
+      PYEOF
+
+        # 4. cluster-type "${cluster_type}"
+        ct_id="$(curl -sf "$${auth[@]}" "$NETBOX_URL/api/virtualization/cluster-types/?name=${cluster_type}" | jq -r '.results[0].id // empty')"
+        if [ -z "$ct_id" ]; then
+          ct_id="$(curl -sf "$${auth[@]}" -X POST "$NETBOX_URL/api/virtualization/cluster-types/" \
+            -d '{"name":"${cluster_type}","slug":"${cluster_type_slug}"}' | jq -r '.id')"
+        fi
+
+        # 5. cluster "${cluster_name}"
+        cl_id="$(curl -sf "$${auth[@]}" "$NETBOX_URL/api/virtualization/clusters/?name=${cluster_name}" | jq -r '.results[0].id // empty')"
+        if [ -z "$cl_id" ]; then
+          curl -sf "$${auth[@]}" -X POST "$NETBOX_URL/api/virtualization/clusters/" \
+            -d "{\"name\":\"${cluster_name}\",\"type\":$ct_id}" >/dev/null
+        fi
+
+        # 6. site "${site_name}" — NetBox requires a site before any DCIM device, so seed a default
+        # one to make /dcim/devices/ usable out of the box.
+        site_id="$(curl -sf "$${auth[@]}" "$NETBOX_URL/api/dcim/sites/?name=${site_name}" | jq -r '.results[0].id // empty')"
+        if [ -z "$site_id" ]; then
+          curl -sf "$${auth[@]}" -X POST "$NETBOX_URL/api/dcim/sites/" \
+            -d '{"name":"${site_name}","slug":"${site_slug}","status":"active"}' >/dev/null
+        fi
+
+        # 7. Seed the base data model (org hierarchy, DCIM library, host device, IPAM, tenancy) so a
+        # fresh NetBox is immediately useful. Idempotent; runs inside this retry loop. See
+        # specs/netbox-data.md. NETBOX_URL + TOKEN are exported for the seed script. The explicit
+        # `|| return 1` is required: provision() is invoked as `if provision` below, which suppresses
+        # its `set -e`, so a bare seed call would let a failed seed still fall through to `touch done`.
+        export NETBOX_URL TOKEN
+        /usr/local/sbin/netbox-seed.sh || return 1
+
+        mkdir -p /var/lib/netbox-bootstrap
+        touch /var/lib/netbox-bootstrap/done
+      }
+
+      # Retry the whole (idempotent) provisioning — transient registry/network errors just try again.
+      for attempt in $(seq 1 12); do
+        if provision; then
+          echo "netbox provisioning complete (attempt $attempt)"
+          exit 0
+        fi
+        echo "netbox provisioning attempt $attempt failed; retrying in 20s" >&2
+        sleep 20
+      done
+      echo "netbox provisioning failed after retries" >&2
+      exit 1
+
+  # Base data-model seed — called at the end of netbox-stack.sh's provision() (so it inherits the
+  # same retry loop, auth, and marker). Idempotent: every object is GET-by-key then POST-if-absent
+  # via the `ensure` helper; PATCHes attach relationships. NETBOX_URL + TOKEN come from the parent.
+  # See specs/netbox-data.md. NetBox 4.1 API: Device uses `role` (not device_role); Cluster uses
+  # `site`; VMs accept `device`; Rack Types (/api/dcim/rack-types/) are a 4.1 feature.
+  - path: /usr/local/sbin/netbox-seed.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -uo pipefail
+      auth=(-H "Authorization: Token $${TOKEN}" -H "Content-Type: application/json" -H "Accept: application/json")
+
+      # ensure PATH QUERY BODY -> echoes the object id. GET .../?QUERY; if no match, POST BODY. Fails
+      # (nonzero) if no id can be obtained, so the caller's `set -e` retries the whole seed.
+      ensure() {
+        local id
+        id="$(curl -sf "$${auth[@]}" "$${NETBOX_URL}$${1}?$${2}" | jq -r '.results[0].id // empty')"
+        if [ -z "$${id}" ]; then
+          id="$(curl -sf "$${auth[@]}" -X POST "$${NETBOX_URL}$${1}" -d "$${3}" | jq -r '.id // empty')"
+        fi
+        [ -n "$${id}" ] || return 1
+        echo "$${id}"
+      }
+
+      seed() {
+        set -e
+
+        # --- organization: region -> site group -> tenant, attached to the existing site --------
+        region_id="$(ensure /api/dcim/regions/ "slug=${region_slug}" '{"name":"${region}","slug":"${region_slug}"}')"
+        group_id="$(ensure /api/dcim/site-groups/ "slug=${site_group_slug}" '{"name":"${site_group}","slug":"${site_group_slug}"}')"
+        tenant_id="$(ensure /api/tenancy/tenants/ "slug=${tenant_slug}" '{"name":"${tenant}","slug":"${tenant_slug}"}')"
+
+        site_id="$(curl -sf "$${auth[@]}" "$${NETBOX_URL}/api/dcim/sites/?slug=${site_slug}" | jq -r '.results[0].id // empty')"
+        curl -sf "$${auth[@]}" -X PATCH "$${NETBOX_URL}/api/dcim/sites/$${site_id}/" \
+          -d "{\"region\":$${region_id},\"group\":$${group_id},\"tenant\":$${tenant_id}}" >/dev/null
+
+        location_id="$(ensure /api/dcim/locations/ "slug=${location_slug}" "{\"name\":\"${location}\",\"slug\":\"${location_slug}\",\"site\":$${site_id}}")"
+
+        # --- DCIM library: manufacturers, platform, device roles ---------------------------------
+        mfr_host_id="$(ensure /api/dcim/manufacturers/ "slug=${host_manufacturer_slug}" '{"name":"${host_manufacturer}","slug":"${host_manufacturer_slug}"}')"
+        mfr_canon_id="$(ensure /api/dcim/manufacturers/ "slug=canonical" '{"name":"Canonical","slug":"canonical"}')"
+        platform_id="$(ensure /api/dcim/platforms/ "slug=ubuntu-24-04" "{\"name\":\"Ubuntu 24.04\",\"slug\":\"ubuntu-24-04\",\"manufacturer\":$${mfr_canon_id}}")"
+        role_hv_id="$(ensure /api/dcim/device-roles/ "slug=hypervisor" '{"name":"Hypervisor","slug":"hypervisor","color":"3f51b5","vm_role":false}')"
+        ensure /api/dcim/device-roles/ "slug=server" '{"name":"Server","slug":"server","color":"2196f3","vm_role":true}' >/dev/null
+
+        # --- rack chain: rack role -> rack type (4.1) -> rack ------------------------------------
+        rackrole_id="$(ensure /api/dcim/rack-roles/ "slug=lab" '{"name":"Lab","slug":"lab","color":"9e9e9e"}')"
+        racktype_id="$(ensure /api/dcim/rack-types/ "slug=lab-rack" "{\"manufacturer\":$${mfr_host_id},\"model\":\"Lab Rack\",\"slug\":\"lab-rack\",\"form_factor\":\"4-post-frame\",\"width\":19,\"u_height\":42}")"
+        rack_id="$(ensure /api/dcim/racks/ "name=${rack_name}" "{\"name\":\"${rack_name}\",\"site\":$${site_id},\"location\":$${location_id},\"role\":$${rackrole_id},\"rack_type\":$${racktype_id},\"status\":\"active\"}")"
+
+        # --- attach the cluster to the site (NetBox 4.1 uses the `site` field on clusters) -------
+        cluster_id="$(curl -sf "$${auth[@]}" "$${NETBOX_URL}/api/virtualization/clusters/?name=${cluster_name}" | jq -r '.results[0].id // empty')"
+        curl -sf "$${auth[@]}" -X PATCH "$${NETBOX_URL}/api/virtualization/clusters/$${cluster_id}/" \
+          -d "{\"site\":$${site_id}}" >/dev/null
+
+        # --- the headline: a real DCIM Device for the Multipass host (populates /dcim/devices/). It
+        # is assigned to the cluster so VMs may reference it as their `device` (the host they run
+        # on); NetBox rejects that link otherwise. PATCH covers a device created before this fix. --
+        dtype_id="$(ensure /api/dcim/device-types/ "slug=${host_model_slug}" "{\"manufacturer\":$${mfr_host_id},\"model\":\"${host_model}\",\"slug\":\"${host_model_slug}\",\"u_height\":1}")"
+        host_id="$(ensure /api/dcim/devices/ "name=${host_device_name}" "{\"name\":\"${host_device_name}\",\"device_type\":$${dtype_id},\"role\":$${role_hv_id},\"site\":$${site_id},\"location\":$${location_id},\"rack\":$${rack_id},\"position\":1,\"face\":\"front\",\"status\":\"active\",\"cluster\":$${cluster_id}}")"
+        curl -sf "$${auth[@]}" -X PATCH "$${NETBOX_URL}/api/dcim/devices/$${host_id}/" \
+          -d "{\"cluster\":$${cluster_id}}" >/dev/null
+
+        # --- register the server itself as a VM running on the host device -----------------------
+        SERVER_IP="$(ip -4 route get 1.1.1.1 | awk '{print $7; exit}')"
+        svm_id="$(ensure /api/virtualization/virtual-machines/ "name=${server_name}" "{\"name\":\"${server_name}\",\"cluster\":$${cluster_id},\"device\":$${host_id},\"platform\":$${platform_id},\"status\":\"active\"}")"
+        sif_id="$(ensure /api/virtualization/interfaces/ "virtual_machine_id=$${svm_id}&name=eth0" "{\"virtual_machine\":$${svm_id},\"name\":\"eth0\"}")"
+        sip_id="$(ensure /api/ipam/ip-addresses/ "address=$${SERVER_IP}/24" "{\"address\":\"$${SERVER_IP}/24\",\"assigned_object_type\":\"virtualization.vminterface\",\"assigned_object_id\":$${sif_id},\"status\":\"active\"}")"
+        curl -sf "$${auth[@]}" -X PATCH "$${NETBOX_URL}/api/virtualization/virtual-machines/$${svm_id}/" \
+          -d "{\"primary_ip4\":$${sip_id}}" >/dev/null
+
+        # --- IPAM: RIR -> aggregate -> vlan -> prefix (+ gateway), derived from the live subnet ---
+        SUBNET="$${SERVER_IP%.*}.0/24"
+        GW="$${SERVER_IP%.*}.1"
+        AGG="$(echo "$${SERVER_IP}" | cut -d. -f1-2).0.0/16"
+        rir_id="$(ensure /api/ipam/rirs/ "slug=rfc1918" '{"name":"RFC1918","slug":"rfc1918","is_private":true}')"
+        ensure /api/ipam/aggregates/ "prefix=$${AGG}" "{\"prefix\":\"$${AGG}\",\"rir\":$${rir_id}}" >/dev/null
+        vlan_id="$(ensure /api/ipam/vlans/ "vid=100" "{\"vid\":100,\"name\":\"lab\",\"site\":$${site_id},\"status\":\"active\"}")"
+        ensure /api/ipam/prefixes/ "prefix=$${SUBNET}" "{\"prefix\":\"$${SUBNET}\",\"site\":$${site_id},\"vlan\":$${vlan_id},\"status\":\"active\"}" >/dev/null
+        ensure /api/ipam/ip-addresses/ "address=$${GW}/24" "{\"address\":\"$${GW}/24\",\"status\":\"active\",\"dns_name\":\"gateway\"}" >/dev/null
+
+        # --- tenancy: contact group -> role -> contact, assigned to the site ---------------------
+        cgroup_id="$(ensure /api/tenancy/contact-groups/ "slug=lab" '{"name":"Lab","slug":"lab"}')"
+        crole_id="$(ensure /api/tenancy/contact-roles/ "slug=administrator" '{"name":"Administrator","slug":"administrator"}')"
+        contact_id="$(ensure /api/tenancy/contacts/ "name=Lab%20Admin" "{\"name\":\"Lab Admin\",\"group\":$${cgroup_id}}")"
+        ca_id="$(curl -sf "$${auth[@]}" "$${NETBOX_URL}/api/tenancy/contact-assignments/?contact_id=$${contact_id}&object_type=dcim.site&object_id=$${site_id}" | jq -r '.results[0].id // empty')"
+        if [ -z "$${ca_id}" ]; then
+          curl -sf "$${auth[@]}" -X POST "$${NETBOX_URL}/api/tenancy/contact-assignments/" \
+            -d "{\"object_type\":\"dcim.site\",\"object_id\":$${site_id},\"contact\":$${contact_id},\"role\":$${crole_id},\"priority\":\"primary\"}" >/dev/null
+        fi
+
+        mkdir -p /var/lib/netbox-bootstrap
+        touch /var/lib/netbox-bootstrap/seed-done
+      }
+
+      seed
+
+  - path: /etc/systemd/system/netbox-stack.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Bring up the netbox-docker stack and bootstrap the virtualization cluster
+      After=network-online.target docker.service
+      Wants=network-online.target
+      Requires=docker.service
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/netbox-stack.sh
+      RemainAfterExit=yes
+      TimeoutStartSec=0
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  # Enforce UTC late — Multipass injects the host timezone during first boot and can beat the
+  # declarative timezone key; runcmd runs after config modules, so it wins (see specs/ntp.md).
+  - timedatectl set-timezone Etc/UTC
+  - systemctl enable --now docker
+  - systemctl daemon-reload
+  # Start the stack asynchronously so cloud-init completes inside the 300s launch window.
+  - systemctl enable netbox-stack.service
+  - systemctl start --no-block netbox-stack.service

@@ -19,12 +19,13 @@ just open centralized_monitoring --full   # + every enabled /metrics endpoint
 
 SSH onto any VM: `just ssh <cluster> <role>` (login user is `ubuntu`, key-based).
 
-**Verify the stack from the laptop:** the observability CLIs (`just grafana-check`,
-`just prometheus-check`, `just openobserve-check`, or all three via `just verify-api`)
-hit these services' HTTP APIs and default to the credentials below. Override per service
-with `GRAFANA_USER`/`GRAFANA_PASSWORD`, `OPENOBSERVE_USER`/`OPENOBSERVE_PASSWORD`
-(or `--user`/`--password`). See `specs/cli-grafana.md`, `specs/cli-prometheus.md`,
-`specs/cli-openobserve.md`.
+**Verify the stack from the laptop:** the service CLIs hit these APIs and default to the
+credentials below. `centralized_monitoring`: `just grafana-check`, `just prometheus-check`,
+`just openobserve-check` (override with `GRAFANA_USER`/`GRAFANA_PASSWORD`,
+`OPENOBSERVE_USER`/`OPENOBSERVE_PASSWORD`, or `--user`/`--password`). `centralized_netbox`:
+`just netbox-check` (override with `NETBOX_URL`/`NETBOX_TOKEN`, or `--server-url`/`--token`).
+`just verify-api <cluster>` runs whichever CLIs a cluster ships. See `specs/cli-grafana.md`,
+`specs/cli-prometheus.md`, `specs/cli-openobserve.md`, `specs/cli-netbox.md`.
 
 ---
 
@@ -93,6 +94,34 @@ tofu variable.
 
 ---
 
+## centralized_netbox
+
+### Logins (real credentials)
+
+| Service | URL / port | Username | Password / token |
+|---|---|---|---|
+| NetBox (UI + API) | `http://<server>:8000` | `admin` | `admin` |
+| NetBox API token | `Authorization: Token <token>` | — | `0123456789abcdef0123456789abcdef01234567` |
+| SSH (all VMs) | — | `ubuntu` | *key-only, no password* |
+
+- **NetBox** — `admin` / `admin` superuser, created on first boot by the server bootstrap
+  (`netbox-stack.sh`) via `manage.py` — the pinned image does not honor netbox-docker's
+  `SUPERUSER_*` env vars. Override with `-var netbox_superuser_name=...` /
+  `-var netbox_superuser_password=...`.
+- **API token** — a pinned 40-char **v1** token (`var.netbox_api_token`) the bootstrap attaches to
+  the admin user; the client self-registration, the host `netbox_cli`, and the testinfra suite all
+  authenticate with it (`Authorization: Token <token>`). It is exposed via
+  `tofu output netbox_api_token` on purpose. Override with `-var netbox_api_token=...` (must be 40
+  lowercase hex). NetBox is pinned to **v4.1** (`netbox_docker_ref = 3.0.2`) because 4.2+ hashed
+  v2/Bearer tokens can't be set to a known value.
+
+### No login required (open by design)
+
+Nothing — NetBox requires authentication for both the UI and the API (even `/api/status/`), and the
+client VM runs no listening service. Everything is reached with the admin login or the API token above.
+
+---
+
 ## Notes
 
 - **Grafana password source differs by cluster.** `centralized_monitoring` uses the
@@ -103,3 +132,7 @@ tofu variable.
 - **Plaintext creds also land in generated artifacts.** The fully-rendered cloud-init in
   each cluster's `.rendered/*.yaml` and the `terraform.tfstate` contain these passwords in
   cleartext. Both are gitignored — keep it that way; don't commit them.
+- **The NetBox API token is committed on purpose.** Unlike the above, `centralized_netbox`'s
+  `terraform.tfvars` (checked in) carries the pinned `netbox_api_token` so the lab is
+  reproducible with zero setup. It is deliberately non-secret and lab-only — never reuse it, and
+  generate a real token from a secret store when promoting to Proxmox.

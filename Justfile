@@ -128,23 +128,29 @@ heimdall-add CLUSTER TITLE URL:
 heimdall-rm CLUSTER TITLE:
     uv run {{cluster_root}}/{{CLUSTER}}/scripts/heimdall_cli.py remove --chdir {{cluster_root}}/{{CLUSTER}} --title {{quote(TITLE)}}
 
-# --- observability verification CLIs (see specs/cli-*.md) --------------------
-# Host-side API introspection + verification for Grafana/Prometheus/OpenObserve. Each
-# resolves the server from `tofu output` (VMs must be up) or accepts --server-url. The
+# --- service verification CLIs (see specs/cli-*.md) --------------------------
+# Host-side API introspection + verification for Grafana/Prometheus/OpenObserve (monitoring)
+# and NetBox. Each resolves the server from `tofu output` (VMs must be up) or accepts --server-url. The
 # `*-check` recipes exit nonzero on failure (CI-friendly). --cluster precedes the
 # subcommand because global options live on the CLI's callback.
 
-# run all three services' `check` (health/datasources/targets/streams):  just verify-api centralized_monitoring
+# run every service CLI's `check` for a cluster (auto-discovered):  just verify-api centralized_monitoring
+# Iterates the cluster's scripts/*_cli.py, skipping helpers (_*) and heimdall_cli (no `check`
+# subcommand — it manages dashboard tiles). So centralized_monitoring runs grafana/prometheus/
+# openobserve and centralized_netbox runs netbox — no per-cluster edit needed.
 verify-api CLUSTER:
     #!/usr/bin/env bash
     set -uo pipefail
+    shopt -s nullglob
     rc=0
-    for svc in grafana prometheus openobserve; do
-      echo "=== $svc check: {{CLUSTER}} ==="
+    for cli in {{cluster_root}}/{{CLUSTER}}/scripts/*_cli.py; do
+      name="$(basename "$cli" .py)"
+      case "$name" in _*|heimdall_cli) continue ;; esac
+      echo "=== $name check: {{CLUSTER}} ==="
       # OpenObserve additionally asserts ingestion is live (metrics via remote_write, logs via OTel).
       extra=""
-      [ "$svc" = openobserve ] && extra="--require-metrics --require-logs"
-      uv run {{cluster_root}}/{{CLUSTER}}/scripts/${svc}_cli.py --cluster {{CLUSTER}} check $extra || rc=1
+      [ "$name" = openobserve_cli ] && extra="--require-metrics --require-logs"
+      uv run "$cli" --cluster {{CLUSTER}} check $extra || rc=1
     done
     exit "$rc"
 
@@ -227,6 +233,22 @@ vaultwarden-check CLUSTER:
 # assert a Traefik-served host's cert (chains to step-ca root, or is LE staging):  just tls-check centralized_pki <services-ip> --sni vault.<domain>
 tls-check CLUSTER HOST *ARGS:
     uv run {{cluster_root}}/{{CLUSTER}}/scripts/tls_cli.py --cluster {{CLUSTER}} check {{HOST}} {{ARGS}}
+
+# NetBox health + auth + self-registration, exit nonzero on failure:  just netbox-check centralized_netbox
+netbox-check CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/netbox_cli.py --cluster {{CLUSTER}} check
+
+# NetBox versions + health (GET /api/status/):  just netbox-status centralized_netbox
+netbox-status CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/netbox_cli.py --cluster {{CLUSTER}} status
+
+# list registered virtual machines:  just netbox-vms centralized_netbox
+netbox-vms CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/netbox_cli.py --cluster {{CLUSTER}} vms
+
+# list virtualization clusters:  just netbox-clusters centralized_netbox
+netbox-clusters CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/netbox_cli.py --cluster {{CLUSTER}} clusters
 
 # import the OpenObserve log dashboards (idempotent; see specs/openobserve-dashboards.md):  just openobserve-dashboards centralized_monitoring
 # afterwards `... check --require-dashboards` asserts they resolve (not in verify-api since import is on-demand).
