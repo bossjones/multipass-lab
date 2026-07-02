@@ -105,10 +105,11 @@ self-registration, the host `netbox_cli`, and the testinfra suite.
 
 ### Self-registration (client)
 
-`netbox-register.sh` (run once by `netbox-register.service`, idempotent so re-runs PATCH rather
-than duplicate):
+`netbox-register.sh` (run by `netbox-register.service`, idempotent + retry-wrapped so re-runs
+PATCH rather than duplicate and a transient error or a not-yet-ready server just tries again):
 
-1. wait for `http://<netbox_ip>:8000/api/status/` to return 200,
+1. wait for **authenticated** `http://<netbox_ip>:8000/api/status/` to return 200 — the server
+   provisions the pinned token during its own bootstrap, so this also waits out the server bring-up,
 2. resolve this VM's hostname and primary IPv4 (`hostname` + `ip -4 route get`),
 3. resolve the cluster id (`GET /api/virtualization/clusters/?name=centralized-netbox`),
 4. upsert a **virtual-machine** (`name`, `cluster`, `status=active`) → capture id,
@@ -150,8 +151,9 @@ machine" rung verified with **pytest + testinfra** and the **`netbox_cli.py chec
 
 - **Layer 0/1 — hermetic (`just check`, no VMs)**: `tofu fmt -check`, `tofu validate`, and
   `tofu test -test-directory=tests/tofu` using `mock_provider "multipass"` (plan-only). Asserts
-  sizing/image/names and that the rendered cloud-init carries the netbox-docker override (pinned
-  token, `:8000`), the cluster bootstrap, the self-registration REST calls, and the UTC/NTP block.
+  sizing/image/names and that the rendered cloud-init carries the netbox-docker bring-up
+  (`:8000` override + `docker compose`), the token + cluster bootstrap (the pinned token via
+  `manage.py`, cluster-type/cluster via REST), the self-registration REST calls, and the UTC/NTP block.
 - **Layer 1 — hermetic CLI (`uv run pytest` in `tests/netbox`)**: drives `netbox_cli.py` against
   a `pytest-httpserver` fake NetBox API via `typer.testing.CliRunner` + `--server-url`/`--token`
   (never touches `tofu`). Covers `check` pass and every failure path (unreachable, 401, cluster
