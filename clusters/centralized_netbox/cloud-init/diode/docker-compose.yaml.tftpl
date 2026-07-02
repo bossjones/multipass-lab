@@ -1,0 +1,86 @@
+# Diode server stack (community/self-hosted) — a SEPARATE compose project from netbox-docker,
+# brought up by netbox-stack.sh under /opt/diode. Image tags + published ports are baked by
+# OpenTofu; the rest of the config comes from the rendered .env (env_file). Only the nginx ingress
+# and the per-service Prometheus /metrics ports are published to the host. See specs/netbox-discovery.md.
+name: diode
+
+services:
+  ingress-nginx:
+    image: nginx:latest
+    restart: unless-stopped
+    depends_on: [diode-ingester, diode-reconciler, diode-auth]
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      # gRPC ingestion + HTTP auth are multiplexed on :80 -> host ${diode_port}.
+      - "${diode_port}:80"
+
+  diode-ingester:
+    image: netboxlabs/diode-ingester:${diode_tag}
+    restart: unless-stopped
+    env_file: [.env]
+    depends_on: [redis, diode-auth]
+    ports:
+      - "${diode_metrics_port}:9090"
+
+  diode-reconciler:
+    image: netboxlabs/diode-reconciler:${diode_tag}
+    restart: unless-stopped
+    env_file: [.env]
+    depends_on: [redis]
+    ports:
+      - "${diode_metrics_port + 1}:9090"
+
+  diode-auth:
+    image: netboxlabs/diode-auth:${diode_tag}
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      HTTP_PORT: "8080"
+    depends_on: [hydra]
+    ports:
+      - "${diode_metrics_port + 2}:9090"
+
+  diode-auth-bootstrap:
+    image: netboxlabs/diode-auth:${diode_tag}
+    restart: "no"
+    env_file: [.env]
+    depends_on: [hydra]
+    volumes:
+      - ./oauth2:/etc/config/oauth2:ro
+    entrypoint: ["/etc/config/oauth2/bootstrap-clients.sh"]
+
+  redis:
+    image: redis/redis-stack-server:latest
+    restart: unless-stopped
+    env_file: [.env]
+    command: ["redis-server", "--port", "6378", "--requirepass", "$${REDIS_PASSWORD}", "--appendonly", "yes"]
+    volumes:
+      - diode-redis-data:/data
+
+  postgres:
+    image: docker.io/postgres:16-alpine
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      POSTGRES_MULTIPLE_DATABASES: "diode,hydra"
+    volumes:
+      - diode-postgres-data:/var/lib/postgresql/data
+
+  hydra:
+    image: oryd/hydra:v26.2.0
+    restart: unless-stopped
+    env_file: [.env]
+    command: ["serve", "all", "--dev"]
+    depends_on: [hydra-migrate]
+
+  hydra-migrate:
+    image: oryd/hydra:v26.2.0
+    restart: "no"
+    env_file: [.env]
+    command: ["migrate", "sql", "-e", "--yes"]
+    depends_on: [postgres]
+
+volumes:
+  diode-redis-data:
+  diode-postgres-data:

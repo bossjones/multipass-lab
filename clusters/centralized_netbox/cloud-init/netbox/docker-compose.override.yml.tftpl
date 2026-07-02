@@ -2,6 +2,10 @@
 # Publishes NetBox on the host and skips netbox-docker's own superuser creation: the bootstrap
 # (netbox-stack.sh) creates the admin user + the pinned v1 API token via manage.py, so the setup
 # is deterministic and independent of the image's env-var behaviour.
+#
+# When enable_discovery is on, netbox/netbox-worker/netbox-housekeeping run a locally-built plugin
+# image (the netbox-docker plugin build) that netbox-stack.sh builds before startup.
+# See specs/netbox-discovery.md.
 services:
   netbox:
     ports:
@@ -9,3 +13,16 @@ services:
     environment:
       SKIP_SUPERUSER: "true"
       ALLOWED_HOSTS: "*"
+%{ if enable_discovery ~}
+    image: netbox:latest-plugins
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: Dockerfile-Plugins
+  netbox-worker:
+    image: netbox:latest-plugins
+    pull_policy: never
+  netbox-housekeeping:
+    image: netbox:latest-plugins
+    pull_policy: never
+%{ endif ~}

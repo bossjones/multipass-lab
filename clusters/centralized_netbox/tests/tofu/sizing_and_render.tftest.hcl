@@ -305,3 +305,159 @@ run "web_urls_core_and_all" {
     error_message = "registered_vm_name must be the client VM name"
   }
 }
+
+# --- discovery: OFF (default) leaves the cluster untouched --------------------
+
+run "discovery_off_no_wiring" {
+  command = plan
+
+  # No agent VM, no Diode/plugin strings, default server sizing + NetBox 4.1 pin.
+  assert {
+    condition     = length(multipass_instance.agent) == 0
+    error_message = "no agent VM when enable_discovery is false"
+  }
+  assert {
+    condition     = output.discovery_enabled == false
+    error_message = "discovery_enabled must be false by default"
+  }
+  assert {
+    condition     = multipass_instance.server.cpus == 2
+    error_message = "server stays at default 2 vCPU when discovery is off"
+  }
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "netbox_diode_plugin")
+    error_message = "server cloud-init must NOT wire the Diode plugin when discovery is off"
+  }
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "diode-ingester")
+    error_message = "server cloud-init must NOT deploy the Diode stack when discovery is off"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "netbox-community/netbox-docker.git")
+    error_message = "off-path still deploys netbox-docker unchanged"
+  }
+}
+
+# --- discovery: ON wires the plugin + Diode + agent --------------------------
+
+run "discovery_on_wires_everything" {
+  command = plan
+
+  variables {
+    enable_discovery = true
+  }
+
+  # Server bumped to the heavier discovery footprint.
+  assert {
+    condition     = multipass_instance.server.cpus == 6
+    error_message = "server must auto-bump to 6 vCPU when discovery is on"
+  }
+  assert {
+    condition     = multipass_instance.server.memory == "10G"
+    error_message = "server must auto-bump to 10G when discovery is on"
+  }
+  assert {
+    condition     = multipass_instance.server.disk == "50G"
+    error_message = "server must auto-bump to 50G when discovery is on"
+  }
+
+  # The agent VM exists and carries the cluster name.
+  assert {
+    condition     = length(multipass_instance.agent) == 1
+    error_message = "exactly one agent VM when enable_discovery is true"
+  }
+  assert {
+    condition     = multipass_instance.agent[0].name == "centralized-netbox-agent"
+    error_message = "agent VM must carry the name_prefix"
+  }
+
+  # NetBox side: the plugin is installed + configured and the custom image is built.
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "netbox_diode_plugin")
+    error_message = "server must install + configure the diode-netbox-plugin"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "PLUGINS")
+    error_message = "server must set PLUGINS/PLUGINS_CONFIG"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "Dockerfile-Plugins")
+    error_message = "override must build the custom plugin image"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "docker compose build")
+    error_message = "netbox-stack must build the plugin image when discovery is on"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "migrate netbox_diode_plugin")
+    error_message = "netbox-stack must run the plugin migrations"
+  }
+
+  # Diode server stack: services + pinned OAuth2 clients.
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "diode-ingester")
+    error_message = "Diode compose must include the ingester"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "diode-reconciler")
+    error_message = "Diode compose must include the reconciler"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "\"client_id\": \"diode-ingest\"")
+    error_message = "Diode credentials must include the diode-ingest client"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "\"client_id\": \"diode-to-netbox\"")
+    error_message = "Diode credentials must include the diode-to-netbox client"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "\"client_id\": \"netbox-to-diode\"")
+    error_message = "Diode credentials must include the netbox-to-diode client"
+  }
+
+  # Agent: orb-agent config targets Diode over gRPC and scans via network_discovery.
+  assert {
+    condition     = strcontains(local_file.agent_ci[0].content, "network_discovery")
+    error_message = "agent must run the network_discovery backend"
+  }
+  assert {
+    condition     = strcontains(local_file.agent_ci[0].content, ":8080/diode")
+    error_message = "agent must target the Diode gRPC ingress on :8080/diode"
+  }
+  assert {
+    condition     = strcontains(local_file.agent_ci[0].content, "diode-ingest")
+    error_message = "agent must authenticate as the diode-ingest OAuth2 client"
+  }
+  assert {
+    condition     = strcontains(local_file.agent_ci[0].content, "netboxlabs/orb-agent")
+    error_message = "agent must run the orb-agent image"
+  }
+  assert {
+    condition     = strcontains(local_file.agent_ci[0].content, "/var/lib/orb-agent/discovery-done")
+    error_message = "agent must drop a readiness marker for testinfra"
+  }
+
+  # Rendered cloud-init must stay valid YAML with all the spliced Diode config.
+  assert {
+    condition     = can(yamldecode(local_file.server_ci.content))
+    error_message = "discovery-on server cloud-init must be valid YAML"
+  }
+  assert {
+    condition     = can(yamldecode(local_file.agent_ci[0].content))
+    error_message = "agent cloud-init must be valid YAML"
+  }
+
+  # Outputs reflect discovery.
+  assert {
+    condition     = output.discovery_enabled == true
+    error_message = "discovery_enabled must be true"
+  }
+  assert {
+    condition     = output.diode_ingest_client_id == "diode-ingest"
+    error_message = "diode_ingest_client_id output must be diode-ingest"
+  }
+  assert {
+    condition     = length(output.web_urls.all) == 3
+    error_message = "web_urls.all must add the Diode /metrics URL when discovery is on"
+  }
+}

@@ -1,0 +1,14 @@
+# netbox-docker loads configuration/plugins.py — this enables the Diode plugin. __DIODE_HOST__ is
+# replaced with the server VM's runtime IP by netbox-stack.sh before the image is built (the plugin,
+# inside the NetBox container, reaches Diode's nginx over the host IP since they are separate compose
+# projects). netbox_to_diode_client_secret is the pinned LAB `netbox-to-diode` OAuth2 secret.
+# See specs/netbox-discovery.md.
+PLUGINS = ["netbox_diode_plugin"]
+
+PLUGINS_CONFIG = {
+    "netbox_diode_plugin": {
+        "diode_target_override": "grpc://__DIODE_HOST__:${diode_port}/diode",
+        "diode_username": "diode",
+        "netbox_to_diode_client_secret": "${netbox_to_diode_client_secret}",
+    },
+}

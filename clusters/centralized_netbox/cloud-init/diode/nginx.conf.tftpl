@@ -1,0 +1,29 @@
+# Diode ingress nginx — multiplexes gRPC ingestion and HTTP auth on :80 (published to the host on
+# the Diode port set in the compose). Representative community config; the exact upstreams follow
+# the diode-server release. See specs/netbox-discovery.md.
+worker_processes auto;
+events { worker_connections 1024; }
+
+http {
+  # gRPC (HTTP/2) ingestion -> the ingester.
+  server {
+    listen 80 http2;
+
+    location /diode {
+      grpc_pass grpc://diode-ingester:8081;
+    }
+
+    location /diode.v1.IngesterService {
+      grpc_pass grpc://diode-ingester:8081;
+    }
+
+    # HTTP OAuth2 token issue/introspect -> diode-auth.
+    location /token {
+      proxy_pass http://diode-auth:8080;
+    }
+
+    location / {
+      grpc_pass grpc://diode-ingester:8081;
+    }
+  }
+}

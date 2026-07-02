@@ -53,6 +53,7 @@ class Options:
     host_device_name: str | None
     rack_name: str | None
     prefix: str | None
+    discovery: bool
     as_json: bool
     timeout: float
     insecure: bool
@@ -68,6 +69,7 @@ class Ctx:
     host_device_name: str
     rack_name: str
     prefix: str | None
+    discovery_enabled: bool
     as_json: bool
     timeout: float
     insecure: bool
@@ -107,6 +109,9 @@ def _main(
     prefix: str = typer.Option(
         None, "--prefix", help="expected IPAM prefix (else tofu; any prefix if unresolved)"
     ),
+    discovery: bool = typer.Option(
+        False, "--discovery", help="assert the opt-in Diode/orb-agent footprint (plugin + discovered IPs); else resolved from tofu output"
+    ),
     as_json: bool = typer.Option(False, "--json", help="machine-readable JSON output"),
     timeout: float = typer.Option(10.0, "--timeout"),
     insecure: bool = typer.Option(False, "--insecure"),
@@ -114,7 +119,7 @@ def _main(
     """NetBox verification CLI."""
     ctx.obj = Options(
         cluster, server_url, token, cluster_name, vm_name, site_name,
-        host_device_name, rack_name, prefix, as_json, timeout, insecure,
+        host_device_name, rack_name, prefix, discovery, as_json, timeout, insecure,
     )
 
 
@@ -127,6 +132,7 @@ def resolve(opts: Options) -> Ctx:
     host_device_name = opts.host_device_name
     rack_name = opts.rack_name
     prefix = opts.prefix
+    discovery_enabled = opts.discovery
 
     # tofu mode: no explicit URL -> resolve everything from `tofu output -json`.
     if base_url is None:
@@ -144,6 +150,8 @@ def resolve(opts: Options) -> Ctx:
         host_device_name = host_device_name or val("netbox_host_device_name")
         rack_name = rack_name or val("netbox_rack_name")
         prefix = prefix or val("netbox_prefix")
+        # --discovery forces the assertions on; otherwise follow the deployed footprint.
+        discovery_enabled = discovery_enabled or bool(val("discovery_enabled"))
 
     if base_url is None:
         _die("could not resolve NetBox URL — pass --server-url or run from a cluster dir")
@@ -157,6 +165,7 @@ def resolve(opts: Options) -> Ctx:
         host_device_name=host_device_name or DEFAULT_HOST_DEVICE,
         rack_name=rack_name or DEFAULT_RACK_NAME,
         prefix=prefix or None,
+        discovery_enabled=discovery_enabled,
         as_json=opts.as_json,
         timeout=opts.timeout,
         insecure=opts.insecure,
@@ -290,6 +299,54 @@ def prefixes(ctx: typer.Context):
     _emit(c, rows, title="ipam prefixes")
 
 
+# NetBox reports installed plugins in /api/status/ under "plugins": {name: version}.
+DIODE_PLUGIN = "netbox_diode_plugin"
+
+
+@app.command()
+def discovery(ctx: typer.Context):
+    """Discovery footprint (opt-in): Diode plugin status + IP addresses (the discovered artifacts)."""
+    c = resolve(ctx.obj)
+    import httpx
+
+    plugins = {}
+    try:
+        resp = httpx.get(
+            f"{c.base_url}/api/status/",
+            headers=_status_headers(c),
+            timeout=c.timeout,
+            verify=not c.insecure,
+        )
+        resp.raise_for_status()
+        plugins = resp.json().get("plugins", {}) or {}
+    except httpx.HTTPError as exc:
+        _die(f"netbox unreachable: {exc}")
+
+    try:
+        ips = [
+            {
+                "address": str(ip.address),
+                "assigned": str(ip.assigned_object) if ip.assigned_object else "",
+                "status": str(ip.status),
+            }
+            for ip in c.nb().ipam.ip_addresses.all()
+        ]
+    except Exception as exc:  # noqa: BLE001
+        _die(f"could not list ip addresses: {exc}")
+
+    if c.as_json:
+        oc.print_json(
+            {"diode_plugin": plugins.get(DIODE_PLUGIN, "not installed"), "ip_count": len(ips), "ips": ips}
+        )
+        return
+    _emit(
+        c,
+        {"diode_plugin": plugins.get(DIODE_PLUGIN, "not installed"), "ip_count": len(ips)},
+        title="discovery",
+    )
+    _emit(c, ips, title="discovered ip addresses")
+
+
 # --- check -------------------------------------------------------------------
 
 
@@ -300,6 +357,7 @@ def check(ctx: typer.Context):
     import httpx
 
     report = oc.CheckReport()
+    status_json = {}
 
     # 1. NetBox reachable (/api/status/). Short-circuit if the server is down.
     try:
@@ -313,6 +371,10 @@ def check(ctx: typer.Context):
         if resp.status_code != 200:
             _render_check(c, report)
             raise typer.Exit(report.exit_code)
+        try:
+            status_json = resp.json()
+        except ValueError:
+            status_json = {}
     except httpx.HTTPError as exc:
         report.add("netbox reachable", False, str(exc))
         _render_check(c, report)
@@ -383,6 +445,21 @@ def check(ctx: typer.Context):
             report.add("prefix present", n_pfx >= 1, f"count={n_pfx}")
     except Exception as exc:  # noqa: BLE001 - surface API/auth errors as a single failing row
         report.add("base data model", False, str(exc))
+
+    # 10/11. Discovery (opt-in). When enabled, the Diode plugin must be installed and the agent must
+    # have discovered at least one IP; when disabled these are skipped, not failed. See
+    # specs/netbox-discovery.md.
+    if c.discovery_enabled:
+        plugins = (status_json or {}).get("plugins", {}) or {}
+        report.add("diode plugin installed", DIODE_PLUGIN in plugins, plugins.get(DIODE_PLUGIN, "not installed"))
+        try:
+            n_ips = len(list(nb.ipam.ip_addresses.all()))
+            report.add("discovered ips present", n_ips >= 1, f"count={n_ips}")
+        except Exception as exc:  # noqa: BLE001
+            report.add("discovered ips present", False, str(exc))
+    else:
+        report.skip("diode plugin installed", "discovery disabled")
+        report.skip("discovered ips present", "discovery disabled")
 
     _render_check(c, report)
     raise typer.Exit(report.exit_code)

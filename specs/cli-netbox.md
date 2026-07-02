@@ -52,7 +52,8 @@ output.
 ## Command surface
 
 Global options (on the app callback): `--cluster` (default `centralized_netbox`), `--server-url`
-/ `$NETBOX_URL`, `--token` / `$NETBOX_TOKEN`, `--json`, `--timeout`, `--insecure`.
+/ `$NETBOX_URL`, `--token` / `$NETBOX_TOKEN`, `--json`, `--timeout`, `--insecure`, `--discovery`
+(force the opt-in discovery assertions on; otherwise resolved from `tofu output discovery_enabled`).
 
 | Subcommand | NetBox endpoint | Purpose |
 |---|---|---|
@@ -61,7 +62,8 @@ Global options (on the app callback): `--cluster` (default `centralized_netbox`)
 | `vms` | `GET /api/virtualization/virtual-machines/` (pynetbox) | list VMs: name/status/cluster/primary_ip |
 | `devices` | `GET /api/dcim/devices/` (pynetbox) | list DCIM devices: name/role/site/rack/status (the host lives here) |
 | `prefixes` | `GET /api/ipam/prefixes/` (pynetbox) | list IPAM prefixes: prefix/site/vlan/status |
-| `check` | status + auth + cluster + site + VM + primary-IP + base data model | assert & exit nonzero |
+| `discovery` | `GET /api/status/` plugins + `GET /api/ipam/ip-addresses/` (pynetbox) | opt-in: Diode plugin version + discovered IPs (see [`specs/netbox-discovery.md`](netbox-discovery.md)) |
+| `check` | status + auth + cluster + site + VM + primary-IP + base data model (+ discovery when enabled) | assert & exit nonzero |
 
 Introspection prints a rich table, or clean `json.dumps` under `--json`.
 
@@ -86,6 +88,13 @@ Assertions, each a `CheckReport` row (`pass`/`fail`/`skip`):
    `tofu output netbox_host_device_name`) exists and is `active` (this is what populates `/dcim/devices/`).
 10. **Prefix present** — the `--prefix` (from `tofu output netbox_prefix`) exists, or, when the
     prefix can't be resolved (`--server-url` mode), at least one prefix exists.
+11. **Diode plugin installed** *(discovery only)* — `netbox_diode_plugin` appears in `/api/status/`'s
+    `plugins`. Skipped (not failed) when discovery is disabled.
+12. **Discovered IPs present** *(discovery only)* — at least one IPAM IP address exists. Skipped when
+    discovery is disabled.
+
+Discovery rows are gated on `--discovery` or `tofu output discovery_enabled`; with discovery off
+they are `skip` rows, so `check` still passes on the default (discovery-off) cluster.
 
 Any `fail` → exit 2 (`CHECK_FAIL_EXIT`). In `--server-url` mode (no tofu), the cluster/VM names
 that would come from `tofu output` fall back to the documented defaults, and steps that cannot be
@@ -112,6 +121,8 @@ just netbox-check CLUSTER               # check → exit code
 just netbox-status CLUSTER              # /api/status/ (versions/health)
 just netbox-vms CLUSTER                 # list registered virtual machines
 just netbox-clusters CLUSTER            # list virtualization clusters
+just netbox-discovery CLUSTER           # Diode plugin status + discovered IPs (opt-in)
+just netbox-discover CLUSTER            # trigger an on-demand orb-agent scan (opt-in)
 ```
 
 `devices` and `prefixes` have no dedicated recipe yet; run them directly:

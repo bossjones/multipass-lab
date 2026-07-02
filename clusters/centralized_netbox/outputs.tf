@@ -8,13 +8,19 @@ output "client_ipv4" {
   value       = multipass_instance.client.ipv4
 }
 
-# Consumed by tests/testinfra/conftest.py to build SSH testinfra hosts.
+# Consumed by tests/testinfra/conftest.py to build SSH testinfra hosts. The agent role is present
+# only when enable_discovery (the VM is count-gated).
 output "hosts" {
-  description = "Map of role -> {name, ipv4} for every VM in the cluster."
-  value = {
-    server = { name = local.server_name, ipv4 = multipass_instance.server.ipv4 }
-    client = { name = local.client_name, ipv4 = multipass_instance.client.ipv4 }
-  }
+  description = "Map of role -> {name, ipv4} for every VM in the cluster (agent only when enable_discovery)."
+  value = merge(
+    {
+      server = { name = local.server_name, ipv4 = multipass_instance.server.ipv4 }
+      client = { name = local.client_name, ipv4 = multipass_instance.client.ipv4 }
+    },
+    var.enable_discovery ? {
+      agent = { name = local.agent_name, ipv4 = multipass_instance.agent[0].ipv4 }
+    } : {},
+  )
 }
 
 output "netbox_url" {
@@ -65,16 +71,42 @@ output "netbox_prefix" {
   value       = try("${join(".", slice(split(".", multipass_instance.server.ipv4), 0, 3))}.0/24", "")
 }
 
+# Discovery (opt-in Diode + orb-agent). These resolve to sane values whether or not discovery is
+# enabled so `tofu output` / the CLI never error; consumers gate on discovery_enabled.
+output "discovery_enabled" {
+  description = "Whether the opt-in Diode/orb-agent discovery footprint is deployed."
+  value       = var.enable_discovery
+}
+
+output "diode_url" {
+  description = "Base URL of the Diode ingress (gRPC + HTTP multiplexed on nginx). orb-agent targets grpc://<host>:<diode_port>/diode."
+  value       = "http://${multipass_instance.server.ipv4}:${var.diode_port}"
+}
+
+output "diode_metrics_url" {
+  description = "Diode Prometheus /metrics URL (published when enable_discovery)."
+  value       = "http://${multipass_instance.server.ipv4}:${var.diode_metrics_port}/metrics"
+}
+
+output "diode_ingest_client_id" {
+  description = "OAuth2 client id orb-agent authenticates with (scope diode:ingest). The secret is a pinned LAB-ONLY var."
+  value       = "diode-ingest"
+}
+
 # Browser URLs for `just open centralized_netbox [--full]`. core = the NetBox UI; all folds in
-# the API root (handy for a quick token-less 200 check in the browser).
+# the API root (handy for a quick token-less 200 check in the browser) plus, when discovery is on,
+# the Diode /metrics endpoint.
 output "web_urls" {
-  description = "Browser URLs. core = NetBox UI; all = core + the REST API root. Consumed by `just open <cluster> [--full]`."
+  description = "Browser URLs. core = NetBox UI; all = core + the REST API root (+ Diode /metrics when enable_discovery). Consumed by `just open <cluster> [--full]`."
   value = {
     core = ["http://${multipass_instance.server.ipv4}:${var.netbox_port}/"]
-    all = [
-      "http://${multipass_instance.server.ipv4}:${var.netbox_port}/",
-      "http://${multipass_instance.server.ipv4}:${var.netbox_port}/api/",
-    ]
+    all = concat(
+      [
+        "http://${multipass_instance.server.ipv4}:${var.netbox_port}/",
+        "http://${multipass_instance.server.ipv4}:${var.netbox_port}/api/",
+      ],
+      var.enable_discovery ? ["http://${multipass_instance.server.ipv4}:${var.diode_metrics_port}/metrics"] : [],
+    )
   }
 }
 

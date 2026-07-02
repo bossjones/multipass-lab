@@ -124,3 +124,24 @@ def client(hosts, ssh_config_file):
     # netbox-register.service self-registers this VM once the server's NetBox is up.
     _wait_for_marker(host, "/var/lib/netbox-register/done")
     return host
+
+
+@pytest.fixture(scope="session")
+def discovery(tofu_output):
+    """Discovery (opt-in Diode + orb-agent) coordinates. {enabled, diode_url, diode_metrics_url}."""
+    return {
+        "enabled": tofu_output["discovery_enabled"]["value"],
+        "diode_url": tofu_output["diode_url"]["value"],
+        "diode_metrics_url": tofu_output["diode_metrics_url"]["value"],
+    }
+
+
+@pytest.fixture(scope="session")
+def agent(hosts, ssh_config_file, discovery):
+    """The discovery agent VM — only exists when enable_discovery; skip cleanly otherwise."""
+    if not discovery["enabled"]:
+        pytest.skip("discovery disabled (enable_discovery=false)")
+    host = _connect(hosts["agent"]["ipv4"], ssh_config_file)
+    # orb-agent.service starts + writes the marker once the Diode ingress is reachable.
+    _wait_for_marker(host, "/var/lib/orb-agent/discovery-done")
+    return host
