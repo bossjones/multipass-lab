@@ -35,6 +35,8 @@ PORT = 8000
 DEFAULT_CLUSTER_NAME = "centralized-netbox"
 DEFAULT_VM_NAME = "centralized-netbox-client"
 DEFAULT_SITE_NAME = "multipass-lab"
+DEFAULT_HOST_DEVICE = "multipass-host"
+DEFAULT_RACK_NAME = "multipass-rack-1"
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help=__doc__)
 console = Console()
@@ -48,6 +50,9 @@ class Options:
     cluster_name: str | None
     vm_name: str | None
     site_name: str | None
+    host_device_name: str | None
+    rack_name: str | None
+    prefix: str | None
     as_json: bool
     timeout: float
     insecure: bool
@@ -60,6 +65,9 @@ class Ctx:
     cluster_name: str
     vm_name: str
     site_name: str
+    host_device_name: str
+    rack_name: str
+    prefix: str | None
     as_json: bool
     timeout: float
     insecure: bool
@@ -90,13 +98,23 @@ def _main(
     site_name: str = typer.Option(
         None, "--site-name", help="expected default DCIM site (else tofu / default)"
     ),
+    host_device_name: str = typer.Option(
+        None, "--host-device", help="expected host DCIM device (else tofu / default)"
+    ),
+    rack_name: str = typer.Option(
+        None, "--rack", help="expected DCIM rack (else tofu / default)"
+    ),
+    prefix: str = typer.Option(
+        None, "--prefix", help="expected IPAM prefix (else tofu; any prefix if unresolved)"
+    ),
     as_json: bool = typer.Option(False, "--json", help="machine-readable JSON output"),
     timeout: float = typer.Option(10.0, "--timeout"),
     insecure: bool = typer.Option(False, "--insecure"),
 ):
     """NetBox verification CLI."""
     ctx.obj = Options(
-        cluster, server_url, token, cluster_name, vm_name, site_name, as_json, timeout, insecure
+        cluster, server_url, token, cluster_name, vm_name, site_name,
+        host_device_name, rack_name, prefix, as_json, timeout, insecure,
     )
 
 
@@ -106,6 +124,9 @@ def resolve(opts: Options) -> Ctx:
     cluster_name = opts.cluster_name
     vm_name = opts.vm_name
     site_name = opts.site_name
+    host_device_name = opts.host_device_name
+    rack_name = opts.rack_name
+    prefix = opts.prefix
 
     # tofu mode: no explicit URL -> resolve everything from `tofu output -json`.
     if base_url is None:
@@ -120,6 +141,9 @@ def resolve(opts: Options) -> Ctx:
         cluster_name = cluster_name or val("netbox_cluster_name")
         vm_name = vm_name or val("registered_vm_name")
         site_name = site_name or val("netbox_site_name")
+        host_device_name = host_device_name or val("netbox_host_device_name")
+        rack_name = rack_name or val("netbox_rack_name")
+        prefix = prefix or val("netbox_prefix")
 
     if base_url is None:
         _die("could not resolve NetBox URL — pass --server-url or run from a cluster dir")
@@ -130,6 +154,9 @@ def resolve(opts: Options) -> Ctx:
         cluster_name=cluster_name or DEFAULT_CLUSTER_NAME,
         vm_name=vm_name or DEFAULT_VM_NAME,
         site_name=site_name or DEFAULT_SITE_NAME,
+        host_device_name=host_device_name or DEFAULT_HOST_DEVICE,
+        rack_name=rack_name or DEFAULT_RACK_NAME,
+        prefix=prefix or None,
         as_json=opts.as_json,
         timeout=opts.timeout,
         insecure=opts.insecure,
@@ -222,6 +249,47 @@ def vms(ctx: typer.Context):
     _emit(c, rows, title="virtual machines")
 
 
+@app.command()
+def devices(ctx: typer.Context):
+    """List DCIM devices (GET /api/dcim/devices/) — the physical host lives here, not VMs."""
+    c = resolve(ctx.obj)
+    try:
+        rows = [
+            {
+                "id": d.id,
+                "name": str(d.name),
+                "role": str(d.role),
+                "site": str(d.site),
+                "rack": str(d.rack) if d.rack else "",
+                "status": str(d.status),
+            }
+            for d in c.nb().dcim.devices.all()
+        ]
+    except Exception as exc:  # noqa: BLE001
+        _die(f"could not list devices: {exc}")
+    _emit(c, rows, title="dcim devices")
+
+
+@app.command()
+def prefixes(ctx: typer.Context):
+    """List IPAM prefixes (GET /api/ipam/prefixes/)."""
+    c = resolve(ctx.obj)
+    try:
+        rows = [
+            {
+                "id": p.id,
+                "prefix": str(p.prefix),
+                "site": str(p.site) if p.site else "",
+                "vlan": str(p.vlan) if p.vlan else "",
+                "status": str(p.status),
+            }
+            for p in c.nb().ipam.prefixes.all()
+        ]
+    except Exception as exc:  # noqa: BLE001
+        _die(f"could not list prefixes: {exc}")
+    _emit(c, rows, title="ipam prefixes")
+
+
 # --- check -------------------------------------------------------------------
 
 
@@ -283,6 +351,38 @@ def check(ctx: typer.Context):
     elif "client vm registered" not in {chk.name for chk in report.checks}:
         report.add("client vm registered", False, f"{c.vm_name} not found")
         report.skip("primary ip assigned", "vm missing")
+
+    # 6-9. Base data model: DCIM library + rack + the host device (populates /dcim/devices/) +
+    # a seeded IPAM prefix. See specs/netbox-data.md.
+    try:
+        n_mfr = len(list(nb.dcim.manufacturers.all()))
+        n_dt = len(list(nb.dcim.device_types.all()))
+        n_dr = len(list(nb.dcim.device_roles.all()))
+        report.add(
+            "device library seeded",
+            n_mfr >= 1 and n_dt >= 1 and n_dr >= 1,
+            f"manufacturers={n_mfr} device_types={n_dt} device_roles={n_dr}",
+        )
+
+        racks = list(nb.dcim.racks.filter(name=c.rack_name))
+        report.add("rack present", len(racks) >= 1, c.rack_name)
+
+        hosts = list(nb.dcim.devices.filter(name=c.host_device_name))
+        host_active = bool(hosts) and getattr(hosts[0].status, "value", str(hosts[0].status)) == "active"
+        report.add(
+            "host device present",
+            host_active,
+            c.host_device_name if hosts else f"{c.host_device_name} not found",
+        )
+
+        if c.prefix:
+            pfx = list(nb.ipam.prefixes.filter(prefix=c.prefix))
+            report.add("prefix present", len(pfx) >= 1, c.prefix)
+        else:
+            n_pfx = len(list(nb.ipam.prefixes.all()))
+            report.add("prefix present", n_pfx >= 1, f"count={n_pfx}")
+    except Exception as exc:  # noqa: BLE001 - surface API/auth errors as a single failing row
+        report.add("base data model", False, str(exc))
 
     _render_check(c, report)
     raise typer.Exit(report.exit_code)

@@ -13,6 +13,14 @@ locals {
   cluster_type_slug = lower(replace(var.cluster_type, " ", "-"))
   site_slug         = lower(replace(var.site_name, " ", "-"))
 
+  # Slugs for the base data-model seed (see specs/netbox-data.md).
+  region_slug            = lower(replace(var.netbox_region, " ", "-"))
+  site_group_slug        = lower(replace(var.netbox_site_group, " ", "-"))
+  location_slug          = lower(replace(var.netbox_location, " ", "-"))
+  tenant_slug            = lower(replace(var.netbox_tenant, " ", "-"))
+  host_manufacturer_slug = lower(replace(var.netbox_host_manufacturer, " ", "-"))
+  host_model_slug        = lower(replace(var.netbox_host_model, " ", "-"))
+
   # netbox-docker override: publish :8000 -> container :8080 and skip the image's own superuser
   # creation (netbox-stack.sh does it). Rendered once and spliced into the server cloud-init.
   override_conf = templatefile("${path.module}/cloud-init/netbox/docker-compose.override.yml.tftpl", {
@@ -37,6 +45,22 @@ resource "local_file" "server_ci" {
     cluster_name       = var.cluster_name
     site_name          = var.site_name
     site_slug          = local.site_slug
+    server_name        = local.server_name
+    # base data-model seed
+    region                 = var.netbox_region
+    region_slug            = local.region_slug
+    site_group             = var.netbox_site_group
+    site_group_slug        = local.site_group_slug
+    location               = var.netbox_location
+    location_slug          = local.location_slug
+    tenant                 = var.netbox_tenant
+    tenant_slug            = local.tenant_slug
+    rack_name              = var.netbox_rack_name
+    host_device_name       = var.netbox_host_device_name
+    host_manufacturer      = var.netbox_host_manufacturer
+    host_manufacturer_slug = local.host_manufacturer_slug
+    host_model             = var.netbox_host_model
+    host_model_slug        = local.host_model_slug
   })
 }
 
@@ -62,6 +86,7 @@ resource "local_file" "client_ci" {
     netbox_port      = var.netbox_port
     netbox_api_token = var.netbox_api_token
     cluster_name     = var.cluster_name
+    host_device_name = var.netbox_host_device_name
   })
 }
 

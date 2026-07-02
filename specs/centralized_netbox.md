@@ -26,7 +26,10 @@ brings up two Multipass VMs; the root `Justfile` orchestrates by cluster name.
    docker-compose stack (NetBox + Postgres + Redis + worker + housekeeping), reachable at
    `http://<server>:8000`. Its cloud-init also **bootstraps** a virtualization *cluster-type*
    `Multipass` and *cluster* `centralized-netbox` (so VMs have a home) plus a default DCIM
-   *site* `multipass-lab` (NetBox requires a site before any device) via the REST API.
+   *site* `multipass-lab` (NetBox requires a site before any device) via the REST API, and then
+   **seeds a base data model** (organization hierarchy, a DCIM device library, a rack + a real
+   Device for the Multipass host, IPAM, tenancy) so a fresh NetBox is immediately useful — see
+   [Base data model](#base-data-model-seed) and [`specs/netbox-data.md`](netbox-data.md).
 2. **client** — a minimal test VM that, on first boot, runs `netbox-register.sh` (a
    `netbox-register.service` oneshot) which waits for NetBox, then registers **itself** as a
    NetBox **Virtual Machine** (name + `eth0` interface + primary IPv4) into the `centralized-netbox`
@@ -122,6 +125,34 @@ PATCH rather than duplicate and a transient error or a not-yet-ready server just
 All requests carry `Authorization: Token <pinned>`. Token/curl writes are unaffected by NetBox's
 CSRF protection (that only applies to browser/session POSTs).
 
+### Base data model seed
+
+After the cluster/site bootstrap, `netbox-stack.sh` calls **`netbox-seed.sh`** (same retry loop,
+auth, and marker) to populate a coherent, linked base data model so every NetBox tab has
+representative data out of the box (full detail in [`specs/netbox-data.md`](netbox-data.md)):
+
+- **Organization**: Region `Homelab` → Site Group `Multipass` → the site → Location, plus a Tenant.
+- **DCIM library**: Manufacturers (the host maker + `Canonical`), Platform `Ubuntu 24.04`, Device
+  Roles `Hypervisor`/`Server`, a Rack Role, a **Rack Type** (a NetBox 4.1 feature) and a **Rack**.
+- **Host Device**: a real DCIM **Device** (`multipass-host`) mounted in the rack — this is what
+  populates `/dcim/devices/`.
+- **IPAM**: RIR `RFC1918` → Aggregate → **Prefix matching the live Multipass /24** (derived from
+  the server's runtime IP) → VLAN `lab` → gateway IP. The client's registered IP falls inside the
+  prefix, so utilization is real.
+- **Tenancy**: a Contact + Contact Role assigned to the site.
+
+Every object is idempotent (GET-by-key → POST/PATCH-if-absent), so `just recreate` never
+duplicates. NetBox 4.1 API specifics the seed relies on: Device uses `role` (not `device_role`),
+Cluster uses `site`, VMs accept a `device` field, and Rack Types exist.
+
+### Virtual Machines vs. DCIM Devices
+
+NetBox separates **physical hardware** (`DCIM → Devices`) from **virtual guests**
+(`Virtualization → Virtual Machines`). A Multipass instance is a guest, so the client (and server)
+self-register as **Virtual Machines** — they live at `/virtualization/virtual-machines/`, **not**
+`/dcim/devices/`. The only DCIM Device is the **Multipass host** (real hardware), and each VM's
+`device` field links back to it, so both models are populated and connected.
+
 ## Layout
 
 ```
@@ -133,7 +164,7 @@ multipass-lab/
     ├── versions.tf  providers.tf  variables.tf  terraform.tfvars
     ├── main.tf      outputs.tf
     ├── cloud-init/
-    │   ├── server.yaml.tftpl   client.yaml.tftpl
+    │   ├── server.yaml.tftpl   client.yaml.tftpl   # server also seeds the base data model
     │   └── netbox/docker-compose.override.yml.tftpl
     ├── scripts/
     │   ├── netbox_cli.py        # uv single-file verify CLI (typer + rich + pynetbox)
@@ -143,7 +174,7 @@ multipass-lab/
     │   ├── pyproject.toml  test_netbox_cli.py
     └── tests/testinfra/                              # Layer 2 live verify (pytest+testinfra/SSH)
         ├── pyproject.toml  conftest.py
-        └── test_server.py  test_client.py  test_registration.py  test_ntp.py
+        └── test_server.py  test_client.py  test_registration.py  test_data_model.py  test_ntp.py
 ```
 
 ## Testing — layered feedback loop
@@ -168,6 +199,9 @@ machine" rung verified with **pytest + testinfra** and the **`netbox_cli.py chec
   - **E2E (headline)**: query the NetBox API (token + url from `tofu output`) and assert the
     client VM object exists with `status=active`, an `eth0` interface, and `primary_ip4` equal to
     the client's DHCP IP. `just netbox-check` independently asserts the same via the CLI.
+  - **data model** (`test_data_model.py`): the seeded org hierarchy (site→region/group), DCIM
+    library, the host **Device** in `/dcim/devices/` (active, racked), IPAM prefix containing the
+    client IP, the VM→host `device` link, and a site contact all exist.
 
 ## Quickstart
 
@@ -201,7 +235,10 @@ boot, so the cloud-init `runcmd` re-enforces `timedatectl set-timezone Etc/UTC`.
   image (`Dockerfile-Plugins` + `PLUGINS`/`PLUGINS_CONFIG` in configuration) — deferred because it
   requires building an image rather than pulling the published one
   (see <https://netboxlabs.com/docs/netbox/plugins/installation/>).
-- **Model VMs as DCIM Devices** (device-type/role/site/manufacturer) instead of virtual-machines,
-  for hardware-faithful modelling when promoting to Proxmox.
+- **Import real hardware** from the community
+  [devicetype-library](https://github.com/netbox-community/devicetype-library) so the host Device
+  (and future Proxmox nodes) use faithful device-type templates instead of the placeholder model.
+  (Modelling the host as a DCIM Device + linking VMs to it is now **done** — see the base data
+  model seed.)
 - **Secrets**: the pinned token is **lab-only** and deliberately exposed via `tofu output`. On
   Proxmox, generate the token and inject it via a secret store — do not copy this pattern.

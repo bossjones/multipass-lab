@@ -73,6 +73,61 @@ variable "site_name" {
   default     = "multipass-lab"
 }
 
+# --- base data-model seed --------------------------------------------------
+# The server bootstrap seeds a realistic base data model on first boot (organization hierarchy,
+# a DCIM device library, a rack + a real Device for the Multipass host, IPAM, tenancy) so a fresh
+# NetBox is immediately useful. See specs/netbox-data.md. Only the names most likely to be
+# customized per lab are variables; illustrative objects (device roles, platform, RIR, VLAN,
+# contact) are sane-defaulted inside the seed script.
+
+variable "netbox_region" {
+  description = "DCIM Region the site is nested under (organization hierarchy)."
+  type        = string
+  default     = "Homelab"
+}
+
+variable "netbox_site_group" {
+  description = "DCIM Site Group the site is grouped into."
+  type        = string
+  default     = "Multipass"
+}
+
+variable "netbox_location" {
+  description = "DCIM Location within the site that holds the rack."
+  type        = string
+  default     = "Lab Rack Room"
+}
+
+variable "netbox_tenant" {
+  description = "Tenant the site is assigned to."
+  type        = string
+  default     = "homelab"
+}
+
+variable "netbox_rack_name" {
+  description = "Name of the DCIM Rack the Multipass host device is mounted in."
+  type        = string
+  default     = "multipass-rack-1"
+}
+
+variable "netbox_host_device_name" {
+  description = "Name of the DCIM Device representing the physical Multipass host (populates /dcim/devices/; VMs link to it)."
+  type        = string
+  default     = "multipass-host"
+}
+
+variable "netbox_host_manufacturer" {
+  description = "Manufacturer of the machine running Multipass (default Apple, since the lab host is a Mac). Override for a non-Mac host."
+  type        = string
+  default     = "Apple"
+}
+
+variable "netbox_host_model" {
+  description = "Device-type model for the Multipass host device."
+  type        = string
+  default     = "Multipass Host"
+}
+
 variable "ssh_pubkey_path" {
   description = "Path to the SSH public key injected into the ubuntu user (used by the testinfra verify loop)."
   type        = string

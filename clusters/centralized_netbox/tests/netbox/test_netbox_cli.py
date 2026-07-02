@@ -16,6 +16,8 @@ runner = CliRunner()
 CLUSTER_NAME = "centralized-netbox"
 VM_NAME = "centralized-netbox-client"
 SITE_NAME = "multipass-lab"
+HOST_DEVICE = "multipass-host"
+RACK_NAME = "multipass-rack-1"
 
 
 def _paginated(results):
@@ -41,6 +43,41 @@ def _vm(*, primary_ip=True, status="active", name=VM_NAME, id_=1):
     }
 
 
+def _manufacturer(id_=1, name="Apple"):
+    return {"id": id_, "url": "", "name": name, "slug": name.lower()}
+
+
+def _device_type(id_=1):
+    return {"id": id_, "url": "", "model": "Multipass Host", "slug": HOST_DEVICE,
+            "manufacturer": {"id": 1, "name": "Apple"}}
+
+
+def _device_role(id_=1, name="Hypervisor"):
+    return {"id": id_, "url": "", "name": name, "slug": name.lower(), "vm_role": False}
+
+
+def _rack(id_=1, name=RACK_NAME):
+    return {"id": id_, "url": "", "name": name, "site": {"id": 1, "name": SITE_NAME},
+            "status": {"value": "active"}}
+
+
+def _device(*, name=HOST_DEVICE, status="active", id_=1):
+    return {
+        "id": id_,
+        "url": "",
+        "name": name,
+        "role": {"id": 1, "name": "Hypervisor"},
+        "site": {"id": 1, "name": SITE_NAME},
+        "rack": {"id": 1, "name": RACK_NAME},
+        "status": {"value": status, "label": status.capitalize()},
+    }
+
+
+def _prefix(id_=1, prefix="192.168.252.0/24"):
+    return {"id": id_, "url": "", "prefix": prefix, "site": {"id": 1, "name": SITE_NAME},
+            "vlan": {"id": 1, "vid": 100, "name": "lab"}, "status": {"value": "active"}}
+
+
 def _healthy(
     httpserver,
     *,
@@ -49,6 +86,12 @@ def _healthy(
     vms=None,
     sites=None,
     clusters_status=200,
+    manufacturers=None,
+    device_types=None,
+    device_roles=None,
+    racks=None,
+    devices=None,
+    prefixes=None,
 ):
     httpserver.expect_request("/api/status/").respond_with_json(
         {"netbox-version": "4.2.0", "django-version": "5.1", "rq-workers-running": 1},
@@ -69,6 +112,25 @@ def _healthy(
     )
     httpserver.expect_request("/api/dcim/sites/").respond_with_json(
         _paginated(sites if sites is not None else [_site()])
+    )
+    # base data-model endpoints (seeded by the server bootstrap).
+    httpserver.expect_request("/api/dcim/manufacturers/").respond_with_json(
+        _paginated(manufacturers if manufacturers is not None else [_manufacturer()])
+    )
+    httpserver.expect_request("/api/dcim/device-types/").respond_with_json(
+        _paginated(device_types if device_types is not None else [_device_type()])
+    )
+    httpserver.expect_request("/api/dcim/device-roles/").respond_with_json(
+        _paginated(device_roles if device_roles is not None else [_device_role()])
+    )
+    httpserver.expect_request("/api/dcim/racks/").respond_with_json(
+        _paginated(racks if racks is not None else [_rack()])
+    )
+    httpserver.expect_request("/api/dcim/devices/").respond_with_json(
+        _paginated(devices if devices is not None else [_device()])
+    )
+    httpserver.expect_request("/api/ipam/prefixes/").respond_with_json(
+        _paginated(prefixes if prefixes is not None else [_prefix()])
     )
     return httpserver.url_for("")
 
@@ -139,6 +201,41 @@ def test_check_fails_when_site_missing(httpserver):
     assert any(c["name"] == "site present" and c["status"] == "fail" for c in checks)
 
 
+# --- check: base data-model rows --------------------------------------------
+
+
+def test_check_reports_base_data_model_rows(httpserver):
+    base = _healthy(httpserver)
+    r = _run(base, "--json", "check")
+    assert r.exit_code == 0, r.output
+    names = {c["name"] for c in json.loads(r.output)["checks"]}
+    assert {"device library seeded", "rack present", "host device present", "prefix present"} <= names
+
+
+def test_check_fails_when_host_device_missing(httpserver):
+    base = _healthy(httpserver, devices=[])
+    r = _run(base, "--json", "check")
+    assert r.exit_code == 2
+    checks = json.loads(r.output)["checks"]
+    assert any(c["name"] == "host device present" and c["status"] == "fail" for c in checks)
+
+
+def test_check_fails_when_device_library_missing(httpserver):
+    base = _healthy(httpserver, manufacturers=[])
+    r = _run(base, "--json", "check")
+    assert r.exit_code == 2
+    checks = json.loads(r.output)["checks"]
+    assert any(c["name"] == "device library seeded" and c["status"] == "fail" for c in checks)
+
+
+def test_check_fails_when_prefix_missing(httpserver):
+    base = _healthy(httpserver, prefixes=[])
+    r = _run(base, "--json", "check")
+    assert r.exit_code == 2
+    checks = json.loads(r.output)["checks"]
+    assert any(c["name"] == "prefix present" and c["status"] == "fail" for c in checks)
+
+
 # --- introspection -----------------------------------------------------------
 
 
@@ -155,3 +252,19 @@ def test_vms_lists_registered_vm(httpserver):
     assert r.exit_code == 0, r.output
     rows = json.loads(r.output)
     assert any(row["name"] == VM_NAME for row in rows)
+
+
+def test_devices_lists_host_device(httpserver):
+    base = _healthy(httpserver)
+    r = _run(base, "--json", "devices")
+    assert r.exit_code == 0, r.output
+    rows = json.loads(r.output)
+    assert any(row["name"] == HOST_DEVICE for row in rows)
+
+
+def test_prefixes_lists_seeded_prefix(httpserver):
+    base = _healthy(httpserver)
+    r = _run(base, "--json", "prefixes")
+    assert r.exit_code == 0, r.output
+    rows = json.loads(r.output)
+    assert any(row["prefix"] == "192.168.252.0/24" for row in rows)

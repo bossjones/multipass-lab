@@ -106,6 +106,106 @@ run "server_cloud_init_deploys_netbox" {
   }
 }
 
+run "server_seeds_base_data_model" {
+  command = plan
+
+  # Organization hierarchy: region + site group + location + tenant, attached to the site.
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/api/dcim/regions/")
+    error_message = "seed must create a DCIM region"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/api/dcim/site-groups/")
+    error_message = "seed must create a DCIM site group"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/api/dcim/locations/")
+    error_message = "seed must create a DCIM location"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/api/tenancy/tenants/")
+    error_message = "seed must create a tenant"
+  }
+
+  # DCIM library: manufacturers + platform + device roles + device types.
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/api/dcim/manufacturers/")
+    error_message = "seed must create a manufacturer"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/api/dcim/platforms/")
+    error_message = "seed must create a platform"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/api/dcim/device-roles/")
+    error_message = "seed must create device roles"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/api/dcim/device-types/")
+    error_message = "seed must create a device type"
+  }
+
+  # Rack chain: rack role + rack type (new in NetBox 4.1) + rack.
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/api/dcim/rack-roles/")
+    error_message = "seed must create a rack role"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/api/dcim/rack-types/")
+    error_message = "seed must create a rack type (4.1 feature)"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/api/dcim/racks/")
+    error_message = "seed must create a rack"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "multipass-rack-1")
+    error_message = "seed must create the named rack"
+  }
+
+  # The headline: a real DCIM Device for the Multipass host so /dcim/devices/ is populated.
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/api/dcim/devices/")
+    error_message = "seed must create a DCIM device (the Multipass host)"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "multipass-host")
+    error_message = "seed must create the host device by name"
+  }
+
+  # IPAM: RIR (RFC1918) + aggregate + prefix + vlan, with the prefix derived from the live subnet.
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/api/ipam/rirs/")
+    error_message = "seed must create an RIR"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/api/ipam/aggregates/")
+    error_message = "seed must create an aggregate"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/api/ipam/prefixes/")
+    error_message = "seed must create a prefix"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/api/ipam/vlans/")
+    error_message = "seed must create a vlan"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "$${SERVER_IP%.*}.0/24")
+    error_message = "seed must derive the prefix from the server's runtime IP"
+  }
+
+  # Tenancy contact assigned to the site.
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/api/tenancy/contacts/")
+    error_message = "seed must create a contact"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/api/tenancy/contact-assignments/")
+    error_message = "seed must assign the contact to the site"
+  }
+}
+
 run "client_cloud_init_self_registers" {
   command = plan
 
@@ -141,6 +241,20 @@ run "client_cloud_init_self_registers" {
   assert {
     condition     = strcontains(local_file.client_ci.content, "/var/lib/netbox-register/done")
     error_message = "client must drop a success marker for the testinfra suite"
+  }
+
+  # The client links its VM to the seeded host Device (resolves it by name, includes "device").
+  assert {
+    condition     = strcontains(local_file.client_ci.content, "/api/dcim/devices/?name=$HOST_DEVICE")
+    error_message = "client must look up the host device to link its VM to it"
+  }
+  assert {
+    condition     = strcontains(local_file.client_ci.content, "HOST_DEVICE=\"multipass-host\"")
+    error_message = "client must carry the host device name"
+  }
+  assert {
+    condition     = strcontains(local_file.client_ci.content, "\\\"device\\\":$HOST_ID")
+    error_message = "client must include the device link in its VM payload"
   }
 }
 

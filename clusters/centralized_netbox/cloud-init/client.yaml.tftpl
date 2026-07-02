@@ -28,6 +28,7 @@ write_files:
       NETBOX_URL="http://${netbox_ip}:${netbox_port}"
       TOKEN="${netbox_api_token}"
       CLUSTER_NAME="${cluster_name}"
+      HOST_DEVICE="${host_device_name}"
       auth=(-H "Authorization: Token $TOKEN" -H "Content-Type: application/json" -H "Accept: application/json")
 
       register() {
@@ -51,11 +52,23 @@ write_files:
           return 1
         fi
 
-        # 4. Upsert the virtual-machine.
+        # 3b. Resolve the seeded host Device to link this VM to it ("runs on"). Gate on it the same
+        # way we gate on the cluster: if the server's seed hasn't created it yet, return and let the
+        # retry loop wait it out, so the device link is deterministic rather than racing the seed.
+        HOST_ID="$(curl -sf "$${auth[@]}" "$NETBOX_URL/api/dcim/devices/?name=$HOST_DEVICE" | jq -r '.results[0].id // empty')"
+        if [ -z "$HOST_ID" ]; then
+          echo "host device $HOST_DEVICE not in NetBox yet" >&2
+          return 1
+        fi
+
+        # 4. Upsert the virtual-machine, linked to the host device.
         VM_ID="$(curl -sf "$${auth[@]}" "$NETBOX_URL/api/virtualization/virtual-machines/?name=$VM_NAME" | jq -r '.results[0].id // empty')"
         if [ -z "$VM_ID" ]; then
           VM_ID="$(curl -sf "$${auth[@]}" -X POST "$NETBOX_URL/api/virtualization/virtual-machines/" \
-            -d "{\"name\":\"$VM_NAME\",\"cluster\":$CLUSTER_ID,\"status\":\"active\"}" | jq -r '.id')"
+            -d "{\"name\":\"$VM_NAME\",\"cluster\":$CLUSTER_ID,\"status\":\"active\",\"device\":$HOST_ID}" | jq -r '.id')"
+        else
+          curl -sf "$${auth[@]}" -X PATCH "$NETBOX_URL/api/virtualization/virtual-machines/$VM_ID/" \
+            -d "{\"device\":$HOST_ID}" >/dev/null
         fi
 
         # 5. Upsert the eth0 interface.

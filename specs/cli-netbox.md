@@ -59,7 +59,9 @@ Global options (on the app callback): `--cluster` (default `centralized_netbox`)
 | `status` | `GET /api/status/` (raw httpx) | NetBox + Django/RQ versions, health |
 | `clusters` | `GET /api/virtualization/clusters/` (pynetbox) | list virtualization clusters |
 | `vms` | `GET /api/virtualization/virtual-machines/` (pynetbox) | list VMs: name/status/cluster/primary_ip |
-| `check` | status + auth + cluster + site + VM + primary-IP | assert & exit nonzero |
+| `devices` | `GET /api/dcim/devices/` (pynetbox) | list DCIM devices: name/role/site/rack/status (the host lives here) |
+| `prefixes` | `GET /api/ipam/prefixes/` (pynetbox) | list IPAM prefixes: prefix/site/vlan/status |
+| `check` | status + auth + cluster + site + VM + primary-IP + base data model | assert & exit nonzero |
 
 Introspection prints a rich table, or clean `json.dumps` under `--json`.
 
@@ -78,6 +80,12 @@ Assertions, each a `CheckReport` row (`pass`/`fail`/`skip`):
 5. **Client VM registered** — the expected VM (`--vm-name`, default the `registered_vm_name`
    `tofu output`) exists with `status=active`.
 6. **Primary IP assigned** — that VM has a non-null `primary_ip4`.
+7. **Device library seeded** — at least one manufacturer, device-type, and device-role exist.
+8. **Rack present** — the `--rack` (default `multipass-rack-1`, from `tofu output netbox_rack_name`) exists.
+9. **Host device present** — the `--host-device` DCIM Device (default `multipass-host`, from
+   `tofu output netbox_host_device_name`) exists and is `active` (this is what populates `/dcim/devices/`).
+10. **Prefix present** — the `--prefix` (from `tofu output netbox_prefix`) exists, or, when the
+    prefix can't be resolved (`--server-url` mode), at least one prefix exists.
 
 Any `fail` → exit 2 (`CHECK_FAIL_EXIT`). In `--server-url` mode (no tofu), the cluster/VM names
 that would come from `tofu output` fall back to the documented defaults, and steps that cannot be
@@ -105,6 +113,9 @@ just netbox-status CLUSTER              # /api/status/ (versions/health)
 just netbox-vms CLUSTER                 # list registered virtual machines
 just netbox-clusters CLUSTER            # list virtualization clusters
 ```
+
+`devices` and `prefixes` have no dedicated recipe yet; run them directly:
+`uv run clusters/<CLUSTER>/scripts/netbox_cli.py --cluster <CLUSTER> devices`.
 
 Mirror the `grafana-*` recipe shape: `uv run clusters/<CLUSTER>/scripts/netbox_cli.py --cluster
 <CLUSTER> <cmd>`. `verify-api` is generalized to iterate the cluster's `scripts/*_cli.py`

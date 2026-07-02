@@ -42,6 +42,29 @@ output "registered_vm_name" {
   value       = local.client_name
 }
 
+output "netbox_region" {
+  description = "DCIM Region the bootstrap seeds and nests the site under (netbox_cli/testinfra resolve this)."
+  value       = var.netbox_region
+}
+
+output "netbox_rack_name" {
+  description = "DCIM Rack the bootstrap seeds and mounts the host device in."
+  value       = var.netbox_rack_name
+}
+
+output "netbox_host_device_name" {
+  description = "DCIM Device (the Multipass host) the bootstrap seeds so /dcim/devices/ is populated; VMs link to it."
+  value       = var.netbox_host_device_name
+}
+
+# The Multipass /24 the server sits on, derived from its DHCP IP (e.g. 192.168.252.0/24). The
+# bootstrap seeds an IPAM Prefix for this subnet; the client's IP lands inside it. try() keeps
+# hermetic (mock-provider) plans from erroring on a non-IP-shaped mock value.
+output "netbox_prefix" {
+  description = "IPAM Prefix (Multipass /24) the bootstrap seeds; the registered VM IPs fall inside it."
+  value       = try("${join(".", slice(split(".", multipass_instance.server.ipv4), 0, 3))}.0/24", "")
+}
+
 # Browser URLs for `just open centralized_netbox [--full]`. core = the NetBox UI; all folds in
 # the API root (handy for a quick token-less 200 check in the browser).
 output "web_urls" {
