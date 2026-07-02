@@ -93,6 +93,17 @@ run "server_cloud_init_deploys_netbox" {
     condition     = strcontains(local_file.server_ci.content, "\"slug\":\"multipass\"")
     error_message = "cluster-type slug must be derived from the type name (Multipass -> multipass)"
   }
+
+  # Bootstrap also creates a default DCIM site so devices can be added (NetBox requires a site
+  # before any device). See specs/centralized_netbox.md.
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/api/dcim/sites/")
+    error_message = "bootstrap must create a default DCIM site"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "\"slug\":\"multipass-lab\"")
+    error_message = "bootstrap must create the default site with its slug"
+  }
 }
 
 run "client_cloud_init_self_registers" {

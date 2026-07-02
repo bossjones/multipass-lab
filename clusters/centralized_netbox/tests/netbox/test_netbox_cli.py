@@ -15,6 +15,7 @@ runner = CliRunner()
 
 CLUSTER_NAME = "centralized-netbox"
 VM_NAME = "centralized-netbox-client"
+SITE_NAME = "multipass-lab"
 
 
 def _paginated(results):
@@ -23,6 +24,10 @@ def _paginated(results):
 
 def _cluster(id_=1):
     return {"id": id_, "url": "", "name": CLUSTER_NAME, "type": {"id": 1, "name": "Multipass"}}
+
+
+def _site(id_=1, name=SITE_NAME):
+    return {"id": id_, "url": "", "name": name, "slug": name, "status": {"value": "active"}}
 
 
 def _vm(*, primary_ip=True, status="active", name=VM_NAME, id_=1):
@@ -42,6 +47,7 @@ def _healthy(
     status_code=200,
     clusters=None,
     vms=None,
+    sites=None,
     clusters_status=200,
 ):
     httpserver.expect_request("/api/status/").respond_with_json(
@@ -60,6 +66,9 @@ def _healthy(
         )
     httpserver.expect_request("/api/virtualization/virtual-machines/").respond_with_json(
         _paginated(vms if vms is not None else [_vm()])
+    )
+    httpserver.expect_request("/api/dcim/sites/").respond_with_json(
+        _paginated(sites if sites is not None else [_site()])
     )
     return httpserver.url_for("")
 
@@ -120,6 +129,14 @@ def test_check_fails_when_vm_has_no_primary_ip(httpserver):
     assert r.exit_code == 2
     checks = json.loads(r.output)["checks"]
     assert any(c["name"] == "primary ip assigned" and c["status"] == "fail" for c in checks)
+
+
+def test_check_fails_when_site_missing(httpserver):
+    base = _healthy(httpserver, sites=[])
+    r = _run(base, "--json", "check")
+    assert r.exit_code == 2
+    checks = json.loads(r.output)["checks"]
+    assert any(c["name"] == "site present" and c["status"] == "fail" for c in checks)
 
 
 # --- introspection -----------------------------------------------------------

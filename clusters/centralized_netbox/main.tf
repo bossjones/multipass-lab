@@ -9,8 +9,9 @@ locals {
   server_name = "${var.name_prefix}-server"
   client_name = "${var.name_prefix}-client"
 
-  # NetBox requires a slug for a cluster-type; derive it from the human name.
+  # NetBox requires a slug for a cluster-type and a site; derive them from the human names.
   cluster_type_slug = lower(replace(var.cluster_type, " ", "-"))
+  site_slug         = lower(replace(var.site_name, " ", "-"))
 
   # netbox-docker override: publish :8000 -> container :8080 and skip the image's own superuser
   # creation (netbox-stack.sh does it). Rendered once and spliced into the server cloud-init.
@@ -34,6 +35,8 @@ resource "local_file" "server_ci" {
     cluster_type       = var.cluster_type
     cluster_type_slug  = local.cluster_type_slug
     cluster_name       = var.cluster_name
+    site_name          = var.site_name
+    site_slug          = local.site_slug
   })
 }
 

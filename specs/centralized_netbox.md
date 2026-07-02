@@ -25,7 +25,8 @@ brings up two Multipass VMs; the root `Justfile` orchestrates by cluster name.
    [`netbox-community/netbox-docker`](https://github.com/netbox-community/netbox-docker)
    docker-compose stack (NetBox + Postgres + Redis + worker + housekeeping), reachable at
    `http://<server>:8000`. Its cloud-init also **bootstraps** a virtualization *cluster-type*
-   `Multipass` and *cluster* `centralized-netbox` via the REST API so VMs have a home.
+   `Multipass` and *cluster* `centralized-netbox` (so VMs have a home) plus a default DCIM
+   *site* `multipass-lab` (NetBox requires a site before any device) via the REST API.
 2. **client** — a minimal test VM that, on first boot, runs `netbox-register.sh` (a
    `netbox-register.service` oneshot) which waits for NetBox, then registers **itself** as a
    NetBox **Virtual Machine** (name + `eth0` interface + primary IPv4) into the `centralized-netbox`
@@ -99,9 +100,10 @@ self-registration, the host `netbox_cli`, and the testinfra suite.
   `ALLOWED_HOSTS=*`), and `docker compose up -d`.
 - Once NetBox responds, it creates the admin superuser + the pinned **v1** API token via
   `manage.py` (deterministic, independent of the image's env-var handling), then **idempotently**
-  creates the virtualization cluster-type `var.cluster_type` (`Multipass`) and cluster
-  `var.cluster_name` (`centralized-netbox`) via REST (GET-by-name, POST if absent), and writes
-  `/var/lib/netbox-bootstrap/done`.
+  creates the virtualization cluster-type `var.cluster_type` (`Multipass`), cluster
+  `var.cluster_name` (`centralized-netbox`), and a default DCIM site `var.site_name`
+  (`multipass-lab`, required before any device can be added) via REST (GET-by-name, POST if
+  absent), and writes `/var/lib/netbox-bootstrap/done`.
 
 ### Self-registration (client)
 

@@ -49,12 +49,13 @@ def hosts(tofu_output):
 
 @pytest.fixture(scope="session")
 def netbox(tofu_output):
-    """NetBox API coordinates for host-side cross-checks: {base_url, token, cluster, vm_name}."""
+    """NetBox API coordinates for host-side cross-checks: {base_url, token, cluster, vm_name, site}."""
     return {
         "base_url": tofu_output["netbox_url"]["value"],
         "token": tofu_output["netbox_api_token"]["value"],
         "cluster": tofu_output["netbox_cluster_name"]["value"],
         "vm_name": tofu_output["registered_vm_name"]["value"],
+        "site": tofu_output["netbox_site_name"]["value"],
     }
 
 

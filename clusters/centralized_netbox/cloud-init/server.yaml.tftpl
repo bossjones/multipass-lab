@@ -99,6 +99,14 @@ write_files:
             -d "{\"name\":\"${cluster_name}\",\"type\":$ct_id}" >/dev/null
         fi
 
+        # 6. site "${site_name}" — NetBox requires a site before any DCIM device, so seed a default
+        # one to make /dcim/devices/ usable out of the box.
+        site_id="$(curl -sf "$${auth[@]}" "$NETBOX_URL/api/dcim/sites/?name=${site_name}" | jq -r '.results[0].id // empty')"
+        if [ -z "$site_id" ]; then
+          curl -sf "$${auth[@]}" -X POST "$NETBOX_URL/api/dcim/sites/" \
+            -d '{"name":"${site_name}","slug":"${site_slug}","status":"active"}' >/dev/null
+        fi
+
         mkdir -p /var/lib/netbox-bootstrap
         touch /var/lib/netbox-bootstrap/done
       }

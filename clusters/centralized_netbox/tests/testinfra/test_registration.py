@@ -26,6 +26,13 @@ def test_cluster_exists(api, netbox):
     assert str(results[0]["type"]["name"]) == "Multipass"
 
 
+def test_default_site_exists(api, netbox):
+    """The bootstrap seeds a default DCIM site so /dcim/devices/ is usable (needs a site)."""
+    results = _results(api, "/api/dcim/sites/", name=netbox["site"])
+    assert results, f"default site {netbox['site']} was not created"
+    assert results[0]["status"]["value"] == "active"
+
+
 def test_client_vm_registered_active(api, netbox):
     results = _results(api, "/api/virtualization/virtual-machines/", name=netbox["vm_name"])
     assert results, f"VM {netbox['vm_name']} did not self-register"

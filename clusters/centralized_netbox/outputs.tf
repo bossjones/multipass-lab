@@ -32,6 +32,11 @@ output "netbox_cluster_name" {
   value       = var.cluster_name
 }
 
+output "netbox_site_name" {
+  description = "The default DCIM site the bootstrap creates (netbox_cli check + testinfra resolve this)."
+  value       = var.site_name
+}
+
 output "registered_vm_name" {
   description = "Name of the Virtual Machine the client is expected to self-register as (== the client VM name)."
   value       = local.client_name

@@ -67,6 +67,12 @@ variable "cluster_name" {
   default     = "centralized-netbox"
 }
 
+variable "site_name" {
+  description = "Default DCIM site the server bootstrap creates. NetBox requires a site before any device can be added, so seeding one makes /dcim/devices/ usable out of the box."
+  type        = string
+  default     = "multipass-lab"
+}
+
 variable "ssh_pubkey_path" {
   description = "Path to the SSH public key injected into the ubuntu user (used by the testinfra verify loop)."
   type        = string

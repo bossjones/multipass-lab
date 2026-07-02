@@ -59,7 +59,7 @@ Global options (on the app callback): `--cluster` (default `centralized_netbox`)
 | `status` | `GET /api/status/` (raw httpx) | NetBox + Django/RQ versions, health |
 | `clusters` | `GET /api/virtualization/clusters/` (pynetbox) | list virtualization clusters |
 | `vms` | `GET /api/virtualization/virtual-machines/` (pynetbox) | list VMs: name/status/cluster/primary_ip |
-| `check` | status + auth + cluster + VM + primary-IP | assert & exit nonzero |
+| `check` | status + auth + cluster + site + VM + primary-IP | assert & exit nonzero |
 
 Introspection prints a rich table, or clean `json.dumps` under `--json`.
 
@@ -73,9 +73,11 @@ Assertions, each a `CheckReport` row (`pass`/`fail`/`skip`):
    not return 401/403.
 3. **Cluster present** — the `--cluster-name` (default `centralized-netbox`, resolved from
    `tofu output` when available) exists.
-4. **Client VM registered** — the expected VM (`--vm-name`, default the `registered_vm_name`
+4. **Site present** — the default DCIM `--site-name` (default `multipass-lab`, resolved from
+   `tofu output netbox_site_name` when available) exists (NetBox needs a site before any device).
+5. **Client VM registered** — the expected VM (`--vm-name`, default the `registered_vm_name`
    `tofu output`) exists with `status=active`.
-5. **Primary IP assigned** — that VM has a non-null `primary_ip4`.
+6. **Primary IP assigned** — that VM has a non-null `primary_ip4`.
 
 Any `fail` → exit 2 (`CHECK_FAIL_EXIT`). In `--server-url` mode (no tofu), the cluster/VM names
 that would come from `tofu output` fall back to the documented defaults, and steps that cannot be

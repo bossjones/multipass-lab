@@ -34,6 +34,7 @@ from rich.table import Table
 PORT = 8000
 DEFAULT_CLUSTER_NAME = "centralized-netbox"
 DEFAULT_VM_NAME = "centralized-netbox-client"
+DEFAULT_SITE_NAME = "multipass-lab"
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help=__doc__)
 console = Console()
@@ -46,6 +47,7 @@ class Options:
     token: str | None
     cluster_name: str | None
     vm_name: str | None
+    site_name: str | None
     as_json: bool
     timeout: float
     insecure: bool
@@ -57,6 +59,7 @@ class Ctx:
     token: str | None
     cluster_name: str
     vm_name: str
+    site_name: str
     as_json: bool
     timeout: float
     insecure: bool
@@ -84,13 +87,16 @@ def _main(
     vm_name: str = typer.Option(
         None, "--vm-name", help="expected self-registered VM (else tofu / default)"
     ),
+    site_name: str = typer.Option(
+        None, "--site-name", help="expected default DCIM site (else tofu / default)"
+    ),
     as_json: bool = typer.Option(False, "--json", help="machine-readable JSON output"),
     timeout: float = typer.Option(10.0, "--timeout"),
     insecure: bool = typer.Option(False, "--insecure"),
 ):
     """NetBox verification CLI."""
     ctx.obj = Options(
-        cluster, server_url, token, cluster_name, vm_name, as_json, timeout, insecure
+        cluster, server_url, token, cluster_name, vm_name, site_name, as_json, timeout, insecure
     )
 
 
@@ -99,6 +105,7 @@ def resolve(opts: Options) -> Ctx:
     token = opts.token or os.environ.get("NETBOX_TOKEN")
     cluster_name = opts.cluster_name
     vm_name = opts.vm_name
+    site_name = opts.site_name
 
     # tofu mode: no explicit URL -> resolve everything from `tofu output -json`.
     if base_url is None:
@@ -112,6 +119,7 @@ def resolve(opts: Options) -> Ctx:
         token = token or val("netbox_api_token")
         cluster_name = cluster_name or val("netbox_cluster_name")
         vm_name = vm_name or val("registered_vm_name")
+        site_name = site_name or val("netbox_site_name")
 
     if base_url is None:
         _die("could not resolve NetBox URL — pass --server-url or run from a cluster dir")
@@ -121,6 +129,7 @@ def resolve(opts: Options) -> Ctx:
         token=token,
         cluster_name=cluster_name or DEFAULT_CLUSTER_NAME,
         vm_name=vm_name or DEFAULT_VM_NAME,
+        site_name=site_name or DEFAULT_SITE_NAME,
         as_json=opts.as_json,
         timeout=opts.timeout,
         insecure=opts.insecure,
@@ -241,17 +250,19 @@ def check(ctx: typer.Context):
         _render_check(c, report)
         raise typer.Exit(report.exit_code)
 
-    # 2/3. Token authenticates + the bootstrapped cluster exists.
+    # 2/3/4. Token authenticates + the bootstrapped cluster + default DCIM site exist.
     nb = c.nb()
-    cluster_ok = False
     try:
-        found = list(nb.virtualization.clusters.filter(name=c.cluster_name))
+        clusters = list(nb.virtualization.clusters.filter(name=c.cluster_name))
         report.add("token authenticates", True, "authenticated read succeeded")
-        cluster_ok = len(found) >= 1
-        report.add("cluster present", cluster_ok, c.cluster_name)
+        report.add("cluster present", len(clusters) >= 1, c.cluster_name)
+        # NetBox requires a site before any device; the bootstrap seeds a default one.
+        sites = list(nb.dcim.sites.filter(name=c.site_name))
+        report.add("site present", len(sites) >= 1, c.site_name)
     except Exception as exc:  # noqa: BLE001 - pynetbox raises on 401/403/transport errors
         report.add("token authenticates", False, str(exc))
         report.skip("cluster present", "auth failed")
+        report.skip("site present", "auth failed")
 
     # 4/5. The client VM registered itself, active, with a primary IP.
     vm = None
