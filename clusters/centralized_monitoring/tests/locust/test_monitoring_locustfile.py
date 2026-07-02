@@ -45,6 +45,26 @@ def test_statsd_line_format():
     )
 
 
+# --- per-User host routing ---------------------------------------------------
+
+
+def test_each_httpuser_targets_its_own_port():
+    """Each HttpUser declares a distinct service port.
+
+    locust_cli passes no ``--host`` precisely so these class ``host`` values win; a CLI
+    ``--host`` would collapse them all onto one port and 404 the OTLP/Prometheus load.
+    """
+    assert m.OpenObserveIngestUser.host.endswith(f":{m.OPENOBSERVE_PORT}")
+    assert m.OtlpUser.host.endswith(f":{m.OTLP_HTTP_PORT}")
+    assert m.QueryUser.host.endswith(f":{m.PROMETHEUS_PORT}")
+    ports = {
+        m.OpenObserveIngestUser.host,
+        m.OtlpUser.host,
+        m.QueryUser.host,
+    }
+    assert len(ports) == 3, "each HttpUser must target a distinct host:port"
+
+
 # --- OpenObserve ingest end-to-end (against pytest-httpserver) ----------------
 
 

@@ -20,6 +20,9 @@ receivers:
       - /var/lib/docker/containers/*/*.log
     include_file_path: true
     start_at: beginning
+    # Persist read offsets so a collector restart resumes where it left off instead of
+    # re-shipping every file from the top (start_at: beginning) — see file_storage below.
+    storage: file_storage/filelog
     operators:
       # docker json-file lines look like {"log":"...","stream":"stdout","time":"..."}
       - type: json_parser
@@ -33,6 +36,16 @@ receivers:
       - /var/log/syslog
     include_file_path: true
     start_at: beginning
+    storage: file_storage/filelog
+%{ endif ~}
+
+%{ if enable_openobserve ~}
+extensions:
+  # Persistent filelog read offsets. Without this, offsets live only in memory and every
+  # collector restart re-reads each file from the top (start_at: beginning) -> duplicate
+  # rows in container_logs/host_logs. Backed by a Docker volume (see compose.yaml).
+  file_storage/filelog:
+    directory: /var/lib/otelcol/storage
 %{ endif ~}
 
 processors:
@@ -67,6 +80,9 @@ exporters:
 %{ endif ~}
 
 service:
+%{ if enable_openobserve ~}
+  extensions: [file_storage/filelog]
+%{ endif ~}
   telemetry:
     metrics:
       # Collector self-metrics on :8888 (scraped by Prometheus's `selfmetrics` job). Recent

@@ -165,7 +165,8 @@ run "defaults_sizing_names_and_render" {
       "Basic ${base64encode("admin@example.com:Complexpass#123")}",
       "k0s_host",
       "k0s_pods",
-    ] : strcontains(local_file.k0s_otel_config.content, marker)])
+      "file_storage", # persistent filelog offsets so restarts don't re-ship every file
+    ] : strcontains(local_file.k0s_otel_config[0].content, marker)])
     error_message = "the pushed k0s agent config must target the server IP with OpenObserve auth"
   }
 

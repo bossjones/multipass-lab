@@ -221,6 +221,9 @@ runcmd:
   # OpenObserve (k0s_host / k0s_pods streams). Runs as root so it can read /var/log/pods.
   # The config written above uses a 127.0.0.1 placeholder endpoint until OpenTofu pushes the
   # real server IP post-apply and restarts this unit.
+  # Offset dir for the file_storage extension must exist before the unit starts (otelcol
+  # errors if the directory is missing) — persists filelog offsets across restarts.
+  - mkdir -p /var/lib/otelcol-contrib/storage
   - /usr/local/sbin/install-exporter.sh otelcol-contrib https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v0.117.0/otelcol-contrib_0.117.0_linux_{ARCH}.tar.gz otelcol-contrib --config=/etc/otelcol/collector-config.yaml
 %{ endif ~}
 

@@ -174,7 +174,12 @@ resource "multipass_instance" "server" {
 # -init alone can't express it. local-exec runs only at apply, so hermetic `command = plan`
 # tests never shell out to multipass.
 
+# Gated on the same condition as the consumer below: without count, the rendered config
+# (which embeds openobserve_password) would be written to render_dir on disk even when log
+# shipping is disabled.
 resource "local_file" "k0s_otel_config" {
+  count = var.enable_openobserve && var.enable_k0s_log_shipping ? 1 : 0
+
   filename = "${local.render_dir}/k0s-collector-config.yaml"
   content = templatefile("${path.module}/cloud-init/otel/k0s-collector-config.yaml.tftpl", {
     server_ip            = multipass_instance.server.ipv4
@@ -190,14 +195,18 @@ resource "terraform_data" "k0s_log_shipper" {
   triggers_replace = [
     multipass_instance.server.ipv4,
     local.openobserve_password,
-    local_file.k0s_otel_config.content,
+    local_file.k0s_otel_config[0].content,
   ]
 
+  # Wait for the k0s VM's cloud-init to finish (the otelcol-contrib unit is installed there)
+  # before pushing config + restarting; a slow k0s boot would otherwise fail the restart. The
+  # `|| systemctl start` fallback covers the case where the unit isn't active yet.
   provisioner "local-exec" {
     command = <<-EOT
-      multipass transfer ${local_file.k0s_otel_config.filename} ${local.k0s_name}:/tmp/otelcol-config.yaml
+      multipass exec ${local.k0s_name} -- cloud-init status --wait || true
+      multipass transfer ${local_file.k0s_otel_config[0].filename} ${local.k0s_name}:/tmp/otelcol-config.yaml
       multipass exec ${local.k0s_name} -- sudo cp /tmp/otelcol-config.yaml /etc/otelcol/collector-config.yaml
-      multipass exec ${local.k0s_name} -- sudo systemctl restart otelcol-contrib
+      multipass exec ${local.k0s_name} -- sudo systemctl restart otelcol-contrib || multipass exec ${local.k0s_name} -- sudo systemctl start otelcol-contrib
     EOT
   }
 }

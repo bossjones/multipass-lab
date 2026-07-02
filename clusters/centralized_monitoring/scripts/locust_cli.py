@@ -210,13 +210,18 @@ def _build_locust_argv(
     web_port: int | None = None,
     csv_prefix: str | None = None,
 ) -> list[str]:
-    """Assemble the `locust` argv. Pure — no side effects — so tests can assert it."""
+    """Assemble the `locust` argv. Pure — no side effects — so tests can assert it.
+
+    No ``--host`` is passed: each ``HttpUser`` subclass in ``monitoring.py`` declares
+    its own ``host`` (OpenObserve :5080, OTLP :4318, Prometheus :9090; Grafana via an
+    absolute URL). A CLI ``--host`` overrides *every* selected user's ``host``, which
+    would misroute the OTLP and Prometheus load to :5080 (404). The target IP still
+    reaches the swarm via ``LOCUST_TARGET_IP`` (see ``_locust_env``).
+    """
     argv = [
         _locust_bin(),
         "-f",
         str(locustfile),
-        "--host",
-        f"http://{ip}:{OPENOBSERVE_PORT}",
     ]
     if headless:
         argv.append("--headless")

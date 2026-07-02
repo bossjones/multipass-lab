@@ -11,6 +11,10 @@ receivers:
       - /var/log/syslog
     include_file_path: true
     start_at: beginning
+    # Persist read offsets across restarts. terraform_data.k0s_log_shipper restarts this
+    # unit on every triggering apply; without persistent offsets, start_at: beginning would
+    # re-ship every file each time -> duplicate rows in k0s_host/k0s_pods.
+    storage: file_storage
   # Kubernetes pod logs — k0s writes CRI/containerd logs under /var/log/pods; the `container`
   # operator auto-detects the CRI/docker log format and extracts k8s metadata. start_at:
   # beginning so already-written pod logs (kube-system pods are quiet after startup) are shipped.
@@ -19,8 +23,15 @@ receivers:
       - /var/log/pods/*/*/*.log
     include_file_path: true
     start_at: beginning
+    storage: file_storage
     operators:
       - type: container
+
+extensions:
+  # Persistent filelog read offsets (dir created by k0s cloud-init runcmd). The unit runs
+  # as root, so /var/lib/otelcol-contrib/storage is writable.
+  file_storage:
+    directory: /var/lib/otelcol-contrib/storage
 
 processors:
   batch: {}
@@ -40,6 +51,7 @@ exporters:
       stream-name: k0s_pods
 
 service:
+  extensions: [file_storage]
   pipelines:
     logs/host:
       receivers: [filelog/host]

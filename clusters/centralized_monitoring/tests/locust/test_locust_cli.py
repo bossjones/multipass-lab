@@ -65,6 +65,9 @@ def test_run_web_builds_argv(monkeypatch):
     assert argv[argv.index("-f") + 1].endswith("monitoring.py")
     assert "--web-port" in argv and "8089" in argv
     assert "--headless" not in argv
+    # No --host: it would override every User's declared host and misroute OTLP/Prometheus
+    # load to :5080. The target IP reaches the swarm via LOCUST_TARGET_IP instead.
+    assert "--host" not in argv
     assert captured["env"]["LOCUST_TARGET_IP"] == "10.0.0.5"
     assert captured["env"]["OO_USER"] == "admin@example.com"
     assert captured["env"]["OO_PASSWORD"] == "Complexpass#123"
@@ -88,6 +91,7 @@ def test_run_headless_builds_argv(monkeypatch):
     assert argv[argv.index("-r") + 1] == "3.0"
     assert argv[argv.index("-t") + 1] == "20s"
     assert "--web-port" not in argv
+    assert "--host" not in argv
 
 
 def test_run_propagates_locust_exit_code(monkeypatch):

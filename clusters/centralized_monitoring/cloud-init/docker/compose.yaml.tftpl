@@ -96,6 +96,9 @@ services:
       # Read-only host log sources for the filelog receivers (container + host logs).
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/log:/var/log:ro
+      # Persistent filelog read offsets (file_storage extension) — survives restarts so
+      # start_at: beginning doesn't re-ship every file. Runs as root (0:0), so writable.
+      - otel_storage:/var/lib/otelcol/storage
 %{ endif ~}
     restart: unless-stopped
 %{ endif ~}
@@ -200,6 +203,7 @@ volumes:
   grafana_data:
 %{ if enable_openobserve ~}
   openobserve_data:
+  otel_storage:
 %{ endif ~}
 %{ if enable_heimdall ~}
   heimdall_config:

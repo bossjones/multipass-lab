@@ -370,7 +370,7 @@ just prometheus-targets centralized_monitoring
 
 just openobserve-check centralized_monitoring
 just openobserve-streams centralized_monitoring
-just openobserve-search centralized_monitoring 'SELECT * FROM default'
+just openobserve-search centralized_monitoring 'SELECT * FROM container_logs'
 ```
 
 ✅ **Checkpoint:** `just prometheus-query centralized_monitoring 'up'` returns a table of
