@@ -37,7 +37,21 @@ just status                      # multipass list
 just ssh   centralized_logging central   # shell onto the <name>-<role> VM
 just open  centralized_monitoring        # open the core dashboards in Chrome
 just open  centralized_monitoring --full # + every enabled /metrics endpoint (debug)
+just locust centralized_monitoring       # host-run Locust web UI (localhost:8089) drives live traffic
+just locust-check centralized_monitoring # short headless smoke run -> exit code (see below)
+just coroot-status centralized_logging   # Coroot stack pods on the k0s node (see below)
+just coroot-deploy centralized_logging   # re-run the Coroot installer (idempotent repair)
 ```
+
+**Coroot (opt-in eBPF observability on k0s).** `enable_coroot` deploys the self-hosted
+[Coroot](https://github.com/coroot/coroot) stack (server + eBPF node-agent + cluster-agent +
+bundled Prometheus + ClickHouse) onto the `centralized_logging` k0s node via Helm, declaratively
+in cloud-init (no cloud account, no secrets; arm64-native). `enable_ingress` adds an ingress-nginx
+controller and exposes Coroot's UI through it (also always on a NodePort, `http://<k0s_ip>:30080`).
+Both default **off**; enabling Coroot auto-bumps the k0s VM to 4 vCPU / 8G / 50G (`local.k0s_size`
+in `main.tf`). Because it lives in cloud-init, enabling it needs `just recreate centralized_logging`
+(not `just up`). Full design in `specs/coroot.md`; flag reference in
+`clusters/centralized_logging/docs/feature-flags.md`.
 
 A failed `just up` (e.g. a `multipass launch` timeout) leaves an orphaned VM that OpenTofu
 never recorded in state, so plain `tofu destroy` can't remove it and the next `up` collides
@@ -77,7 +91,21 @@ no `check`), so it needs no per-cluster edit. Design docs: `specs/cli-netbox.md`
 first boot, exposed via `tofu output` on purpose (throwaway VMs) — do not copy that to Proxmox. The
 cluster pins **NetBox 4.1** (`netbox_docker_ref = 3.0.2`): 4.2+ uses hashed v2/Bearer tokens whose
 value can't be pinned. Its cloud-init brings NetBox up **asynchronously** (systemd oneshot,
-`--no-block`) because netbox-docker's image pull exceeds Multipass's 300s launch window.
+`--no-block`) because netbox-docker's image pull exceeds Multipass's 300s launch window. On top of
+the cluster/site bootstrap, the server also **seeds a base data model** (`netbox-seed.sh`:
+organization hierarchy, a DCIM device library, a real Device for the Multipass host, IPAM keyed to
+the live subnet, tenancy) so a fresh NetBox is immediately useful — the client is a
+`Virtualization` VM (not a DCIM device) that links to the host Device; see `specs/netbox-data.md`.
+
+**Locust load generators.** `centralized_monitoring/scripts/locust_cli.py` (uv single-file, typer +
+rich, wrapping `locust`) is a **host-run** load generator — no in-cluster deployment, no `enable_locust`
+flag, no cloud-init/compose changes. It resolves VM IPs from `tofu output` (or `--server-url`) via the
+same `_obs_common.py`, then drives a cluster's ingest/query surfaces (OpenObserve `:5080` `_json`, OTLP
+`:4318`, StatsD `udp:8125`, Prometheus `:9090`, Grafana `:3000`) so dashboards show live traffic.
+Recipes: `just locust` (web UI on `localhost:8089`), `just locust-headless` (pass `-u/-r/-t`),
+`just locust-check` (CI smoke, exits nonzero), `just locust-targets` (print resolved endpoints, no
+load). Hermetic suite in `tests/locust/` (pytest-httpserver + stub UDP socket, no VMs). Design doc:
+`specs/locustio.md`.
 
 Run a single hermetic test from the cluster dir:
 `tofu -chdir=clusters/<name> test -test-directory=tests/tofu`.

@@ -143,6 +143,8 @@ uses a null `devnull` receiver in the lab):
 | `http://admin:admin@<server>:3000/api/datasources` | JSON of provisioned Grafana datasources |
 | `http://<server>:5080/healthz` | OpenObserve health check |
 | `http://<server>:5080/api/default/prometheus` | OpenObserve PromQL-compatible API (the Grafana datasource URL) |
+| `http://<server>:5080/api/v2/default/folders/dashboards` | OpenObserve dashboard folders (GET list / POST create; v0.91 uses the v2 folders API) |
+| `http://<server>:5080/api/default/dashboards?folder=<id>` | OpenObserve dashboards (GET/POST; PUT needs `&hash=<hash>`; DELETE `.../dashboards/<id>?folder=<id>`) — see `just openobserve-dashboards` |
 
 These endpoints are wrapped by the host-side **verification CLIs** — `just grafana-check`,
 `just prometheus-check`, `just openobserve-check` (or `just verify-api` for all three), plus
@@ -152,15 +154,59 @@ nonzero on failure. See [`specs/cli-grafana.md`](../../../specs/cli-grafana.md),
 [`specs/cli-prometheus.md`](../../../specs/cli-prometheus.md), and
 [`specs/cli-openobserve.md`](../../../specs/cli-openobserve.md).
 
+## Load generation (Locust)
+
+The dashboards above are only interesting when traffic flows. `just locust <cluster>` runs a
+**host-run** Locust load generator (`scripts/locust_cli.py`) that resolves the server IP from
+`tofu output` and drives these ingest/query surfaces:
+
+| Target | Endpoint | Lands in |
+|--------|----------|----------|
+| OpenObserve ingest | `POST http://<server>:5080/api/default/loadtest/_json` | OpenObserve `loadtest` stream |
+| OTLP logs | `POST http://<server>:4318/v1/logs` | OpenObserve (via OTel Collector) |
+| StatsD | `udp://<server>:8125` | statsd_exporter `:9102` → Prometheus `statsd` job |
+| Prometheus query | `GET http://<server>:9090/api/v1/query?query=up` | read/query load |
+| Grafana query | `GET http://<server>:3000/api/health` | read/query load |
+
+Recipes: `just locust` (web UI on `localhost:8089`), `just locust-headless <cluster> -u 20 -r 5 -t 2m`
+(headless), `just locust-check` (short CI smoke run, exits nonzero on failure), `just locust-targets`
+(print the resolved endpoints, no load). Locust is host-run only — no in-cluster deployment. See
+[`specs/locustio.md`](../../../specs/locustio.md).
+
 ## OpenTelemetry Collector endpoints
 
-From [`collector-config.yaml`](../cloud-init/otel/collector-config.yaml):
+From [`collector-config.yaml.tftpl`](../cloud-init/otel/collector-config.yaml.tftpl) (the server
+collector, rendered with the OpenObserve org + password):
 
 | Endpoint | Role |
 |----------|------|
 | `0.0.0.0:4317` (gRPC), `0.0.0.0:4318` (HTTP) | OTLP receivers (apps push traces/metrics/logs) |
 | `:8888` | Collector self-telemetry, scraped by the `selfmetrics` job |
 | `0.0.0.0:8889` | internal Prometheus exporter endpoint for the metrics pipeline |
-| `http://openobserve:5080/api/default` (OTLP HTTP) | traces + logs export to OpenObserve |
+| `filelog` `/var/lib/docker/containers/*/*.log` | tails Docker container logs → OpenObserve |
+| `filelog` `/var/log/syslog` | tails host logs → OpenObserve |
+| `http://openobserve:5080/api/default` (OTLP HTTP) | traces + logs export to OpenObserve (per-stream `stream-name` header) |
 
-Pipelines: **traces → OpenObserve**, **metrics → Prometheus**, **logs → OpenObserve**.
+Pipelines: **traces → OpenObserve** (`otlp_logs`), **metrics → internal Prometheus exporter**,
+**logs/otlp → OpenObserve** (`otlp_logs`), **logs/container → OpenObserve** (`container_logs`),
+**logs/host → OpenObserve** (`host_logs`).
+
+## OpenObserve ingestion (what actually lands)
+
+After `just recreate centralized_monitoring`, OpenObserve (org `default`) receives real data via
+three paths — Prometheus `remote_write`, the server OTel Collector, and a k0s log-shipping agent:
+
+| Stream | Source | Path |
+|--------|--------|------|
+| `metrics` | every Prometheus-scraped series (server + k0s) | Prometheus `remote_write` → `http://openobserve:5080/api/default/prometheus/api/v1/write` |
+| `container_logs` | server Docker container logs | server OTel Collector `filelog` |
+| `host_logs` | server `/var/log/syslog` | server OTel Collector `filelog` |
+| `otlp_logs` | apps pushing OTLP + traces | server OTel Collector OTLP receiver |
+| `k0s_host` | k0s VM `/var/log/syslog` | k0s `otelcol-contrib` agent |
+| `k0s_pods` | k0s Kubernetes pod logs (`/var/log/pods/*`) | k0s `otelcol-contrib` agent |
+
+The k0s agent's server endpoint can't be known at cloud-init render time (the k0s VM is created
+before the server), so it boots with a `127.0.0.1` placeholder and is re-pointed at the real server
+IP post-apply by `terraform_data.k0s_log_shipper` (a `multipass transfer` + `systemctl restart`).
+Gated on `enable_openobserve` + `enable_k0s_log_shipping` (both default `true`).
+`just openobserve-check` asserts this is live via `--require-metrics --require-logs`.

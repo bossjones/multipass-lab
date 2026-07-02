@@ -134,6 +134,16 @@ write_files:
                   path: /etc/kube-state-metrics
                   type: Directory
 %{ endif ~}
+%{ if enable_k0s_log_shipping && enable_openobserve ~}
+  # otelcol-contrib log-shipping agent config. The endpoint here is a 127.0.0.1 PLACEHOLDER:
+  # the k0s VM is created before the server, so the server IP is unknown at boot. OpenTofu
+  # re-renders this file with the real server IP and pushes it post-apply (see terraform_data
+  # "k0s_log_shipper" in main.tf), then restarts the unit.
+  - path: /etc/otelcol/collector-config.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, k0s_otel_config)}
+%{ endif ~}
 
 runcmd:
   # Enforce UTC late: Multipass injects the host timezone during first boot and can beat the
@@ -205,6 +215,16 @@ runcmd:
 %{ if enable_script_exporter ~}
   # script_exporter — arbitrary shell-script metrics (:9469)
   - /usr/local/sbin/install-exporter.sh script_exporter https://github.com/ricoberger/script_exporter/releases/download/v2.18.0/script_exporter-2.18.0.linux-{ARCH}.tar.gz script_exporter
+%{ endif ~}
+%{ if enable_k0s_log_shipping && enable_openobserve ~}
+  # otelcol-contrib — ships the k0s host syslog + Kubernetes pod logs to the server's
+  # OpenObserve (k0s_host / k0s_pods streams). Runs as root so it can read /var/log/pods.
+  # The config written above uses a 127.0.0.1 placeholder endpoint until OpenTofu pushes the
+  # real server IP post-apply and restarts this unit.
+  # Offset dir for the file_storage extension must exist before the unit starts (otelcol
+  # errors if the directory is missing) — persists filelog offsets across restarts.
+  - mkdir -p /var/lib/otelcol-contrib/storage
+  - /usr/local/sbin/install-exporter.sh otelcol-contrib https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v0.117.0/otelcol-contrib_0.117.0_linux_{ARCH}.tar.gz otelcol-contrib --config=/etc/otelcol/collector-config.yaml
 %{ endif ~}
 
 final_message: "k0s monitored host ready — k0s status; exporters scraped by the server"

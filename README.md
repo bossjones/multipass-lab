@@ -154,7 +154,8 @@ templates on every apply.
 | [`multipass`](https://multipass.run/) | local Ubuntu VM host (Proxmox stand-in) |
 | [`tofu`](https://opentofu.org/) (OpenTofu ≥ 1.7) | provision VMs + render cloud-init |
 | [`just`](https://github.com/casey/just) | task runner orchestrating clusters by name |
-| [`uv`](https://docs.astral.sh/uv/) | Python env for the testinfra verify loop |
+| [`uv`](https://docs.astral.sh/uv/) | Python env for the testinfra verify loop + the host-run CLIs (`*_cli.py`, `locust_cli.py`) |
+| [`locust`](https://locust.io/) | host-run load generators (`just locust*`) driving live traffic into a cluster |
 | `ansible` | configuration management (where applicable) |
 
 **Providers:** [`larstobi/multipass ~> 1.4`](https://registry.terraform.io/providers/larstobi/multipass)
@@ -164,6 +165,7 @@ templates on every apply.
 ## Further reading
 
 - 📚 [`docs/README.md`](docs/README.md) — documentation hub (start here to navigate the docs)
+- 🧭 [`docs/TUTORIAL.md`](docs/TUTORIAL.md) — **cross-cluster getting-started**: bring up either cluster and interact with every service, with host/docker/k0s mermaid diagrams
 - 📘 [`clusters/centralized_logging/USAGE.md`](clusters/centralized_logging/USAGE.md) — detailed how-to-use guide for the first lab
 - 🧭 [`clusters/centralized_logging/TUTORIAL.md`](clusters/centralized_logging/TUTORIAL.md) — hands-on metrics-layer walkthrough
 - 📖 [`clusters/centralized_logging/README.md`](clusters/centralized_logging/README.md) — the first lab
@@ -174,6 +176,8 @@ templates on every apply.
 - 📖 [`clusters/centralized_monitoring/README.md`](clusters/centralized_monitoring/README.md) — the second lab
 - 📐 [`specs/centralized_monitoring.md`](specs/centralized_monitoring.md) — full design of the centralized-monitoring cluster
 - 🧪 [`specs/e2e-centralized-monitoring.md`](specs/e2e-centralized-monitoring.md) — end-to-end monitoring design
+- 📥 [`specs/openobserve.md`](specs/openobserve.md) — OpenObserve ingestion design (Prometheus `remote_write` + OTel filelog + k0s log shipping)
+- 🐝 [`specs/locustio.md`](specs/locustio.md) — host-run Locust load generators (`just locust*`)
 - 🤖 [`CLAUDE.md`](CLAUDE.md) — repo conventions and `.claude/` automation guidance
 - ⚙️ [`Justfile`](Justfile) — every orchestration recipe
 - ✅ [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — hermetic CI pipeline

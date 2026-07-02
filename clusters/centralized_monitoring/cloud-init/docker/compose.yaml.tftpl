@@ -79,6 +79,11 @@ services:
   # --- OpenTelemetry Collector — OTLP gateway -------------------------------
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest
+%{ if enable_openobserve ~}
+    # Run as root so the filelog receivers can read the host's docker container logs and
+    # /var/log/syslog (both 0640 root-owned — unreadable by the image's default UID 10001).
+    user: "0:0"
+%{ endif ~}
     command:
       - "--config=/etc/otel/collector-config.yaml"
     ports:
@@ -87,6 +92,14 @@ services:
       - "8888:8888"
     volumes:
       - /opt/stack/otel/collector-config.yaml:/etc/otel/collector-config.yaml:ro
+%{ if enable_openobserve ~}
+      # Read-only host log sources for the filelog receivers (container + host logs).
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/log:/var/log:ro
+      # Persistent filelog read offsets (file_storage extension) — survives restarts so
+      # start_at: beginning doesn't re-ship every file. Runs as root (0:0), so writable.
+      - otel_storage:/var/lib/otelcol/storage
+%{ endif ~}
     restart: unless-stopped
 %{ endif ~}
 %{ if enable_blackbox ~}
@@ -190,6 +203,7 @@ volumes:
   grafana_data:
 %{ if enable_openobserve ~}
   openobserve_data:
+  otel_storage:
 %{ endif ~}
 %{ if enable_heimdall ~}
   heimdall_config:

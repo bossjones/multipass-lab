@@ -64,6 +64,18 @@ def metrics_targets(tofu_output):
 
 
 @pytest.fixture(scope="session")
+def enabled_features(tofu_output):
+    """Opt-in non-exporter features {coroot, ingress}. test_coroot skips when off."""
+    return tofu_output["enabled_features"]["value"]
+
+
+@pytest.fixture(scope="session")
+def coroot_info(tofu_output):
+    """Coroot deployment info {enabled, ingress, nodeport, nodeport_url, ingress_host}."""
+    return tofu_output["coroot"]["value"]
+
+
+@pytest.fixture(scope="session")
 def ssh_config_file(tmp_path_factory):
     cfg = tmp_path_factory.mktemp("ssh") / "config"
     cfg.write_text(
