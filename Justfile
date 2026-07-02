@@ -184,6 +184,26 @@ openobserve-streams CLUSTER:
 openobserve-search CLUSTER SQL:
     uv run {{cluster_root}}/{{CLUSTER}}/scripts/openobserve_cli.py --cluster {{CLUSTER}} search {{quote(SQL)}}
 
+# --- Locust load generators (host-run; resolve VM IPs from tofu; see specs/locustio.md) ---
+# Drive live traffic into a cluster's dashboards. `*FLAGS` pass through to the CLI's callback
+# (e.g. -u/-r/-t, --server-url). No flag = interactive web UI on http://localhost:8089.
+
+# launch Locust web UI against a cluster:  just locust centralized_monitoring
+locust CLUSTER *FLAGS:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/locust_cli.py --cluster {{CLUSTER}} {{FLAGS}} run
+
+# headless run (pass -u/-r/-t via FLAGS):  just locust-headless centralized_monitoring -u 20 -r 5 -t 2m
+locust-headless CLUSTER *FLAGS:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/locust_cli.py --cluster {{CLUSTER}} --headless {{FLAGS}} run
+
+# short smoke run -> exit code (requests fired, zero failures):  just locust-check centralized_monitoring
+locust-check CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/locust_cli.py --cluster {{CLUSTER}} check
+
+# print the resolved endpoints Locust will drive (no load):  just locust-targets centralized_monitoring
+locust-targets CLUSTER *FLAGS:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/locust_cli.py --cluster {{CLUSTER}} {{FLAGS}} targets
+
 # multipass list
 status:
     multipass list

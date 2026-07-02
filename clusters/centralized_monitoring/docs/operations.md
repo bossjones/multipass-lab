@@ -22,6 +22,8 @@ name is the only argument these recipes take.
 | `just check centralized_monitoring` | `tofu fmt -check -recursive` + `validate` + `tofu test -test-directory=tests/tofu` | **hermetic — no VMs** |
 | `just up centralized_monitoring` | `tofu apply -auto-approve`, then block on `cloud-init status --wait` over SSH for each VM | launches both VMs |
 | `just verify centralized_monitoring` | `cd tests/testinfra && uv run pytest -v` | **live — SSH to running VMs** |
+| `just verify-api centralized_monitoring` | Grafana/Prometheus/OpenObserve `check` (OpenObserve `--require-metrics --require-logs`) | **live — HTTP APIs** |
+| `just locust centralized_monitoring` | host-run Locust web UI (`localhost:8089`) driving live traffic; `just locust-check` for a CI smoke run | **live — needs VMs up** |
 | `just ssh centralized_monitoring <role>` | resolve `hosts.<role>.ipv4`, SSH as `ubuntu` | — |
 | `just destroy centralized_monitoring` | `tofu destroy -auto-approve` | tears both VMs down |
 | `just down` | `multipass stop --all` (no arg) | stops **all** VMs, preserved |

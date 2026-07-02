@@ -24,6 +24,7 @@ flowchart TD
 |-----|-------------|
 | 🏠 [root `README.md`](../README.md) | Repo overview, labs table, shared conventions, toolchain. |
 | 📚 [`docs/README.md`](README.md) | **This hub** — quickstart + links into the detailed lab docs. |
+| 🧭 [`docs/TUTORIAL.md`](TUTORIAL.md) | **Cross-cluster getting-started** — bring up either cluster and interact with every service, with host/docker/k0s mermaid diagrams. Start here for hands-on. |
 | 📖 [`clusters/centralized_logging/README.md`](../clusters/centralized_logging/README.md) | The lab's **quick-reference** card (topology table + 5-line quickstart). |
 | 📘 [`clusters/centralized_logging/USAGE.md`](../clusters/centralized_logging/USAGE.md) | The lab's **detailed how-to-use guide** — config reference, diagrams, troubleshooting. |
 | 🧭 [`clusters/centralized_logging/TUTORIAL.md`](../clusters/centralized_logging/TUTORIAL.md) | Hands-on **"stand up & verify the metrics layer"** walkthrough. |
@@ -35,6 +36,8 @@ flowchart TD
 | 📚 [`clusters/centralized_monitoring/docs/`](../clusters/centralized_monitoring/docs/) | Deep reference suite — architecture, endpoints, feature flags, dependencies, operations. |
 | 📐 [`specs/centralized_monitoring.md`](../specs/centralized_monitoring.md) | Full **design rationale** for the centralized-monitoring lab. |
 | 🧪 [`specs/e2e-centralized-monitoring.md`](../specs/e2e-centralized-monitoring.md) | End-to-end monitoring design. |
+| 📥 [`specs/openobserve.md`](../specs/openobserve.md) | Design for **OpenObserve ingestion** (Prometheus `remote_write` + OTel filelog + k0s log shipping). |
+| 🐝 [`specs/locustio.md`](../specs/locustio.md) | Design for the **host-run Locust load generators** (`just locust*`). |
 | 🤖 [`CLAUDE.md`](../CLAUDE.md) | Repo conventions and `.claude/` automation guidance. |
 | ⚙️ [`Justfile`](../Justfile) | Every orchestration recipe (`init`/`plan`/`up`/`down`/`check`/`verify`/`status`/`ssh`/`logs`). |
 | ✅ [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | Hermetic CI — auto-discovers every `clusters/<name>/` folder. |
@@ -95,10 +98,17 @@ The runtime-IP injection edge is inverted vs. `centralized_logging`: the k0s cli
 | `centralized-monitoring-server` | Prometheus/Grafana/OpenObserve/Alertmanager hub | 4 vCPU / 8G / 40G |
 | `centralized-monitoring-k0s` | single-node k0s + exporter bundle | 2 vCPU / 4G / 30G |
 
-**Docs:** 📚 [docs/](../clusters/centralized_monitoring/docs/) ·
+Prometheus `remote_write` plus a server OTel Collector and a k0s log-shipping agent feed real
+metrics + logs into **OpenObserve**; `just locust centralized_monitoring` drives host-run load so the
+dashboards fill.
+
+**Docs:** 🧭 [TUTORIAL](TUTORIAL.md) ·
+📚 [docs/](../clusters/centralized_monitoring/docs/) ·
 📘 [USAGE](../clusters/centralized_monitoring/USAGE.md) ·
 📖 [README](../clusters/centralized_monitoring/README.md) ·
-📐 [spec](../specs/centralized_monitoring.md)
+📐 [spec](../specs/centralized_monitoring.md) ·
+📥 [openobserve](../specs/openobserve.md) ·
+🐝 [locustio](../specs/locustio.md)
 
 > _New labs land as new `clusters/<name>/` folders, each with its own `README.md` + `USAGE.md`.
 > Add a section here and a row to the [root README labs table](../README.md#labs) when you
