@@ -1,0 +1,22 @@
+[project]
+name = "netbox-cli-tests"
+version = "0.0.0"
+description = "Hermetic unit tests for netbox_cli (NetBox verification CLI)"
+requires-python = ">=3.11"
+dependencies = [
+    "pytest>=8",
+    "pytest-httpserver>=1.0",
+    "pytest-mock>=3",
+    "typer>=0.12",
+    "rich>=13",
+    "pynetbox>=7.3",
+    "httpx>=0.27",
+    "requests>=2.31",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["."]
+# Make the single-file CLI importable as `netbox_cli` / `_obs_common` from scripts/.
+pythonpath = ["../../scripts"]
+filterwarnings = ["ignore::SyntaxWarning"]

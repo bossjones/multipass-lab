@@ -1,0 +1,116 @@
+#cloud-config
+# Self-registering test VM — on first boot it POSTs itself into NetBox as a Virtual Machine
+# (name + eth0 interface + primary IPv4) via the REST API. The NetBox server IP is injected at
+# render time from multipass_instance.server.ipv4. See specs/centralized_netbox.md.
+package_update: true
+package_upgrade: true
+
+timezone: Etc/UTC
+ntp:
+  enabled: true
+  ntp_client: systemd-timesyncd
+
+packages:
+  - curl
+  - jq
+
+ssh_authorized_keys:
+  - ${ssh_pubkey}
+
+write_files:
+  # Idempotent self-registration: every object is upserted (GET-by-name, POST if absent), so a
+  # re-run PATCHes rather than duplicating. Writes a marker on success (asserted by testinfra).
+  - path: /usr/local/sbin/netbox-register.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -uo pipefail
+      NETBOX_URL="http://${netbox_ip}:${netbox_port}"
+      TOKEN="${netbox_api_token}"
+      CLUSTER_NAME="${cluster_name}"
+      auth=(-H "Authorization: Token $TOKEN" -H "Content-Type: application/json" -H "Accept: application/json")
+
+      register() {
+        set -e
+
+        # 1. Wait for NetBox to be reachable AND our token to be live (authed status = 200). The
+        # server provisions the pinned token during its own bootstrap, so this also waits for that.
+        for _ in $(seq 1 180); do
+          if curl -sf "$${auth[@]}" "$NETBOX_URL/api/status/" >/dev/null 2>&1; then break; fi
+          sleep 5
+        done
+
+        # 2. This VM's identity: hostname + primary IPv4.
+        VM_NAME="$(hostname)"
+        IP="$(ip -4 route get 1.1.1.1 | awk '{print $7; exit}')"
+
+        # 3. Resolve the cluster the server bootstrapped (retry if it is not ready yet).
+        CLUSTER_ID="$(curl -sf "$${auth[@]}" "$NETBOX_URL/api/virtualization/clusters/?name=$CLUSTER_NAME" | jq -r '.results[0].id // empty')"
+        if [ -z "$CLUSTER_ID" ]; then
+          echo "cluster $CLUSTER_NAME not found in NetBox yet" >&2
+          return 1
+        fi
+
+        # 4. Upsert the virtual-machine.
+        VM_ID="$(curl -sf "$${auth[@]}" "$NETBOX_URL/api/virtualization/virtual-machines/?name=$VM_NAME" | jq -r '.results[0].id // empty')"
+        if [ -z "$VM_ID" ]; then
+          VM_ID="$(curl -sf "$${auth[@]}" -X POST "$NETBOX_URL/api/virtualization/virtual-machines/" \
+            -d "{\"name\":\"$VM_NAME\",\"cluster\":$CLUSTER_ID,\"status\":\"active\"}" | jq -r '.id')"
+        fi
+
+        # 5. Upsert the eth0 interface.
+        IF_ID="$(curl -sf "$${auth[@]}" "$NETBOX_URL/api/virtualization/interfaces/?virtual_machine_id=$VM_ID&name=eth0" | jq -r '.results[0].id // empty')"
+        if [ -z "$IF_ID" ]; then
+          IF_ID="$(curl -sf "$${auth[@]}" -X POST "$NETBOX_URL/api/virtualization/interfaces/" \
+            -d "{\"virtual_machine\":$VM_ID,\"name\":\"eth0\"}" | jq -r '.id')"
+        fi
+
+        # 6. Upsert the IP address bound to eth0, then set it as the VM's primary_ip4.
+        ADDR="$IP/24"
+        IPADDR_ID="$(curl -sf "$${auth[@]}" "$NETBOX_URL/api/ipam/ip-addresses/?address=$ADDR" | jq -r '.results[0].id // empty')"
+        if [ -z "$IPADDR_ID" ]; then
+          IPADDR_ID="$(curl -sf "$${auth[@]}" -X POST "$NETBOX_URL/api/ipam/ip-addresses/" \
+            -d "{\"address\":\"$ADDR\",\"assigned_object_type\":\"virtualization.vminterface\",\"assigned_object_id\":$IF_ID,\"status\":\"active\"}" | jq -r '.id')"
+        fi
+        curl -sf "$${auth[@]}" -X PATCH "$NETBOX_URL/api/virtualization/virtual-machines/$VM_ID/" \
+          -d "{\"primary_ip4\":$IPADDR_ID}" >/dev/null
+
+        mkdir -p /var/lib/netbox-register
+        touch /var/lib/netbox-register/done
+      }
+
+      # Retry the whole (idempotent) registration — waits out the server's own bring-up.
+      for attempt in $(seq 1 12); do
+        if register; then
+          echo "netbox registration complete (attempt $attempt)"
+          exit 0
+        fi
+        echo "registration attempt $attempt failed; retrying in 20s" >&2
+        sleep 20
+      done
+      echo "registration failed after retries" >&2
+      exit 1
+
+  - path: /etc/systemd/system/netbox-register.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Self-register this VM into NetBox
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/netbox-register.sh
+      RemainAfterExit=yes
+      TimeoutStartSec=0
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  # Enforce UTC late (Multipass injects the host timezone at first boot — see specs/ntp.md).
+  - timedatectl set-timezone Etc/UTC
+  - systemctl daemon-reload
+  # Start asynchronously: the register script waits (up to ~15 min) for the NetBox server to come
+  # up, which would otherwise block cloud-init past Multipass's 300s launch window.
+  - systemctl enable netbox-register.service
+  - systemctl start --no-block netbox-register.service

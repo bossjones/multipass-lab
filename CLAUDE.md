@@ -15,10 +15,13 @@ new infrastructure so the same modules can target Multipass locally and Proxmox 
 ## Clusters
 
 Each cluster is **vendored to its own folder** under `clusters/<name>/` with its own
-OpenTofu root module, cloud-init templates, and tests. The first is
+OpenTofu root module, cloud-init templates, and tests. The clusters are
 `clusters/centralized_logging/` (syslog-ng log shipping across three VMs; see
-`specs/centralized_logging.md` for the full design). A root `Justfile` orchestrates
-every cluster **by folder name** — that name is the only argument the recipes take.
+`specs/centralized_logging.md`), `clusters/centralized_monitoring/` (Grafana/Prometheus/
+OpenObserve stack), and `clusters/centralized_netbox/` (a NetBox DCIM/IPAM server + a test VM
+that **self-registers** into it via the REST API on first boot; see `specs/centralized_netbox.md`).
+A root `Justfile` orchestrates every cluster **by folder name** — that name is the only argument
+the recipes take.
 
 ```sh
 just check centralized_logging   # hermetic: tofu fmt + validate + test (no VMs)
@@ -64,6 +67,17 @@ Design docs: `specs/cli-grafana.md`, `specs/cli-prometheus.md`, `specs/cli-openo
 query clients are `grafana-client`, `prometheus-api-client`, and raw `httpx` (OpenObserve has no
 read SDK) — **not** the ingestion/IaC libraries (`grafana-foundation-sdk`, `client_python`,
 `openobserve-python-sdk`), which are reserved for the opt-in e2e inject→query loop.
+
+The `centralized_netbox` cluster follows the same shape: `scripts/netbox_cli.py` (typer + rich +
+the official `pynetbox` SDK, plus raw `httpx` for the `/api/status/` probe) with a hermetic suite
+in `tests/netbox/` (pytest-httpserver) and live use via `just verify-api` / `just netbox-check`.
+`verify-api` auto-discovers each cluster's `scripts/*_cli.py` (skipping `heimdall_cli`, which has
+no `check`), so it needs no per-cluster edit. Design docs: `specs/cli-netbox.md`. NetBox auth is a
+**pinned lab API token** (`var.netbox_api_token`) the server bootstrap creates via `manage.py` on
+first boot, exposed via `tofu output` on purpose (throwaway VMs) — do not copy that to Proxmox. The
+cluster pins **NetBox 4.1** (`netbox_docker_ref = 3.0.2`): 4.2+ uses hashed v2/Bearer tokens whose
+value can't be pinned. Its cloud-init brings NetBox up **asynchronously** (systemd oneshot,
+`--no-block`) because netbox-docker's image pull exceeds Multipass's 300s launch window.
 
 Run a single hermetic test from the cluster dir:
 `tofu -chdir=clusters/<name> test -test-directory=tests/tofu`.

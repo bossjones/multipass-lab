@@ -1,0 +1,142 @@
+#cloud-config
+# NetBox server VM — runs the netbox-community/netbox-docker compose stack (NetBox + worker +
+# housekeeping + postgres + redis + redis-cache), creates the admin user + a pinned v1 API token,
+# and bootstraps a virtualization cluster so the client VM has a home. See specs/centralized_netbox.md.
+#
+# We pin netbox-docker to a NetBox 4.1 release (var.netbox_docker_ref, default 3.0.2): 4.2+ switched
+# API tokens to a hashed v2 (Bearer) scheme where a *known* token value cannot be set, which breaks
+# a deterministic lab. 4.1 uses v1 plaintext tokens (`Authorization: Token <40hex>`), so the pinned
+# token works everywhere (client self-registration, host CLI, testinfra).
+#
+# The heavy work (clone + pull ~6 images + migrations + provisioning) runs ASYNCHRONOUSLY via the
+# netbox-stack oneshot, started with `systemctl start --no-block` in runcmd. The larstobi/multipass
+# provider exposes no launch timeout, so `multipass launch` waits on the default 300s cloud-init
+# window — doing the bring-up inline blows past it. cloud-init therefore finishes in ~2 min; NetBox
+# comes up in the background and the testinfra suite polls for the /var/lib/netbox-bootstrap/done
+# marker. The whole provisioning is idempotent and wrapped in a retry loop, so a transient image-pull
+# reset (common) simply retries instead of failing the boot.
+package_update: true
+
+# Time sync — pin every VM to UTC and keep the clock disciplined via systemd-timesyncd.
+timezone: Etc/UTC
+ntp:
+  enabled: true
+  ntp_client: systemd-timesyncd
+
+packages:
+  - docker.io
+  - docker-compose-v2
+  - git
+  - curl
+  - jq
+
+ssh_authorized_keys:
+  - ${ssh_pubkey}
+
+write_files:
+  # netbox-docker override staged in a seed dir; netbox-stack.sh clones netbox-docker then copies
+  # it in (git clone refuses a non-empty target, so we cannot write straight into /opt).
+  - path: /opt/netbox-seed/docker-compose.override.yml
+    permissions: '0644'
+    content: |
+      ${indent(6, override_conf)}
+
+  # Async bring-up: clone + pull + up the stack, ensure the admin user + pinned v1 token via
+  # manage.py, then idempotently ensure the virtualization cluster-type + cluster exist. Every step
+  # is idempotent and the whole thing is retried, so a flaky registry pull just tries again.
+  - path: /usr/local/sbin/netbox-stack.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -uo pipefail
+      NETBOX_URL="http://localhost:${netbox_port}"
+      TOKEN="${netbox_api_token}"
+      auth=(-H "Authorization: Token $TOKEN" -H "Content-Type: application/json" -H "Accept: application/json")
+
+      provision() {
+        set -e
+
+        # 1. Clone netbox-docker + drop the override in place, then bring the stack up.
+        if [ ! -d /opt/netbox-docker/.git ]; then
+          git clone --depth 1 --branch ${netbox_docker_ref} https://github.com/netbox-community/netbox-docker.git /opt/netbox-docker
+        fi
+        cp /opt/netbox-seed/docker-compose.override.yml /opt/netbox-docker/docker-compose.override.yml
+        cd /opt/netbox-docker
+        docker compose pull
+        docker compose up -d
+
+        # 2. Wait until NetBox responds (200/401/403 all mean the app is up + migrations are done).
+        for _ in $(seq 1 180); do
+          code="$(curl -s -o /dev/null -w '%%{http_code}' "$NETBOX_URL/api/status/" || true)"
+          case "$code" in 200|401|403) break ;; esac
+          sleep 5
+        done
+
+        # 3. Ensure the admin superuser + the pinned v1 API token exist (manage.py, no auth needed).
+        docker compose exec -T netbox /opt/netbox/netbox/manage.py shell <<'PYEOF'
+      from django.apps import apps
+      from django.contrib.auth import get_user_model
+      Token = apps.get_model("users", "Token")
+      U = get_user_model()
+      u = U.objects.filter(username="${superuser_name}").first()
+      if u is None:
+          u = U.objects.create_superuser("${superuser_name}", "${superuser_name}@example.com", "${superuser_password}")
+      Token.objects.get_or_create(key="${netbox_api_token}", defaults={"user": u})
+      print("netbox-provisioned")
+      PYEOF
+
+        # 4. cluster-type "${cluster_type}"
+        ct_id="$(curl -sf "$${auth[@]}" "$NETBOX_URL/api/virtualization/cluster-types/?name=${cluster_type}" | jq -r '.results[0].id // empty')"
+        if [ -z "$ct_id" ]; then
+          ct_id="$(curl -sf "$${auth[@]}" -X POST "$NETBOX_URL/api/virtualization/cluster-types/" \
+            -d '{"name":"${cluster_type}","slug":"${cluster_type_slug}"}' | jq -r '.id')"
+        fi
+
+        # 5. cluster "${cluster_name}"
+        cl_id="$(curl -sf "$${auth[@]}" "$NETBOX_URL/api/virtualization/clusters/?name=${cluster_name}" | jq -r '.results[0].id // empty')"
+        if [ -z "$cl_id" ]; then
+          curl -sf "$${auth[@]}" -X POST "$NETBOX_URL/api/virtualization/clusters/" \
+            -d "{\"name\":\"${cluster_name}\",\"type\":$ct_id}" >/dev/null
+        fi
+
+        mkdir -p /var/lib/netbox-bootstrap
+        touch /var/lib/netbox-bootstrap/done
+      }
+
+      # Retry the whole (idempotent) provisioning — transient registry/network errors just try again.
+      for attempt in $(seq 1 12); do
+        if provision; then
+          echo "netbox provisioning complete (attempt $attempt)"
+          exit 0
+        fi
+        echo "netbox provisioning attempt $attempt failed; retrying in 20s" >&2
+        sleep 20
+      done
+      echo "netbox provisioning failed after retries" >&2
+      exit 1
+
+  - path: /etc/systemd/system/netbox-stack.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Bring up the netbox-docker stack and bootstrap the virtualization cluster
+      After=network-online.target docker.service
+      Wants=network-online.target
+      Requires=docker.service
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/netbox-stack.sh
+      RemainAfterExit=yes
+      TimeoutStartSec=0
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  # Enforce UTC late — Multipass injects the host timezone during first boot and can beat the
+  # declarative timezone key; runcmd runs after config modules, so it wins (see specs/ntp.md).
+  - timedatectl set-timezone Etc/UTC
+  - systemctl enable --now docker
+  - systemctl daemon-reload
+  # Start the stack asynchronously so cloud-init completes inside the 300s launch window.
+  - systemctl enable netbox-stack.service
+  - systemctl start --no-block netbox-stack.service

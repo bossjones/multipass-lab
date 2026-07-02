@@ -1,0 +1,11 @@
+# netbox-docker override — copied next to the cloned compose file on the server VM.
+# Publishes NetBox on the host and skips netbox-docker's own superuser creation: the bootstrap
+# (netbox-stack.sh) creates the admin user + the pinned v1 API token via manage.py, so the setup
+# is deterministic and independent of the image's env-var behaviour.
+services:
+  netbox:
+    ports:
+      - "${netbox_port}:8080"
+    environment:
+      SKIP_SUPERUSER: "true"
+      ALLOWED_HOSTS: "*"
