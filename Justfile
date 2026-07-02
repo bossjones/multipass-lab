@@ -62,6 +62,30 @@ destroy CLUSTER:
     tofu -chdir={{cluster_root}}/{{CLUSTER}} destroy -auto-approve
     @just prune {{CLUSTER}}
 
+# tofu apply -> launch every cluster's VMs (glob-discovered):  just up-all
+up-all:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=0
+    for dir in {{cluster_root}}/*/; do
+      cluster="$(basename "$dir")"
+      echo "=== up: $cluster ==="
+      just up "$cluster" || rc=1
+    done
+    exit "$rc"
+
+# tofu destroy + prune every cluster (glob-discovered):  just destroy-all
+destroy-all:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=0
+    for dir in {{cluster_root}}/*/; do
+      cluster="$(basename "$dir")"
+      echo "=== destroy: $cluster ==="
+      just destroy "$cluster" || rc=1
+    done
+    exit "$rc"
+
 # delete + purge Multipass VMs for this cluster that OpenTofu no longer tracks.
 # A failed `up` (e.g. a launch timeout) leaves a VM behind that `tofu destroy` can't
 # see, which then collides with the next `up` ("instance already exists"). Safe to run
