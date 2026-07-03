@@ -29,6 +29,7 @@ help:
     @echo "  just up-connected          bring the whole fleet up wired for cross-cluster telemetry"
     @echo "  just verify CLUSTER        live: pytest + testinfra over SSH"
     @echo "  just verify-connected      live e2e for the cross-cluster wiring (after up-connected)"
+    @echo "  just init-all              tofu init every cluster (glob-discovered)"
     @echo "  just verify-all            run the live testinfra suite for every cluster"
     @echo "  just open   CLUSTER [--full]  open dashboards (core; --full adds /metrics endpoints)"
     @echo "  just ssh    CLUSTER ROLE   shell onto the <name>-<role> VM"
@@ -63,6 +64,19 @@ up CLUSTER: (init CLUSTER)
 destroy CLUSTER:
     tofu -chdir={{cluster_root}}/{{CLUSTER}} destroy -auto-approve
     @just prune {{CLUSTER}}
+
+# tofu init every cluster (glob-discovered):  just init-all
+init-all:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=0
+    for dir in {{cluster_root}}/*/; do
+      cluster="$(basename "$dir")"
+      [ -f "$dir/main.tf" ] || continue   # skip non-cluster dirs like _shared/
+      echo "=== init: $cluster ==="
+      just init "$cluster" || rc=1
+    done
+    exit "$rc"
 
 # tofu apply -> launch every cluster's VMs (glob-discovered):  just up-all
 up-all:
