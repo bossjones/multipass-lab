@@ -89,3 +89,43 @@ run "hub_ships_its_own_logs" {
     error_message = "server cloud-init must drop the syslog shipper config when shipping"
   }
 }
+
+# --- default: no cross-cluster DNS drop-in ----------------------------------
+run "dns_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "resolved.conf.d/99-centralized-dns.conf")
+    error_message = "with dns_server unset, server cloud-init must NOT render the systemd-resolved DNS drop-in"
+  }
+  assert {
+    condition     = !strcontains(local_file.k0s_ci.content, "resolved.conf.d/99-centralized-dns.conf")
+    error_message = "with dns_server unset, k0s cloud-init must NOT render the systemd-resolved DNS drop-in"
+  }
+}
+
+# --- DNS on: every VM points systemd-resolved at the centralized_dns hub -----
+run "dns_on_renders_resolved_conf" {
+  command = plan
+
+  variables {
+    dns_server = "10.7.7.7"
+  }
+
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "99-centralized-dns.conf")
+    error_message = "server cloud-init must drop the systemd-resolved DNS drop-in when dns_server is set"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "DNS=10.7.7.7")
+    error_message = "server DNS drop-in must point at the injected centralized_dns IP"
+  }
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "99-centralized-dns.conf")
+    error_message = "k0s cloud-init must drop the systemd-resolved DNS drop-in when dns_server is set"
+  }
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "DNS=10.7.7.7")
+    error_message = "k0s DNS drop-in must point at the injected centralized_dns IP"
+  }
+}

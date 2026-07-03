@@ -29,6 +29,14 @@ write_files:
     permissions: '0644'
     content: |
       ${indent(6, server_conf)}
+%{ if dns_server != "" ~}
+
+  # Cross-cluster DNS — resolve through the centralized_dns AdGuard Home hub. See specs/cross-cluster.md.
+  - path: /etc/systemd/resolved.conf.d/99-centralized-dns.conf
+    permissions: '0644'
+    content: |
+      ${indent(6, dns_resolved_conf)}
+%{ endif ~}
 
   # Generic exporter installer (copied from the centralized_monitoring cluster): download a
   # GitHub release (tar.gz or raw binary), drop the binary in /usr/local/bin, install + enable
@@ -134,6 +142,10 @@ runcmd:
   # declarative `timezone:` key above. runcmd runs after the config modules, so it wins.
   # Harmless on Proxmox (already UTC). See specs/ntp.md.
   - timedatectl set-timezone Etc/UTC
+%{ if dns_server != "" ~}
+  # Cross-cluster DNS — point this VM's resolver at the centralized_dns AdGuard Home hub.
+  - systemctl restart systemd-resolved
+%{ endif ~}
   - mkdir -p /var/log/remote
   - grep -q 'conf.d/\*.conf' /etc/syslog-ng/syslog-ng.conf || echo '@include "/etc/syslog-ng/conf.d/*.conf"' >> /etc/syslog-ng/syslog-ng.conf
   - systemctl enable syslog-ng

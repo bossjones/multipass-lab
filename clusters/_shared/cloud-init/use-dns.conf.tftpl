@@ -1,0 +1,11 @@
+# Managed by OpenTofu — SHARED cross-cluster snippet (clusters/_shared/cloud-init).
+# Points this VM's systemd-resolved stub at the centralized_dns AdGuard Home instance so
+# every fleet VM resolves through the lab's ad-blocking DNS. Dropped into
+# /etc/systemd/resolved.conf.d/; systemd-resolved merges *.conf drop-ins.
+#
+# Domains=~. routes ALL lookups through AdGuard. The image's compiled-in FallbackDNS is
+# left intact on purpose: a DNS-hub outage then degrades (fallback resolves, ad-blocking
+# bypassed) rather than bricking the VM's name resolution.
+[Resolve]
+DNS=${dns_ip}
+Domains=~.

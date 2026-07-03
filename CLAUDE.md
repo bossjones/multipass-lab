@@ -18,10 +18,14 @@ Each cluster is **vendored to its own folder** under `clusters/<name>/` with its
 OpenTofu root module, cloud-init templates, and tests. The clusters are
 `clusters/centralized_logging/` (syslog-ng log shipping across three VMs; see
 `specs/centralized_logging.md`), `clusters/centralized_monitoring/` (Grafana/Prometheus/
-OpenObserve stack), and `clusters/centralized_netbox/` (a NetBox DCIM/IPAM server + a test VM
-that **self-registers** into it via the REST API on first boot; see `specs/centralized_netbox.md`).
-A root `Justfile` orchestrates every cluster **by folder name** — that name is the only argument
-the recipes take.
+OpenObserve stack), `clusters/centralized_netbox/` (a NetBox DCIM/IPAM server + a test VM
+that **self-registers** into it via the REST API on first boot; see `specs/centralized_netbox.md`),
+and `clusters/centralized_dns/` (a single VM running **AdGuard Home** (`:53`) over a recursive
+**Unbound** (`127.0.0.1:5335`), both host-level under systemd — the network-wide ad-blocking DNS
+resolver; see `specs/centralized_dns.md`). `centralized_dns` is a **cross-cluster hub that comes up
+FIRST** in `just up-connected`: every other VM points its resolver at AdGuard at first boot (the
+`dns_server` opt-in var). A root `Justfile` orchestrates every cluster **by folder name** — that
+name is the only argument the recipes take.
 
 ```sh
 just check centralized_logging   # hermetic: tofu fmt + validate + test (no VMs)

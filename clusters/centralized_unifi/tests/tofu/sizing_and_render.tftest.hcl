@@ -242,6 +242,43 @@ run "cloud_init_is_valid_yaml_and_utc" {
   }
 }
 
+# --- Cross-cluster DNS (opt-in) — off by default, wires systemd-resolved when set --------
+
+run "dns_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = !strcontains(local_file.controller_ci.content, "resolved.conf.d/99-centralized-dns.conf")
+    error_message = "controller must NOT render the centralized-dns drop-in when dns_server is empty"
+  }
+  assert {
+    condition     = !strcontains(local_file.usg_ci.content, "resolved.conf.d/99-centralized-dns.conf")
+    error_message = "usg must NOT render the centralized-dns drop-in when dns_server is empty"
+  }
+}
+
+run "dns_on_points_resolved_at_hub" {
+  command = plan
+
+  variables {
+    dns_server = "10.7.7.7"
+  }
+
+  assert {
+    condition     = strcontains(local_file.controller_ci.content, "resolved.conf.d/99-centralized-dns.conf") && strcontains(local_file.controller_ci.content, "DNS=10.7.7.7")
+    error_message = "controller must render the centralized-dns drop-in with DNS=10.7.7.7 when dns_server is set"
+  }
+  assert {
+    condition     = strcontains(local_file.usg_ci.content, "resolved.conf.d/99-centralized-dns.conf") && strcontains(local_file.usg_ci.content, "DNS=10.7.7.7")
+    error_message = "usg must render the centralized-dns drop-in with DNS=10.7.7.7 when dns_server is set"
+  }
+  # cloud-init must stay valid YAML with the spliced drop-in.
+  assert {
+    condition     = can(yamldecode(local_file.controller_ci.content)) && can(yamldecode(local_file.usg_ci.content))
+    error_message = "both cloud-inits must remain valid YAML with the DNS drop-in spliced in"
+  }
+}
+
 run "outputs_expose_versions_and_targets" {
   command = plan
 

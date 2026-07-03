@@ -627,3 +627,41 @@ run "netdata_off_omits_install" {
     error_message = "enabled_features.netdata must be false when disabled"
   }
 }
+
+# --- Cross-cluster DNS (opt-in var.dns_server; see specs/cross-cluster.md) ----
+
+run "dns_off_by_default" {
+  command = plan
+
+  # No dns_server set — every VM must omit the systemd-resolved drop-in.
+  assert {
+    condition = alltrue([for c in [
+      local_file.server_ci.content, local_file.client_ci.content,
+    ] : !strcontains(c, "resolved.conf.d/99-centralized-dns.conf")])
+    error_message = "dns_server empty must omit the centralized-dns resolved drop-in from every VM"
+  }
+}
+
+run "dns_on_points_resolved_at_hub" {
+  command = plan
+
+  variables {
+    dns_server = "10.7.7.7"
+    # enable_discovery so the agent VM (count-gated) also renders and is asserted.
+    enable_discovery = true
+  }
+
+  # Every VM writes the drop-in and points DNS= at the hub IP.
+  assert {
+    condition = alltrue([for c in [
+      local_file.server_ci.content, local_file.client_ci.content, local_file.agent_ci[0].content,
+    ] : strcontains(c, "resolved.conf.d/99-centralized-dns.conf")])
+    error_message = "dns_server set must write the centralized-dns resolved drop-in on every VM"
+  }
+  assert {
+    condition = alltrue([for c in [
+      local_file.server_ci.content, local_file.client_ci.content, local_file.agent_ci[0].content,
+    ] : strcontains(c, "DNS=10.7.7.7")])
+    error_message = "the rendered resolved drop-in must set DNS= to the dns_server IP on every VM"
+  }
+}

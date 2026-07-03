@@ -1,0 +1,255 @@
+#cloud-config
+# centralized_dns VM — network-wide DNS: AdGuard Home (0.0.0.0:53, UI :${adguard_web_port})
+# forwarding to a local hardened Unbound recursive resolver (127.0.0.1:5335). Both run
+# HOST-LEVEL under systemd (no Docker). Exporters expose metrics for the monitoring hub.
+# See specs/centralized_dns.md. Adapted from adguardhome-unbound-macos-setup/install.sh.
+package_update: true
+package_upgrade: false
+
+# Time sync — pin UTC + systemd-timesyncd (declared here, re-enforced in runcmd because
+# Multipass injects the host timezone at first boot; see specs/ntp.md).
+timezone: Etc/UTC
+ntp:
+  enabled: true
+  ntp_client: systemd-timesyncd
+
+packages:
+  - curl
+  - tar
+  - vim
+  - htop
+  - jq
+  - unbound
+  - dnsutils
+
+ssh_authorized_keys:
+  - ${ssh_pubkey}
+
+write_files:
+  # Hardened recursive Unbound — localhost-only, DNSSEC, control socket for unbound_exporter.
+  - path: /etc/unbound/unbound.conf.d/centralized-dns.conf
+    permissions: '0644'
+    content: |
+      ${indent(6, unbound_conf)}
+
+  # Pre-seeded AdGuard Home config, staged OUTSIDE the install dir. The official installer refuses
+  # to run if /opt/AdGuardHome already exists, so we install first (clean), then copy this seed in
+  # and restart (skips the first-run setup wizard). See specs/centralized_dns.md.
+  - path: /opt/adguard-seed/AdGuardHome.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, adguard_conf)}
+
+  # Free port 53: stop systemd-resolved's stub listener so AdGuard Home can bind 0.0.0.0:53.
+  - path: /etc/systemd/resolved.conf.d/00-adguard.conf
+    permissions: '0644'
+    content: |
+      [Resolve]
+      DNSStubListener=no
+
+  # Generic exporter installer (copied from the centralized_logging/pki clusters).
+  - path: /usr/local/sbin/install-exporter.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      name="$1"; url="$2"; bin="$3"; shift 3; args="$*"
+      arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+      case "$arch" in aarch64) arch=arm64 ;; x86_64) arch=amd64 ;; esac
+      url="$${url//\{ARCH\}/$arch}"
+      tmp="$(mktemp -d)"
+      curl -sSLf "$url" -o "$tmp/dl"
+      if tar -tzf "$tmp/dl" >/dev/null 2>&1; then
+        tar -xzf "$tmp/dl" -C "$tmp"
+        found="$(find "$tmp" -type f -name "$bin" | head -n1)"
+      else
+        found="$tmp/dl"
+      fi
+      install -m0755 "$found" "/usr/local/bin/$name"
+      cat >/etc/systemd/system/$name.service <<UNIT
+      [Unit]
+      Description=$name
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      ExecStart=/usr/local/bin/$name $args
+      Restart=always
+      RestartSec=5
+      [Install]
+      WantedBy=multi-user.target
+      UNIT
+      systemctl daemon-reload
+      systemctl enable --now "$name"
+%{ if enable_adguard_exporter ~}
+  # adguard-exporter (:9618) — reads AdGuard Home's control API. Credentials in an env file
+  # sourced by the unit. See github.com/henrywhitaker3/adguard-exporter (Grafana dashboard 20799).
+  - path: /etc/adguard-exporter/adguard-exporter.env
+    permissions: '0600'
+    content: |
+      ADGUARD_SERVERS=http://127.0.0.1:${adguard_web_port}
+      ADGUARD_USERNAMES=${adguard_user}
+      ADGUARD_PASSWORDS=${adguard_password}
+      INTERVAL=30s
+      BIND_ADDR=:9618
+  - path: /etc/systemd/system/adguard-exporter.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=adguard-exporter
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      EnvironmentFile=/etc/adguard-exporter/adguard-exporter.env
+      ExecStart=/usr/local/bin/adguard-exporter
+      Restart=always
+      RestartSec=10
+      [Install]
+      WantedBy=multi-user.target
+%{ endif ~}
+%{ if enable_unbound_exporter ~}
+  # unbound_exporter (:9167) — reads Unbound stats over its control socket (unix:///run/unbound.ctl).
+  - path: /etc/systemd/system/unbound_exporter.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=unbound_exporter
+      After=unbound.service network-online.target
+      Wants=network-online.target
+      [Service]
+      ExecStart=/usr/local/bin/unbound_exporter -unbound.host unix:///run/unbound.ctl
+      Restart=always
+      RestartSec=10
+      [Install]
+      WantedBy=multi-user.target
+%{ endif ~}
+%{ if enable_process_exporter ~}
+  # process-exporter config: curated groups for the DNS stack + a bounded {{.Comm}} catch-all.
+  - path: /etc/process-exporter/all.yaml
+    permissions: '0644'
+    content: |
+      process_names:
+        - name: adguardhome
+          exe: [ AdGuardHome ]
+        - name: unbound
+          exe: [ unbound ]
+        - name: dns-exporters
+          exe: [ adguard-exporter, unbound_exporter ]
+        - name: "{{.Comm}}"
+          cmdline:
+            - '.+'
+%{ endif ~}
+%{ if dns_server != "" ~}
+
+  # Cross-cluster DNS — point this VM's resolver at an external AdGuard hub. Normally EMPTY for
+  # centralized_dns (it resolves through its OWN AdGuard); present for contract symmetry.
+  - path: /etc/systemd/resolved.conf.d/99-centralized-dns.conf
+    permissions: '0644'
+    content: |
+      ${indent(6, dns_resolved_conf)}
+%{ endif ~}
+%{ if log_shipping_target != "" ~}
+
+  # Cross-cluster log shipping — syslog-ng client drop-in (shared snippet). See specs/cross-cluster.md.
+  - path: /etc/syslog-ng/conf.d/10-ship.conf
+    permissions: '0644'
+    content: |
+      ${indent(6, syslog_client_conf)}
+%{ endif ~}
+%{ if openobserve_endpoint != "" ~}
+
+  # Cross-cluster OTLP push — otelcol-contrib agent (shared snippet) shipping host logs to OpenObserve.
+  - path: /etc/otelcol-contrib/config.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, otel_agent_conf)}
+%{ endif ~}
+
+runcmd:
+  # Enforce UTC late (Multipass injects the host timezone during first boot). See specs/ntp.md.
+  - timedatectl set-timezone Etc/UTC
+%{ if dns_server != "" ~}
+  # Cross-cluster DNS — point this VM's resolver at the external AdGuard hub.
+  - systemctl restart systemd-resolved
+%{ endif ~}
+
+  # --- Unbound (recursive upstream, 127.0.0.1:5335) -------------------------
+  # apt's unbound ships built-in root hints + the packaged DNSSEC anchor (dns-root-data), so no
+  # downloads are needed. reset-failed clears any start-limit hit from the pre-config apt start.
+  - systemctl reset-failed unbound || true
+  - unbound-checkconf || true
+  - systemctl enable --now unbound
+  # Wait until Unbound resolves before AdGuard is pointed at it.
+  - |
+    for i in $(seq 1 30); do
+      dig @127.0.0.1 -p 5335 example.com +short +time=2 +tries=1 >/dev/null 2>&1 && break
+      sleep 2
+    done
+
+  # --- Free :53, then AdGuard Home (0.0.0.0:53, host-level systemd) ----------
+  # Disable the resolved stub (write_files set DNSStubListener=no) and repoint the box's own
+  # resolv.conf at resolved's real upstreams (NOT the dead stub) so name resolution keeps
+  # working for the AdGuard installer + exporter builds while :53 is handed to AdGuard.
+  - ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+  - systemctl restart systemd-resolved
+  # Official AdGuard Home installer -> /opt/AdGuardHome + AdGuardHome.service. It refuses to run if
+  # the dir already exists, so the seed lives at /opt/adguard-seed; install clean, then apply it.
+  - curl -s -S -L https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
+  - install -D -m0644 /opt/adguard-seed/AdGuardHome.yaml /opt/AdGuardHome/AdGuardHome.yaml
+  - systemctl restart AdGuardHome
+  # Wait until AdGuard answers on :53 (AdGuard -> Unbound path live).
+  - |
+    for i in $(seq 1 30); do
+      dig @127.0.0.1 example.com +short +time=2 +tries=1 >/dev/null 2>&1 && break
+      sleep 2
+    done
+%{ if enable_node_exporter ~}
+  # node_exporter — OS host metrics (:9100).
+  - /usr/local/sbin/install-exporter.sh node_exporter https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-{ARCH}.tar.gz node_exporter
+%{ endif ~}
+%{ if enable_adguard_exporter || enable_unbound_exporter ~}
+  # Go toolchain — used to build the DNS exporters from source (pinned, arch-native). The runcmd
+  # env has no HOME, so `go install` needs HOME/GOPATH/GOBIN set explicitly (else "module cache
+  # not found: neither GOMODCACHE nor GOPATH is set").
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y golang-go
+%{ endif ~}
+%{ if enable_adguard_exporter ~}
+  # adguard-exporter (:9618) — build + enable. Restart=always tides it over until AdGuard is up.
+  - env HOME=/root GOPATH=/root/go GOBIN=/usr/local/bin go install github.com/henrywhitaker3/adguard-exporter@${adguard_exporter_ver} || true
+  - systemctl daemon-reload
+  - systemctl enable --now adguard-exporter
+%{ endif ~}
+%{ if enable_unbound_exporter ~}
+  # unbound_exporter (:9167) — build + enable.
+  - env HOME=/root GOPATH=/root/go GOBIN=/usr/local/bin go install github.com/letsencrypt/unbound_exporter@latest || true
+  - systemctl daemon-reload
+  - systemctl enable --now unbound_exporter
+%{ endif ~}
+%{ if enable_systemd_exporter ~}
+  # systemd_exporter — per-unit health/resource metrics (:9558).
+  - /usr/local/sbin/install-exporter.sh systemd_exporter https://github.com/prometheus-community/systemd_exporter/releases/download/v0.7.0/systemd_exporter-0.7.0.linux-{ARCH}.tar.gz systemd_exporter --web.listen-address=:9558 --systemd.collector.unit-include='(ssh|unbound|AdGuardHome|node_exporter|systemd_exporter|process-exporter|adguard-exporter|unbound_exporter)[.]service' --systemd.collector.enable-restart-count
+%{ endif ~}
+%{ if enable_process_exporter ~}
+  # process-exporter — per-process metrics (:9256).
+  - /usr/local/sbin/install-exporter.sh process-exporter https://github.com/ncabatoff/process-exporter/releases/download/v0.8.7/process-exporter-0.8.7.linux-{ARCH}.tar.gz process-exporter --config.path=/etc/process-exporter/all.yaml -threads=false -gather-smaps=false -remove-empty-groups
+%{ endif ~}
+%{ if log_shipping_target != "" ~}
+  # Cross-cluster syslog-ng shipper — install, ensure the drop-in is @included, restart.
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y syslog-ng
+  - mkdir -p /var/lib/syslog-ng
+  - grep -q 'conf.d/\*.conf' /etc/syslog-ng/syslog-ng.conf || echo '@include "/etc/syslog-ng/conf.d/*.conf"' >> /etc/syslog-ng/syslog-ng.conf
+  - systemctl enable syslog-ng
+  - systemctl restart syslog-ng
+%{ endif ~}
+%{ if openobserve_endpoint != "" ~}
+  # Cross-cluster OTLP agent — install upstream otelcol-contrib .deb (arch-aware), run our config.
+  - mkdir -p /var/lib/otelcol-contrib/storage
+  - |
+    OTEL_VER=0.109.0
+    arch="$(dpkg --print-architecture)"
+    curl -sSLf "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$${OTEL_VER}/otelcol-contrib_$${OTEL_VER}_linux_$${arch}.deb" -o /tmp/otelcol.deb
+    DEBIAN_FRONTEND=noninteractive dpkg -i /tmp/otelcol.deb || DEBIAN_FRONTEND=noninteractive apt-get install -f -y
+  - systemctl enable otelcol-contrib
+  - systemctl restart otelcol-contrib
+%{ endif ~}
+
+final_message: "centralized_dns ready — AdGuard Home on :53 (UI :${adguard_web_port}), Unbound upstream on 127.0.0.1:5335"

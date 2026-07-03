@@ -17,6 +17,13 @@ locals {
 
   exact = var.version_mode == "exact"
 
+  # Cross-cluster DNS (opt-in): non-empty dns_server points every VM's systemd-resolved at the
+  # centralized_dns AdGuard Home hub via a shared drop-in. Mirrors the log_shipping_target pattern.
+  use_dns = var.dns_server != ""
+  dns_resolved_conf = local.use_dns ? templatefile("${path.module}/../_shared/cloud-init/use-dns.conf.tftpl", {
+    dns_ip = split(":", var.dns_server)[0]
+  }) : ""
+
   # One map merged into every templatefile() so each cloud-init renders its own
   # %{ if ... ~}…%{ endif ~} blocks (mirrors clusters/centralized_logging/main.tf).
   flags = {
@@ -94,6 +101,9 @@ resource "local_file" "controller_ci" {
     # Docker operator TUIs (wharf/oxker/dive) — only installed in `exact` mode (docker present).
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
+    # Cross-cluster DNS (opt-in): point systemd-resolved at the centralized_dns hub at first boot.
+    dns_server        = var.dns_server
+    dns_resolved_conf = local.dns_resolved_conf
   }))
 }
 
@@ -121,6 +131,9 @@ resource "local_file" "usg_ci" {
     # Docker operator TUIs (wharf/oxker/dive) — only installed in `exact` mode (docker present).
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
+    # Cross-cluster DNS (opt-in): point systemd-resolved at the centralized_dns hub at first boot.
+    dns_server        = var.dns_server
+    dns_resolved_conf = local.dns_resolved_conf
   }))
 }
 

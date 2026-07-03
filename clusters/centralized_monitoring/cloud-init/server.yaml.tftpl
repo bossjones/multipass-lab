@@ -131,12 +131,24 @@ write_files:
     content: |
       ${indent(6, syslog_client_conf)}
 %{ endif ~}
+%{ if dns_server != "" ~}
+
+  # Cross-cluster DNS — resolve through the centralized_dns AdGuard Home hub. See specs/cross-cluster.md.
+  - path: /etc/systemd/resolved.conf.d/99-centralized-dns.conf
+    permissions: '0644'
+    content: |
+      ${indent(6, dns_resolved_conf)}
+%{ endif ~}
 
 runcmd:
   # Enforce UTC late: Multipass injects the host timezone during first boot and can beat the
   # declarative `timezone:` key above. runcmd runs after the config modules, so it wins.
   # Harmless on Proxmox (already UTC). See specs/ntp.md.
   - timedatectl set-timezone Etc/UTC
+%{ if dns_server != "" ~}
+  # Cross-cluster DNS — point this VM's resolver at the centralized_dns AdGuard Home hub.
+  - systemctl restart systemd-resolved
+%{ endif ~}
   - mkdir -p /opt/stack
   - curl -fsSL https://get.docker.com | sh
   - usermod -aG docker ubuntu  # let the SSH user reach the docker socket (heimdall CLI remote transport)

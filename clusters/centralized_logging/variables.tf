@@ -38,6 +38,14 @@ variable "hostname_source" {
   }
 }
 
+# --- Cross-cluster opt-in DNS -----------------------------------------------
+
+variable "dns_server" {
+  description = "IP (or host[:port]) of the centralized_dns AdGuard Home resolver. Non-empty -> every VM points systemd-resolved at it at first boot. Empty (default) = image default resolver. See specs/cross-cluster.md."
+  type        = string
+  default     = ""
+}
+
 # --- Metrics / exporter layer feature flags ---------------------------------
 # Each flag gates an exporter's *install* in cloud-init (there is no local scrape to
 # gate — see specs/centralized_logging_metrics.md). A disabled flag = not installed,

@@ -16,6 +16,16 @@ locals {
   client_name = "${var.name_prefix}-client"
   agent_name  = "${var.name_prefix}-agent"
 
+  # --- Cross-cluster DNS (opt-in; see specs/cross-cluster.md) ---------------
+  # Rendered from the SHARED clusters/_shared/cloud-init/use-dns.conf.tftpl only when dns_server is
+  # set; empty string otherwise so each VM's cloud-init %{ if dns_server != "" } guard drops the
+  # block. Only the host portion is used (systemd-resolved DNS= takes an IP); a host:port target has
+  # the port dropped.
+  use_dns = var.dns_server != ""
+  dns_resolved_conf = local.use_dns ? templatefile("${path.module}/../_shared/cloud-init/use-dns.conf.tftpl", {
+    dns_ip = split(":", var.dns_server)[0]
+  }) : ""
+
   # --- discovery (opt-in Diode + orb-agent) --------------------------------
   # enable_discovery bumps NetBox to a 4.4.x pin (keeps pinnable v1 tokens AND satisfies Diode's
   # >= 4.2.3 requirement) and auto-bumps the server (netbox-docker + the ~9-container Diode stack
@@ -166,6 +176,9 @@ resource "local_file" "server_ci" {
     diode_nginx                   = local.diode_nginx
     plugin_requirements           = local.plugin_requirements
     plugin_config                 = local.plugin_config
+    # Cross-cluster DNS (opt-in) — point systemd-resolved at the centralized_dns hub.
+    dns_server        = var.dns_server
+    dns_resolved_conf = local.dns_resolved_conf
     # Docker operator TUIs (wharf/oxker/dive) — the server runs the netbox-docker stack.
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
@@ -195,6 +208,9 @@ resource "local_file" "client_ci" {
     netbox_api_token = var.netbox_api_token
     cluster_name     = var.cluster_name
     host_device_name = var.netbox_host_device_name
+    # Cross-cluster DNS (opt-in) — point systemd-resolved at the centralized_dns hub.
+    dns_server        = var.dns_server
+    dns_resolved_conf = local.dns_resolved_conf
   }))
 }
 
@@ -223,6 +239,9 @@ resource "local_file" "agent_ci" {
     orb_agent_image            = var.orb_agent_image
     diode_ingest_client_secret = var.diode_ingest_client_secret
     orb_config                 = local.orb_config
+    # Cross-cluster DNS (opt-in) — point systemd-resolved at the centralized_dns hub.
+    dns_server        = var.dns_server
+    dns_resolved_conf = local.dns_resolved_conf
     # Docker operator TUIs (wharf/oxker/dive) — the agent runs orb-agent via docker.
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
