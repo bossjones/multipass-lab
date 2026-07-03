@@ -13,6 +13,16 @@ ntp:
   enabled: true
   ntp_client: systemd-timesyncd
 
+# unbound's postinst pulls in resolvconf and triggers unbound-resolvconf.service to register
+# unbound's loopback listener (127.0.0.1:5335) with systemd-resolved's per-link DNS mechanism —
+# which refuses loopback links ("Failed to set DNS configuration: Link lo is loopback device"),
+# so the unit fails on every boot. This box's resolver is systemd-resolved-driven, never
+# resolvconf-driven (see the DNSStubListener/resolv.conf handling below), so the hook is dead
+# weight. bootcmd runs before `packages:` installs unbound, so masking here makes the
+# postinst-triggered start a no-op instead of a failure.
+bootcmd:
+  - systemctl mask unbound-resolvconf.service
+
 packages:
   - curl
   - tar
@@ -174,8 +184,10 @@ runcmd:
 
   # --- Unbound (recursive upstream, 127.0.0.1:5335) -------------------------
   # apt's unbound ships built-in root hints + the packaged DNSSEC anchor (dns-root-data), so no
-  # downloads are needed. reset-failed clears any start-limit hit from the pre-config apt start.
-  - systemctl reset-failed unbound || true
+  # downloads are needed. reset-failed clears any start-limit hit from the pre-config apt start;
+  # unbound-resolvconf is included too as a safety net in case some trigger path bypasses the
+  # bootcmd mask above.
+  - systemctl reset-failed unbound unbound-resolvconf || true
   - unbound-checkconf || true
   - systemctl enable --now unbound
   # Wait until Unbound resolves before AdGuard is pointed at it.

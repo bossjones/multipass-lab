@@ -25,3 +25,16 @@ def test_unit_running(server, enabled_flags, unit, flag):
 def test_no_docker_on_dns_path(server):
     """The DNS stack must be host-level systemd, not Docker."""
     assert not server.package("docker-ce").is_installed
+
+
+# unbound's postinst pulls in resolvconf and triggers unbound-resolvconf.service, which fails on
+# every boot ("Link lo is loopback device") since this box is systemd-resolved-driven, never
+# resolvconf-driven — masked via bootcmd. cloud-final.service is the module that runs `runcmd`;
+# regressions in any runcmd step surface there.
+FAILURE_PRONE_UNITS = ["unbound-resolvconf.service", "cloud-final.service"]
+
+
+@pytest.mark.parametrize("unit", FAILURE_PRONE_UNITS)
+def test_unit_not_failed(server, unit):
+    result = server.run(f"systemctl is-failed {unit}")
+    assert result.stdout.strip() != "failed", f"{unit} is in a failed state"
