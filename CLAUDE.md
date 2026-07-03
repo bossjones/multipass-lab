@@ -270,6 +270,15 @@ The active machinery here is a Claude Code hook + skill system, not application 
   "off by default" assertions to fail — the *hermetic* suite is not actually isolated from live
   state. If `just check` fails only on `*_off_by_default` runs, check for that file (it's
   gitignored, so `git status` won't show it) and move it aside before trusting the result.
+- **A leftover `.cross-cluster.auto.tfvars.json` also poisons a plain `just up`, not just
+  `just check`.** It's gitignored and survives single-cluster `just destroy` (kept on purpose so
+  `recreate`→`refresh-cross-cluster` can re-wire), so after tearing a fleet down and running a
+  plain `just up <cluster>`, OpenTofu auto-loads the stale file and renders a `dns_server`
+  systemd-resolved drop-in pointing at a **dead** hub IP → the VM can't resolve `archive.ubuntu.com`
+  → `apt`/`curl` installs hang → `tofu apply` blocks for many minutes with no `--failed` unit (looks
+  exactly like a boot race, but it's stale wiring). `just destroy-all` now purges these files; for a
+  targeted cleanup after single destroys use **`just unwire [CLUSTER]`** (omit the arg for the whole
+  fleet), then re-run `just up`. `up-connected`/`refresh-cross-cluster` regenerate them from live IPs.
 - **A newly-added tofu `output` isn't in state until you apply.** `tofu output -json <new>` errors
   `Output "<new>" not found` until a `tofu apply` runs; that apply is outputs-only
   (`0 added, 0 changed, 0 destroyed` — no VM recreated), so it's safe on a live cluster. Recipes

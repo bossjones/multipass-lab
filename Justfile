@@ -117,7 +117,31 @@ destroy-all:
       echo "=== destroy: $cluster ==="
       just destroy "$cluster" || rc=1
     done
+    # Purge stale cross-cluster wiring + bulk-flag tfvars: the whole fleet is gone, so every IP they
+    # reference is dead. Leaving them behind poisons the NEXT plain `just up` — OpenTofu auto-loads
+    # `*.auto.tfvars(.json)`, so a dead `dns_server` repoints the resolver at a down hub and `apt`
+    # hangs (see the CLAUDE.md gotcha). `up-connected`/`refresh-cross-cluster` regenerate them from
+    # live IPs when needed, so this loses nothing.  (Single-cluster `destroy` deliberately does NOT
+    # do this — `recreate` relies on the file surviving; use `just unwire` for a targeted removal.)
+    echo "=== destroy-all: purging stale cross-cluster wiring files ==="
+    rm -f {{cluster_root}}/*/.cross-cluster.auto.tfvars.json {{cluster_root}}/*/.flags.auto.tfvars.json
     exit "$rc"
+
+# Drop cross-cluster wiring WITHOUT a teardown: remove the auto-loaded .cross-cluster.auto.tfvars.json
+# so the next plain `just up <cluster>` renders UNWIRED (resolver stays on DHCP, no syslog-ng/otel
+# shipper). Use after single-cluster `just destroy`s when you want a pristine plain `up` — the file
+# survives `destroy` on purpose (for `recreate`), but a dead hub IP in it will hang `apt` at boot.
+# Name a cluster to unwire just one, or omit to unwire the whole fleet.  just unwire centralized_pki
+unwire *CLUSTER:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    if [ -n "{{CLUSTER}}" ]; then
+      rm -f {{cluster_root}}/{{CLUSTER}}/.cross-cluster.auto.tfvars.json
+      echo "unwired {{CLUSTER}} (removed .cross-cluster.auto.tfvars.json if it was present)"
+    else
+      rm -f {{cluster_root}}/*/.cross-cluster.auto.tfvars.json
+      echo "unwired all clusters (removed every .cross-cluster.auto.tfvars.json)"
+    fi
 
 # Bring the whole fleet up ALREADY WIRED for cross-cluster telemetry (specs/cross-cluster.md):
 # every VM resolves through centralized_dns's AdGuard Home, consumer clusters ship logs to
