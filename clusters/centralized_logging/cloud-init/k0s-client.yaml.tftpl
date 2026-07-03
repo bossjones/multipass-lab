@@ -203,6 +203,17 @@ write_files:
       $k apply -f https://openebs.github.io/charts/openebs-operator-lite.yaml
       $k apply -f https://openebs.github.io/charts/openebs-lite-sc.yaml
       $k patch storageclass openebs-hostpath -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+      # Strip OpenEBS NDM (Node Disk Manager). openebs-operator-lite bundles it, but NDM only
+      # backs the LocalPV-*device* engine (the openebs-device SC) which this lab never uses — every
+      # Coroot PVC binds to openebs-hostpath, served by the localpv-provisioner (left intact below).
+      # NDM leaks to ~4Gi, runs besteffort (no mem limit), and triggers a *global* OOM that thrashes
+      # the whole VM (load 15+, kube-apiserver TLS timeouts). Delete it (apply-then-delete keeps this
+      # idempotent — a re-run re-applies the manifest then re-strips NDM in the same pass).
+      # See specs/centralized-logging-k0s-perf.md.
+      $k -n openebs delete daemonset  openebs-ndm openebs-ndm-node-exporter         --ignore-not-found
+      $k -n openebs delete deployment openebs-ndm-operator openebs-ndm-cluster-exporter --ignore-not-found
+      $k -n openebs delete configmap  openebs-ndm-config                            --ignore-not-found
+      $k delete storageclass openebs-device                                         --ignore-not-found
       # Coroot: operator first (installs the Coroot CRD), then coroot-ce (creates a Coroot CR the
       # operator reconciles into server + node-agent + cluster-agent + Prometheus + ClickHouse).
       helm repo add --force-update coroot https://coroot.github.io/helm-charts

@@ -58,12 +58,18 @@ Constraints specific to this lab:
    arm64 smoke check is prudent but is **not** a go/no-go gate.
 2. **Storage — Coroot bundles a database.** The `coroot-ce` chart deploys **ClickHouse**
    (traces/logs/profiles) and **Prometheus** (metrics), both requiring **PVCs**. k0s single-node
-   has **no default StorageClass**, so one must be installed (OpenEBS `local-hostpath`). Two
-   landmines in the chart defaults must be overridden for a laptop VM:
+   has **no default StorageClass**, so one must be installed (OpenEBS `local-hostpath`). Three
+   landmines in the chart/manifest defaults must be handled for a laptop VM:
    - **`clickhouse.storage.size` defaults to `100Gi`** — larger than the whole VM disk. Shrink to ~10Gi.
    - **Coroot server `resources.requests.memory` defaults to `4Gi`** — plus ClickHouse (~1–2Gi),
      Prometheus (~1Gi), node-agent (limit 1Gi), cluster-agent. Shrink the server request and size
-     the VM to ~8G RAM.
+     the VM to ~8G RAM. We also set explicit **memory *limits*** on the server/node-agent/cluster-agent
+     (`coroot_server_memory_limit`/`coroot_nodeagent_memory`/`coroot_clusteragent_memory`) so a
+     runaway is OOM-killed in its own cgroup, not via a node-wide OOM.
+   - **`openebs-operator-lite.yaml` bundles NDM (Node Disk Manager)** — a block-device scanner only
+     the unused LocalPV-*device* engine needs (all our PVCs use hostpath). NDM leaks to ~4Gi
+     besteffort and OOM-kills the whole node, so `coroot-install.sh` **deletes it** right after
+     applying the manifest. See `specs/centralized-logging-k0s-perf.md`.
 3. **Resources.** The k0s VM is currently **2 vCPU / 2G / 20G** — nowhere near enough for
    ClickHouse + Prometheus + Coroot. It must be resized (target **4 vCPU / 8G RAM / 50G disk**).
 4. **Exposure.** Coroot's UI is `ClusterIP` on **:8080** by default — not reachable from the host.

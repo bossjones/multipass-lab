@@ -28,12 +28,36 @@ storage:
   size: 5Gi
 
 # Trim the server's memory request from the 4Gi chart default so the whole stack fits the lab VM.
+# The memory *limit* is the guardrail: a runaway Coroot component is OOM-killed inside its own
+# cgroup (contained + restarted) instead of causing a *global* OOM that thrashes the node — the
+# failure mode OpenEBS NDM caused before it was stripped. See specs/centralized-logging-k0s-perf.md.
 resources:
   requests:
     cpu: 500m
     memory: ${coroot_server_memory}
+  limits:
+    memory: ${coroot_server_memory_limit}
 
-# Bundled Prometheus (metrics).
+# eBPF node-agent (DaemonSet) — continuously profiles; cap its memory so a leak can't take the node.
+nodeAgent:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: ${coroot_nodeagent_memory}
+
+# cluster-agent — small; capped for the same guardrail reason.
+clusterAgent:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: ${coroot_clusteragent_memory}
+
+# Bundled Prometheus (metrics). NOTE: coroot-ce 0.3.3 exposes no resources knob for Prometheus or
+# ClickHouse — they are operator-managed and left at operator defaults (neither was the leaker).
 prometheus:
   storage:
     size: ${coroot_prometheus_storage}
