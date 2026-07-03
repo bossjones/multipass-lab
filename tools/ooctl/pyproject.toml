@@ -1,0 +1,62 @@
+[project]
+name = "ooctl"
+description = "Async CLI to tail and search logs from an OpenObserve instance."
+readme = "README.md"
+requires-python = ">=3.11,<4.0"
+license = { text = "MIT" }
+dynamic = ["version"]
+dependencies = [
+    "typer>=0.12",
+    "rich>=13",
+    "httpx[http2]>=0.27",
+    "pyyaml>=6",
+    "pydantic>=2",
+]
+
+[project.scripts]
+ooctl = "ooctl.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "pytest-mock>=3",
+    "pytest-httpserver>=1.1",
+    "pytest-cov>=5",
+    "pytest-randomly>=3",
+    "ruff>=0.11",
+]
+
+[build-system]
+requires = ["hatchling", "uv-dynamic-versioning"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
+
+[tool.uv-dynamic-versioning]
+vcs = "git"
+style = "pep440"
+bump = true
+# tools/ooctl has no tags of its own yet; fall back to 0.0.0 until it's its own repo.
+fallback-version = "0.0.0"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ooctl"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "UP", "B", "I"]
+# B008: typer relies on function calls (typer.Option/Argument) in argument defaults.
+ignore = ["E501", "B008"]
+
+[tool.pytest.ini_options]
+addopts = "-ra -m 'not integration'"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "integration: live tests against a running OpenObserve (deselected by default)",
+]
+filterwarnings = ["ignore::DeprecationWarning"]
