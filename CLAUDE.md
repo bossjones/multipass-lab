@@ -26,7 +26,9 @@ the recipes take.
 ```sh
 just check centralized_logging   # hermetic: tofu fmt + validate + test (no VMs)
 just up    centralized_logging   # tofu apply -> launches all VMs in one apply
+just up-connected                # bring the whole fleet up wired for cross-cluster telemetry (see below)
 just verify centralized_logging  # live: pytest + testinfra over SSH against running VMs
+just verify-connected            # live e2e for the cross-cluster wiring (after up-connected)
 just verify-all                  # live: run every cluster's testinfra suite (glob-discovered)
 just verify-api centralized_monitoring # live: hit Grafana/Prometheus/OpenObserve HTTP APIs + assert (see below)
 just destroy centralized_logging # tofu destroy + prune orphaned VMs (see below)
@@ -42,6 +44,22 @@ just locust-check centralized_monitoring # short headless smoke run -> exit code
 just coroot-status centralized_logging   # Coroot stack pods on the k0s node (see below)
 just coroot-deploy centralized_logging   # re-run the Coroot installer (idempotent repair)
 ```
+
+**Cross-cluster telemetry (opt-in).** Any cluster can become a **log-shipper** and a
+**scrape-target** for the two hubs. Consumer clusters declare opt-in vars — `log_shipping_target`
+(host:port of the `centralized_logging` syslog-ng collector) and `openobserve_endpoint` (host:port
+of `centralized_monitoring`'s OpenObserve) — that, when set, render a syslog-ng client drop-in + an
+otelcol-contrib agent into every VM's cloud-init. The monitoring hub gains `extra_scrape_targets`
+(list of `{job, ip, port}`) templated into `prometheus.yml`. All three share the byte-identical
+snippets in `clusters/_shared/cloud-init/` (a **deliberate exception** to per-cluster vendoring; the
+`_shared` prefix keeps it out of the `clusters/*/` recipe globs, which skip any dir without a
+`main.tf`). Defaults are empty, so a plain `just up <cluster>` stays turnkey and isolated.
+`just up-connected` orchestrates the whole fleet: it applies `centralized_logging` and
+`centralized_monitoring` first, discovers their IPs, brings up every consumer with both hub IPs
+wired in a single boot, then **hot-pushes** the discovered scrape targets into the already-running
+Prometheus (scp'd `prometheus.yml` + container restart — the monitoring VM is never recreated, so
+the IP consumers push OTLP to never churns). `just verify-connected` is the live e2e. The reference
+consumer is `centralized_pki`; full design in `specs/cross-cluster.md`.
 
 **Coroot (opt-in eBPF observability on k0s).** `enable_coroot` deploys the self-hosted
 [Coroot](https://github.com/coroot/coroot) stack (server + eBPF node-agent + cluster-agent +

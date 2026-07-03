@@ -71,6 +71,36 @@ locals {
     authelia_user          = var.authelia_user
     authelia_password_hash = var.authelia_password_hash
   })
+
+  # --- Cross-cluster telemetry snippets (opt-in; see specs/cross-cluster.md) ---
+  # Rendered from the SHARED clusters/_shared/cloud-init/ snippets only when the matching target
+  # is set; empty string otherwise so the cloud-init %{ if ... != "" } guards drop the whole block.
+  # host:port is split into components; the port defaults if the target omits it.
+  ship_logs = var.log_shipping_target != ""
+  push_otlp = var.openobserve_endpoint != ""
+
+  syslog_client_conf = local.ship_logs ? templatefile("${path.module}/../_shared/cloud-init/syslog-client.conf.tftpl", {
+    central_ip  = split(":", var.log_shipping_target)[0]
+    syslog_port = try(split(":", var.log_shipping_target)[1], "514")
+  }) : ""
+
+  # One OTLP agent config per VM — OpenObserve derives the destination stream from stream-name,
+  # so the ca and services VMs land in distinct streams.
+  otel_agent_conf_ca = local.push_otlp ? templatefile("${path.module}/../_shared/cloud-init/otel-agent-config.yaml.tftpl", {
+    openobserve_ip       = split(":", var.openobserve_endpoint)[0]
+    openobserve_port     = try(split(":", var.openobserve_endpoint)[1], "5080")
+    openobserve_org      = var.openobserve_org
+    openobserve_password = var.openobserve_password
+    stream_name          = "${replace(var.name_prefix, "-", "_")}_ca"
+  }) : ""
+
+  otel_agent_conf_services = local.push_otlp ? templatefile("${path.module}/../_shared/cloud-init/otel-agent-config.yaml.tftpl", {
+    openobserve_ip       = split(":", var.openobserve_endpoint)[0]
+    openobserve_port     = try(split(":", var.openobserve_endpoint)[1], "5080")
+    openobserve_org      = var.openobserve_org
+    openobserve_password = var.openobserve_password
+    stream_name          = "${replace(var.name_prefix, "-", "_")}_services"
+  }) : ""
 }
 
 # --- CA VM (step-ca) — created FIRST ----------------------------------------
@@ -78,9 +108,13 @@ locals {
 resource "local_file" "ca_ci" {
   filename = "${local.render_dir}/ca.yaml"
   content = templatefile("${path.module}/cloud-init/ca.yaml.tftpl", merge(local.flags, {
-    ssh_pubkey = local.ssh_pubkey
-    domain     = var.domain
-    ca_compose = local.ca_compose
+    ssh_pubkey           = local.ssh_pubkey
+    domain               = var.domain
+    ca_compose           = local.ca_compose
+    log_shipping_target  = var.log_shipping_target
+    openobserve_endpoint = var.openobserve_endpoint
+    syslog_client_conf   = local.syslog_client_conf
+    otel_agent_conf      = local.otel_agent_conf_ca
   }))
 }
 
@@ -112,6 +146,11 @@ resource "local_file" "services_ci" {
     traefik_dynamic    = local.traefik_dynamic
     authelia_conf      = local.authelia_conf
     authelia_users     = local.authelia_users
+
+    log_shipping_target  = var.log_shipping_target
+    openobserve_endpoint = var.openobserve_endpoint
+    syslog_client_conf   = local.syslog_client_conf
+    otel_agent_conf      = local.otel_agent_conf_services
   }))
 }
 

@@ -64,6 +64,24 @@ write_files:
       UNIT
       systemctl daemon-reload
       systemctl enable --now "$name"
+%{ if log_shipping_target != "" ~}
+
+  # Cross-cluster log shipping — syslog-ng client drop-in (shared snippet) shipping journald +
+  # syslog-ng internal() to the centralized_logging collector. See specs/cross-cluster.md.
+  - path: /etc/syslog-ng/conf.d/10-ship.conf
+    permissions: '0644'
+    content: |
+      ${indent(6, syslog_client_conf)}
+%{ endif ~}
+%{ if openobserve_endpoint != "" ~}
+
+  # Cross-cluster OTLP push — otelcol-contrib agent (shared snippet) shipping host logs to
+  # centralized_monitoring's OpenObserve. See specs/cross-cluster.md.
+  - path: /etc/otelcol-contrib/config.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, otel_agent_conf)}
+%{ endif ~}
 %{ if enable_process_exporter ~}
   # process-exporter config: curated groups + a bounded {{.Comm}} catch-all (empty groups
   # pruned at runtime via -remove-empty-groups). exe matches the argv[0] basename.
@@ -99,6 +117,26 @@ runcmd:
 %{ if enable_node_exporter ~}
   # node_exporter — OS host metrics (:9100), parity with the other clusters' metrics tests.
   - /usr/local/sbin/install-exporter.sh node_exporter https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-{ARCH}.tar.gz node_exporter
+%{ endif ~}
+%{ if log_shipping_target != "" ~}
+  # Cross-cluster syslog-ng shipper — install, ensure the drop-in is @included, restart.
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y syslog-ng
+  - mkdir -p /var/lib/syslog-ng
+  - grep -q 'conf.d/\*.conf' /etc/syslog-ng/syslog-ng.conf || echo '@include "/etc/syslog-ng/conf.d/*.conf"' >> /etc/syslog-ng/syslog-ng.conf
+  - systemctl enable syslog-ng
+  - systemctl restart syslog-ng
+%{ endif ~}
+%{ if openobserve_endpoint != "" ~}
+  # Cross-cluster OTLP agent — install the upstream otelcol-contrib .deb (arch-aware), then run
+  # our rendered config. The .deb ships a systemd unit reading /etc/otelcol-contrib/config.yaml.
+  - mkdir -p /var/lib/otelcol-contrib/storage
+  - |
+    OTEL_VER=0.109.0
+    arch="$(dpkg --print-architecture)"
+    curl -sSLf "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$${OTEL_VER}/otelcol-contrib_$${OTEL_VER}_linux_$${arch}.deb" -o /tmp/otelcol.deb
+    DEBIAN_FRONTEND=noninteractive dpkg -i /tmp/otelcol.deb || DEBIAN_FRONTEND=noninteractive apt-get install -f -y
+  - systemctl enable otelcol-contrib
+  - systemctl restart otelcol-contrib
 %{ endif ~}
 %{ if enable_systemd_exporter ~}
   # systemd_exporter — per-unit health/resource metrics (:9558)

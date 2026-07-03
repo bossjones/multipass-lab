@@ -120,3 +120,13 @@ tofu -chdir=clusters/centralized_monitoring apply \
 > re-renders `.rendered/*.yaml` but does **not** recreate a running VM. To apply, recreate the
 > cluster: `just destroy centralized_monitoring && just up centralized_monitoring`. See
 > [operations.md](operations.md#applying-config-changes).
+
+## Cross-cluster scraping — `extra_scrape_targets`
+
+Not an `enable_*` flag: a `list(object({ job=string, ip=string, port=optional(number,9100) }))`
+(default `[]`) that adds one static-config Prometheus job per entry so this hub can scrape VMs in
+**other** clusters. It is normally populated by `just up-connected` via a gitignored
+`.cross-cluster.auto.tfvars.json`, not by hand. Because the running server isn't recreated on a
+cloud-init content change, `up-connected` re-renders `prometheus.yml`, scp's it onto the server, and
+restarts the Prometheus container to pick up new targets. See
+[`specs/cross-cluster.md`](../../../specs/cross-cluster.md).
