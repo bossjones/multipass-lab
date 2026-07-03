@@ -6,6 +6,11 @@ locals {
 
   render_dir = "${path.module}/.rendered"
 
+  # Interactive docker tooling installer (wharf/oxker/dive), shared byte-identically
+  # across every cluster with a docker VM. Static script → file() (no templating);
+  # embedded into the docker VM cloud-init via write_files and run under enable_docker_tools.
+  docker_tools_installer = file("${path.module}/../_shared/cloud-init/install-docker-tools.sh")
+
   central_name = "${var.name_prefix}-central"
   k0s_name     = "${var.name_prefix}-k0s"
   docker_name  = "${var.name_prefix}-docker"
@@ -164,6 +169,9 @@ resource "local_file" "docker_ci" {
     grafana_datasources = local.grafana_datasources
     grafana_dash_prov   = local.grafana_dash_prov
     grafana_dashboards  = local.grafana_dashboards
+    # Docker operator TUIs (wharf/oxker/dive) — this is the only docker VM in the cluster.
+    enable_docker_tools    = var.enable_docker_tools
+    docker_tools_installer = local.docker_tools_installer
   }))
 }
 

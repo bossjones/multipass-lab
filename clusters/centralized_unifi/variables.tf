@@ -96,6 +96,16 @@ variable "enable_unifi_traffic" {
   default     = true
 }
 
+# Interactive docker TUIs/inspectors (wharf, oxker, dive). Both VMs only run docker in the
+# `exact` version_mode (modern mode runs bare-metal rsyslog/syslog-ng), so the installer is
+# gated on (enable_docker_tools && exact) in cloud-init. All three ship native arm64 builds,
+# so this defaults ON. See clusters/_shared/cloud-init/install-docker-tools.sh.
+variable "enable_docker_tools" {
+  description = "Install docker TUI/inspection tools (wharf, oxker, dive) on VMs running docker (exact mode only)."
+  type        = bool
+  default     = true
+}
+
 # --- Resource sizing ---------------------------------------------------------
 variable "controller" {
   description = "Resource sizing for the controller VM (Ubuntu host + native-arm64 syslog-ng container + exporter)."

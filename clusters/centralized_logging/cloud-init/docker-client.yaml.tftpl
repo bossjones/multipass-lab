@@ -229,6 +229,13 @@ write_files:
     permissions: '0644'
     content: |
       ${indent(6, compose_conf)}
+%{ if enable_docker_tools ~}
+  # Interactive docker operator TUIs (wharf, oxker, dive) — installed by a runcmd below.
+  - path: /usr/local/sbin/install-docker-tools.sh
+    permissions: '0755'
+    content: |
+      ${indent(6, docker_tools_installer)}
+%{ endif ~}
 
 runcmd:
   # Enforce UTC late: Multipass injects the host timezone during first boot and can beat the
@@ -251,6 +258,11 @@ runcmd:
     SELF_IP=$(ip -4 route get 1.1.1.1 | awk '{print $7; exit}')
     sed -i "s/__SELF_IP__/$SELF_IP/g" /opt/stack/prometheus.yml
   - docker compose -f /opt/stack/compose.yaml up -d
+%{ if enable_docker_tools ~}
+  # Interactive docker operator TUIs (wharf/oxker/dive); best-effort so a download blip can't
+  # break boot. Idempotent — re-run with `sudo /usr/local/sbin/install-docker-tools.sh`.
+  - /usr/local/sbin/install-docker-tools.sh || true
+%{ endif ~}
 %{ if enable_node_exporter || enable_syslogng_metrics ~}
   - mkdir -p /var/lib/node_exporter/textfile_collector
 %{ endif ~}

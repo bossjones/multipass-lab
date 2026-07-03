@@ -24,6 +24,13 @@ output "enabled_exporters" {
   value       = local.enabled_exporters
 }
 
+# Whether the docker operator TUIs (wharf/oxker/dive) are installed on the server VM.
+# tests/testinfra/conftest.py reads this so the live suite skips (not fails) when off.
+output "docker_tools_enabled" {
+  description = "Whether the docker TUI/inspection tools (wharf, oxker, dive) are installed on the docker VM."
+  value       = var.enable_docker_tools
+}
+
 output "shell_hints" {
   description = "Handy commands / URLs to poke at the cluster."
   value = join("\n", [

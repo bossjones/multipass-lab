@@ -104,6 +104,19 @@ variable "enable_kube_state_metrics" {
   default     = true
 }
 
+# --- Docker operator tooling ------------------------------------------------
+# Interactive docker TUIs/inspectors (wharf, oxker, dive) installed on any VM that
+# runs a docker daemon (the docker VM here). Not a /metrics exporter, so it is
+# threaded straight into the docker templatefile rather than via local.flags. All
+# three ship native arm64 builds, so this defaults ON. See clusters/_shared/cloud-init/
+# install-docker-tools.sh.
+
+variable "enable_docker_tools" {
+  description = "Install docker TUI/inspection tools (wharf, oxker, dive) on VMs running docker."
+  type        = bool
+  default     = true
+}
+
 variable "enable_netdata" {
   description = "Netdata real-time agent (:19999, /api/v1/allmetrics?format=prometheus) on all VMs — per-second host/container/systemd metrics + built-in dashboards. Standalone (no Netdata Cloud), telemetry off."
   type        = bool

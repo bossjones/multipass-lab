@@ -178,6 +178,51 @@ run "modern_mode_uses_ubuntu_native_path" {
     condition     = output.version_mode == "modern"
     error_message = "version_mode output must reflect modern"
   }
+  # No docker daemon in modern mode, so the docker tools must not render there.
+  assert {
+    condition     = !strcontains(local_file.controller_ci.content, "install-docker-tools.sh") && !strcontains(local_file.usg_ci.content, "install-docker-tools.sh")
+    error_message = "modern mode has no docker, so the docker-tools installer must be absent"
+  }
+  assert {
+    condition     = output.docker_tools_enabled == false
+    error_message = "docker_tools_enabled must be false in modern mode (docker absent)"
+  }
+}
+
+# --- Docker operator tooling (wharf/oxker/dive) — default ON in exact mode only --------
+
+run "docker_tools_render_in_exact_mode" {
+  command = plan
+
+  # Default version_mode is 'exact', so both docker VMs carry the installer.
+  assert {
+    condition     = strcontains(local_file.controller_ci.content, "install-docker-tools.sh") && strcontains(local_file.usg_ci.content, "install-docker-tools.sh")
+    error_message = "both VMs must install the docker operator TUIs in exact mode by default"
+  }
+  assert {
+    condition = alltrue([for m in [
+      "idesyatov/wharf", "mrjackwills/oxker", "wagoodman/dive",
+      "WHARF_VERSION=\"0.9.1\"", "OXKER_VERSION=\"0.13.2\"", "DIVE_VERSION=\"0.13.1\"",
+    ] : strcontains(local_file.usg_ci.content, m)])
+    error_message = "usg cloud-init must reference the pinned wharf/oxker/dive releases"
+  }
+  assert {
+    condition     = output.docker_tools_enabled == true
+    error_message = "docker_tools_enabled output must report true in exact mode by default"
+  }
+}
+
+run "docker_tools_absent_when_disabled" {
+  command = plan
+
+  variables {
+    enable_docker_tools = false
+  }
+
+  assert {
+    condition     = !strcontains(local_file.controller_ci.content, "install-docker-tools.sh") && !strcontains(local_file.usg_ci.content, "install-docker-tools.sh")
+    error_message = "disabled enable_docker_tools must omit the installer from both VMs"
+  }
 }
 
 run "cloud_init_is_valid_yaml_and_utc" {

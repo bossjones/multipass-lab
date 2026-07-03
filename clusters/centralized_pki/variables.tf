@@ -45,6 +45,16 @@ variable "enable_node_exporter" {
   default     = true
 }
 
+# Interactive docker TUIs/inspectors (wharf, oxker, dive) on both VMs (both run docker). Not a
+# /metrics exporter, so it is threaded straight into each templatefile rather than via
+# local.flags. All three ship native arm64 builds, so this defaults ON. See
+# clusters/_shared/cloud-init/install-docker-tools.sh.
+variable "enable_docker_tools" {
+  description = "Install docker TUI/inspection tools (wharf, oxker, dive) on VMs running docker."
+  type        = bool
+  default     = true
+}
+
 variable "enable_process_exporter" {
   description = "process-exporter (:9256) on both VMs — per-process metrics for step-ca, Traefik, Authelia."
   type        = bool

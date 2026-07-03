@@ -39,6 +39,14 @@ output "enabled_exporters" {
   value       = local.enabled_exporters
 }
 
+# Whether the docker operator TUIs (wharf/oxker/dive) are installed. Only true when both the
+# flag is on AND version_mode is 'exact' (docker exists only in exact mode). conftest reads this
+# so the live suite skips (not fails) when off.
+output "docker_tools_enabled" {
+  description = "Whether the docker TUI/inspection tools (wharf, oxker, dive) are installed (enable_docker_tools && exact mode)."
+  value       = var.enable_docker_tools && local.exact
+}
+
 # Discovery map for a future centralized_monitoring scrape: role -> {ip, exporters{name=port}}.
 # All listeners bind 0.0.0.0, so these <ip>:<port> targets are scrapable cross-VM/cross-cluster.
 output "metrics_targets" {

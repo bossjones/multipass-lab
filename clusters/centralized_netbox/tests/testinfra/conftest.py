@@ -60,6 +60,13 @@ def enabled_exporters(tofu_output):
 
 
 @pytest.fixture(scope="session")
+def docker_tools_enabled(tofu_output):
+    """Whether the docker operator TUIs (wharf/oxker/dive) are installed. test_docker_tools
+    skips when off."""
+    return tofu_output["docker_tools_enabled"]["value"]
+
+
+@pytest.fixture(scope="session")
 def netbox(tofu_output):
     """NetBox API coordinates for host-side cross-checks.
 

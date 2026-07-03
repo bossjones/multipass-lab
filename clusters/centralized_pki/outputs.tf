@@ -35,6 +35,13 @@ output "enabled_flags" {
   value       = local.enabled_flags
 }
 
+# Whether the docker operator TUIs (wharf/oxker/dive) are installed on both VMs.
+# tests/testinfra/conftest.py reads this so the live suite skips (not fails) when off.
+output "docker_tools_enabled" {
+  description = "Whether the docker TUI/inspection tools (wharf, oxker, dive) are installed on VMs running docker."
+  value       = var.enable_docker_tools
+}
+
 output "shell_hints" {
   description = "Handy commands to poke at the cluster."
   value = join("\n", [

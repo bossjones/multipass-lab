@@ -72,6 +72,13 @@ def metrics_targets(tofu_output):
 
 
 @pytest.fixture(scope="session")
+def docker_tools_enabled(tofu_output):
+    """Whether the docker operator TUIs (wharf/oxker/dive) are installed (only in exact mode).
+    test_docker_tools skips when off."""
+    return tofu_output["docker_tools_enabled"]["value"]
+
+
+@pytest.fixture(scope="session")
 def ssh_config_file(tmp_path_factory):
     cfg = tmp_path_factory.mktemp("ssh") / "config"
     cfg.write_text(

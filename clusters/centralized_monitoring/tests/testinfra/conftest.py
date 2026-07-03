@@ -25,9 +25,7 @@ CLOUD_INIT_TIMEOUT = 600
 
 # tests/testinfra/ -> clusters/centralized_monitoring/
 CLUSTER_DIR = Path(__file__).resolve().parents[2]
-SSH_KEY = os.path.expanduser(
-    os.environ.get("CLUSTER_SSH_KEY", "~/.ssh/id_ed25519")
-)
+SSH_KEY = os.path.expanduser(os.environ.get("CLUSTER_SSH_KEY", "~/.ssh/id_ed25519"))
 
 
 @pytest.fixture(scope="session")
@@ -90,6 +88,13 @@ def _connect(ip, ssh_config_file):
     # Block until provisioning finishes (returns immediately if already done).
     host.run(f"timeout {CLOUD_INIT_TIMEOUT} cloud-init status --wait")
     return host
+
+
+@pytest.fixture(scope="session")
+def docker_tools_enabled(tofu_output):
+    """Whether the docker operator TUIs (wharf/oxker/dive) are installed. test_docker_tools
+    skips when off."""
+    return tofu_output["docker_tools_enabled"]["value"]
 
 
 @pytest.fixture(scope="session")

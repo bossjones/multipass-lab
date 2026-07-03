@@ -30,6 +30,18 @@ def test_k0s_status_healthy(k0s):
     assert k0s.run("sudo k0s status").rc == 0
 
 
+def test_debug_tools_installed(k0s):
+    # Unconditional debug CLIs: ccze (apt), k9s + stern (release binaries).
+    assert k0s.run("ccze --version").rc == 0
+    assert k0s.file("/usr/local/bin/k9s").exists
+    assert k0s.file("/usr/local/bin/stern").exists
+
+
+def test_ubuntu_kubeconfig_present(k0s):
+    # k9s/stern read /home/ubuntu/.kube/config over SSH as the ubuntu user.
+    assert k0s.file("/home/ubuntu/.kube/config").exists
+
+
 @pytest.mark.parametrize("flag", list(CLIENT_FLAG_PORTS))
 def test_enabled_client_exporter_port(k0s, enabled_exporters, flag):
     if flag not in enabled_exporters:

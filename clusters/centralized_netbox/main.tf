@@ -6,6 +6,12 @@ locals {
 
   render_dir = "${path.module}/.rendered"
 
+  # Interactive docker tooling installer (wharf/oxker/dive), shared byte-identically across
+  # every cluster with a docker VM. Static script → file() (no templating); embedded into the
+  # server + discovery-agent cloud-inits via write_files and run under enable_docker_tools
+  # (the client VM has no docker, so it is left out).
+  docker_tools_installer = file("${path.module}/../_shared/cloud-init/install-docker-tools.sh")
+
   server_name = "${var.name_prefix}-server"
   client_name = "${var.name_prefix}-client"
   agent_name  = "${var.name_prefix}-agent"
@@ -160,6 +166,9 @@ resource "local_file" "server_ci" {
     diode_nginx                   = local.diode_nginx
     plugin_requirements           = local.plugin_requirements
     plugin_config                 = local.plugin_config
+    # Docker operator TUIs (wharf/oxker/dive) — the server runs the netbox-docker stack.
+    enable_docker_tools    = var.enable_docker_tools
+    docker_tools_installer = local.docker_tools_installer
   }))
 }
 
@@ -214,6 +223,9 @@ resource "local_file" "agent_ci" {
     orb_agent_image            = var.orb_agent_image
     diode_ingest_client_secret = var.diode_ingest_client_secret
     orb_config                 = local.orb_config
+    # Docker operator TUIs (wharf/oxker/dive) — the agent runs orb-agent via docker.
+    enable_docker_tools    = var.enable_docker_tools
+    docker_tools_installer = local.docker_tools_installer
   })
 }
 

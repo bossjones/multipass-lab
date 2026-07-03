@@ -515,6 +515,69 @@ run "exporters_off_omit_install" {
   }
 }
 
+# --- Docker operator tooling (wharf/oxker/dive) — default ON on docker VMs ------------
+
+run "docker_tools_render_by_default" {
+  command = plan
+
+  # The server always runs docker, so it carries the installer by default. The client has no
+  # docker and must never carry it.
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "install-docker-tools.sh")
+    error_message = "server VM must install the docker operator TUIs by default"
+  }
+  assert {
+    condition     = !strcontains(local_file.client_ci.content, "install-docker-tools.sh")
+    error_message = "the client VM has no docker, so the docker-tools installer must be absent there"
+  }
+  assert {
+    condition = alltrue([for m in [
+      "idesyatov/wharf", "mrjackwills/oxker", "wagoodman/dive",
+      "WHARF_VERSION=\"0.9.1\"", "OXKER_VERSION=\"0.13.2\"", "DIVE_VERSION=\"0.13.1\"",
+    ] : strcontains(local_file.server_ci.content, m)])
+    error_message = "server cloud-init must reference the pinned wharf/oxker/dive releases"
+  }
+  assert {
+    condition     = output.docker_tools_enabled == true
+    error_message = "docker_tools_enabled output must report true by default"
+  }
+  assert {
+    condition     = can(yamldecode(local_file.server_ci.content))
+    error_message = "server cloud-init must stay valid YAML after adding the docker-tools installer"
+  }
+}
+
+run "docker_tools_render_on_discovery_agent" {
+  command = plan
+
+  variables {
+    enable_discovery = true
+  }
+
+  # The discovery agent VM (only created with discovery on) also runs docker, so it gets the tools.
+  assert {
+    condition     = strcontains(local_file.agent_ci[0].content, "install-docker-tools.sh")
+    error_message = "the discovery agent VM must install the docker operator TUIs by default"
+  }
+  assert {
+    condition     = can(yamldecode(local_file.agent_ci[0].content))
+    error_message = "agent cloud-init must stay valid YAML after adding the docker-tools installer"
+  }
+}
+
+run "docker_tools_absent_when_disabled" {
+  command = plan
+
+  variables {
+    enable_docker_tools = false
+  }
+
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "install-docker-tools.sh")
+    error_message = "disabled enable_docker_tools must omit the installer from the server VM"
+  }
+}
+
 # --- Netdata (real-time agent on both VMs, dashboard-only — no local Prometheus) -------
 
 run "netdata_renders_by_default" {

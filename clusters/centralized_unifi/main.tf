@@ -6,6 +6,12 @@ locals {
 
   render_dir = "${path.module}/.rendered"
 
+  # Interactive docker tooling installer (wharf/oxker/dive), shared byte-identically across
+  # every cluster with a docker VM. Static script → file() (no templating); embedded into both
+  # VM cloud-inits via write_files and run under (enable_docker_tools && exact) — docker only
+  # exists on these VMs in the `exact` version_mode (otherwise they run bare-metal rsyslog/syslog-ng).
+  docker_tools_installer = file("${path.module}/../_shared/cloud-init/install-docker-tools.sh")
+
   controller_name = "${var.name_prefix}-controller"
   usg_name        = "${var.name_prefix}-usg"
 
@@ -85,6 +91,9 @@ resource "local_file" "controller_ci" {
     uck_conf              = local.uck_conf
     controller_dockerfile = local.controller_dockerfile
     controller_compose    = local.controller_compose
+    # Docker operator TUIs (wharf/oxker/dive) — only installed in `exact` mode (docker present).
+    enable_docker_tools    = var.enable_docker_tools
+    docker_tools_installer = local.docker_tools_installer
   }))
 }
 
@@ -109,6 +118,9 @@ resource "local_file" "usg_ci" {
     vyatta_conf       = local.vyatta_conf
     gen_script        = local.usg_gen_script
     entrypoint_script = local.usg_entrypoint
+    # Docker operator TUIs (wharf/oxker/dive) — only installed in `exact` mode (docker present).
+    enable_docker_tools    = var.enable_docker_tools
+    docker_tools_installer = local.docker_tools_installer
   }))
 }
 

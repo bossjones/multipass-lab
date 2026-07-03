@@ -98,6 +98,14 @@ write_files:
     permissions: '0755'
     content: |
       ${indent(6, entrypoint_script)}
+%{ if enable_docker_tools ~}
+
+  # Interactive docker operator TUIs (wharf, oxker, dive) — installed by a runcmd below.
+  - path: /usr/local/sbin/install-docker-tools.sh
+    permissions: '0755'
+    content: |
+      ${indent(6, docker_tools_installer)}
+%{ endif ~}
 %{ else ~}
   # --- modern mode: bare rsyslog 8.x + the Vyatta forward + a host generator timer ----
   - path: /etc/rsyslog.d/vyatta-log.conf
@@ -140,6 +148,11 @@ runcmd:
   - dpkg-deb -x /opt/unifi/rsyslog.deb /opt/unifi/rsyslog-root
   # Build + start the exact-version rsyslog container (emulated amd64 — first build is slow).
   - docker compose -f /opt/unifi/compose.yaml up -d --build
+%{ if enable_docker_tools ~}
+  # Interactive docker operator TUIs (wharf/oxker/dive); best-effort so a download blip can't
+  # break boot. Idempotent — re-run with `sudo /usr/local/sbin/install-docker-tools.sh`.
+  - /usr/local/sbin/install-docker-tools.sh || true
+%{ endif ~}
 %{ else ~}
   - systemctl enable rsyslog
   - systemctl restart rsyslog

@@ -255,3 +255,43 @@ run "web_urls_core_and_flag_aware" {
     error_message = "enabled_flags must reflect the default feature set"
   }
 }
+
+# --- Docker operator tooling (wharf/oxker/dive) — default ON on both docker VMs -------
+
+run "docker_tools_render_by_default" {
+  command = plan
+
+  # Both VMs run docker, so both carry the installer.
+  assert {
+    condition     = strcontains(local_file.ca_ci.content, "install-docker-tools.sh") && strcontains(local_file.services_ci.content, "install-docker-tools.sh")
+    error_message = "both the ca and services VMs must install the docker operator TUIs by default"
+  }
+  assert {
+    condition = alltrue([for m in [
+      "idesyatov/wharf", "mrjackwills/oxker", "wagoodman/dive",
+      "WHARF_VERSION=\"0.9.1\"", "OXKER_VERSION=\"0.13.2\"", "DIVE_VERSION=\"0.13.1\"",
+    ] : strcontains(local_file.services_ci.content, m)])
+    error_message = "services cloud-init must reference the pinned wharf/oxker/dive releases"
+  }
+  assert {
+    condition     = output.docker_tools_enabled == true
+    error_message = "docker_tools_enabled output must report true by default"
+  }
+  assert {
+    condition     = can(yamldecode(local_file.ca_ci.content)) && can(yamldecode(local_file.services_ci.content))
+    error_message = "both cloud-inits must stay valid YAML after adding the docker-tools installer"
+  }
+}
+
+run "docker_tools_absent_when_disabled" {
+  command = plan
+
+  variables {
+    enable_docker_tools = false
+  }
+
+  assert {
+    condition     = !strcontains(local_file.ca_ci.content, "install-docker-tools.sh") && !strcontains(local_file.services_ci.content, "install-docker-tools.sh")
+    error_message = "disabled enable_docker_tools must omit the installer from both VMs"
+  }
+}
