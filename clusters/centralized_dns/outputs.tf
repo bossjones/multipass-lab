@@ -11,6 +11,16 @@ output "hosts" {
   }
 }
 
+# Service hostname -> IP A-records for the fleet resolver. `just set-dns` reads this and registers
+# each as an AdGuard rewrite so these names resolve fleet-wide.
+output "dns_records" {
+  description = "hostname -> ipv4 A-records to register in centralized_dns AdGuard. Consumed by `just set-dns`."
+  value = {
+    "adguard.${var.domain}" = multipass_instance.server.ipv4
+    "dns.${var.domain}"     = multipass_instance.server.ipv4
+  }
+}
+
 output "adguard_url" {
   description = "AdGuard Home web UI + /control API base URL."
   value       = "http://${multipass_instance.server.ipv4}:${var.adguard_web_port}"

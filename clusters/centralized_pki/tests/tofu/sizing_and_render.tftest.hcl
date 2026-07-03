@@ -6,6 +6,7 @@ mock_provider "multipass" {}
 variables {
   # Provide an inline key so the test never depends on a real ~/.ssh file.
   ssh_pubkey = "ssh-ed25519 AAAATESTKEY centralized-pki-tests"
+  ntp_server = ""
 }
 
 run "sizing_image_names_and_ca_render" {
@@ -180,6 +181,29 @@ run "ntp_timezone_render" {
       local_file.ca_ci.content, local_file.services_ci.content,
     ] : can(yamldecode(c))])
     error_message = "rendered cloud-init must stay valid YAML"
+  }
+}
+
+run "ntp_server_off_by_default" {
+  command = plan
+  assert {
+    condition     = alltrue([for c in [local_file.ca_ci.content, local_file.services_ci.content] : !strcontains(c, "99-centralized-ntp.conf")])
+    error_message = "the internal NTP drop-in must be absent by default (ntp_server empty)"
+  }
+}
+
+run "ntp_server_on_renders_dropin" {
+  command = plan
+  variables {
+    ntp_server = "10.0.0.9"
+  }
+  assert {
+    condition     = alltrue([for c in [local_file.ca_ci.content, local_file.services_ci.content] : strcontains(c, "/etc/systemd/timesyncd.conf.d/99-centralized-ntp.conf")])
+    error_message = "ntp_server set must render the timesyncd drop-in on every VM"
+  }
+  assert {
+    condition     = alltrue([for c in [local_file.ca_ci.content, local_file.services_ci.content] : strcontains(c, "NTP=10.0.0.9")])
+    error_message = "the drop-in must point at the injected NTP IP"
   }
 }
 

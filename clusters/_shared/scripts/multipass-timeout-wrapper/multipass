@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Shadows the real `multipass` binary (via PATH, prepended by the Justfile's `up` recipe)
+# to raise `launch`'s default 5-minute init timeout. The larstobi/multipass OpenTofu provider
+# shells out to `multipass launch` with no --timeout, so a fleet-loaded host (many VMs already
+# running) reliably blows the 5-minute default mid-cloud-init, leaving an orphaned VM tofu never
+# recorded in state (see CLAUDE.md's `just prune` note). The provider exposes no timeout
+# attribute to configure this from *.tf, so this wrapper is the only lever available.
+set -euo pipefail
+
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+real_multipass=""
+IFS=':' read -r -a path_dirs <<< "$PATH"
+for d in "${path_dirs[@]}"; do
+  [ "$d" = "$self_dir" ] && continue
+  if [ -x "$d/multipass" ]; then
+    real_multipass="$d/multipass"
+    break
+  fi
+done
+
+if [ -z "$real_multipass" ]; then
+  echo "multipass-timeout-wrapper: could not find the real multipass binary in PATH (excluding $self_dir)" >&2
+  exit 127
+fi
+
+args=("$@")
+if [ "${1:-}" = "launch" ]; then
+  has_timeout=0
+  for a in "${args[@]}"; do
+    [ "$a" = "--timeout" ] && has_timeout=1
+  done
+  if [ "$has_timeout" -eq 0 ]; then
+    args+=(--timeout 1800)
+  fi
+fi
+
+exec "$real_multipass" "${args[@]}"

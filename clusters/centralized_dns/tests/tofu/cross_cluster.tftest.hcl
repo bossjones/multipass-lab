@@ -5,6 +5,14 @@ mock_provider "multipass" {}
 
 variables {
   ssh_pubkey = "ssh-ed25519 AAAATESTKEY centralized-dns-tests"
+  # Pin opt-in vars OFF so the *_off_by_default runs stay hermetic to whatever *.auto.tfvars
+  # OpenTofu auto-loads from the cluster dir (a leftover .cross-cluster.auto.tfvars.json from a
+  # prior `just up-connected`, or ca-material.auto.tfvars). On-runs override at the run level.
+  # See specs/internal-ca.md.
+  dns_server           = ""
+  internal_ca_cert     = ""
+  log_shipping_target  = ""
+  openobserve_endpoint = ""
 }
 
 # --- default: cross-cluster off -> no shipping/OTLP wiring rendered ----------
@@ -99,5 +107,47 @@ run "dns_server_renders_resolved_conf" {
   assert {
     condition     = strcontains(local_file.server_ci.content, "DNS=10.7.7.7")
     error_message = "external resolver drop-in must carry the injected DNS IP"
+  }
+}
+
+# --- default: internal CA trust off -> no CA cert dropped into the trust store ----
+run "internal_ca_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "internal-root-ca.crt")
+    error_message = "with internal_ca_cert unset, cloud-init must NOT drop a root CA into the trust store"
+  }
+}
+
+# --- internal CA set: root CA rendered into the OS trust store + update-ca-certificates ----
+run "internal_ca_on_renders_trust" {
+  command = plan
+
+  variables {
+    internal_ca_cert = "-----BEGIN CERTIFICATE-----\nMIITESTROOTCA\n-----END CERTIFICATE-----"
+  }
+
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/usr/local/share/ca-certificates/internal-root-ca.crt")
+    error_message = "internal_ca_cert set must drop the root CA into /usr/local/share/ca-certificates"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "update-ca-certificates")
+    error_message = "internal_ca_cert set must run update-ca-certificates to install the trust"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "MIITESTROOTCA")
+    error_message = "the rendered CA cert must carry the injected PEM body"
+  }
+}
+
+# --- AdGuard host rewrites start empty; `just set-dns` adds them at runtime via the REST API ---
+run "dns_rewrites_empty_at_boot" {
+  command = plan
+
+  assert {
+    condition     = strcontains(local_file.adguard_conf.content, "rewrites: []")
+    error_message = "the seeded AdGuardHome.yaml must render an empty rewrites list at boot (set-dns populates it at runtime)"
   }
 }

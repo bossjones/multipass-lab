@@ -420,6 +420,35 @@ with inline `runcmd`; fall back to the oneshot if timeouts appear.
 - Auth: Basic first, fall back to cookie login (`POST /control/login`) on 401/403 — same
   semantics as `adguardctl/client.py`.
 
+### 7a. DNS rewrites (custom records) + `just set-dns` — fleet hostname registration
+
+`adguard_cli.py` also carries **write** commands over AdGuard's `/control/rewrite/*` API so the
+fleet's service hostnames resolve fleet-wide (replacing the per-machine `/etc/hosts` edits that
+`centralized_pki/USAGE.md` describes). A shared `_post(c, path, json_body)` helper mirrors `_get`
+(reuses the logged-in `Ctx.client()`), and the commands are:
+
+- `rewrite-list` — `GET /control/rewrite/list`.
+- `rewrite-add DOMAIN ANSWER` / `rewrite-delete DOMAIN ANSWER` — the raw additive add/delete.
+- `rewrite-set DOMAIN ANSWER` — **idempotent**: lists, deletes every existing row for `DOMAIN`,
+  then adds (AdGuard's `add` is additive/allows dupes, so a true "set" must delete first).
+- `rewrite-sync --file PATH|-` — reads a `{hostname: answer}` JSON object (stdin via `-`) and
+  applies `rewrite-set` per entry; prints an added/updated/unchanged summary. `--prune` (default
+  off) also removes AdGuard rows absent from the payload. Re-running is safe; IP churn after a
+  `recreate` overwrites the old answer.
+
+**Data source (vendored, per-cluster).** Every cluster declares a `variable "domain"` (default
+`lab.theblacktonystark.com`, duplicated like `dns_server`) and a `dns_records` output — a
+`{ "<service>.${var.domain}" = <role>.ipv4 }` map built from its own VM IPs. Conditional records
+(`coroot.<domain>` on the logging k0s node, `diode.<domain>` on netbox) are gated with
+`merge(..., var.enable_x ? {...} : {})`, matching the record's `enable_*` install flag.
+
+**Recipes.** `just set-dns <cluster>` pipes one cluster's `tofu output -json dns_records` into
+`rewrite-sync --file -`; `just set-dns-all` merges every up cluster's records (`jq -s 'reduce
+.[] as $x ({}; . * $x)'`, clusters that aren't up contribute `{}`) and syncs once; `just
+verify-dns` `dig`s each record against the AdGuard IP and exits nonzero on a mismatch. `just
+up-connected` runs `set-dns-all` as its **final** step (after the Prometheus hot-push), so records
+register only once the whole fleet is up.
+
 ### 8. `unbound_cli.py` (host-side, via the exporter)
 
 - uv single-file (`typer rich httpx`). Unbound has no HTTP API, so this scrapes the

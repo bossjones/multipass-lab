@@ -84,6 +84,18 @@ variable "dns_server" {
   default     = ""
 }
 
+variable "internal_ca_cert" {
+  description = "PEM of the internal root CA to trust on every VM. Non-empty -> each VM drops it into /usr/local/share/ca-certificates and runs update-ca-certificates at first boot. Empty (default) = no fleet trust. For centralized_pki this is normally the SAME PEM as root_ca_cert; `just up-connected` injects it into every cluster. See specs/internal-ca.md."
+  type        = string
+  default     = ""
+}
+
+variable "ntp_server" {
+  description = "IP (or host[:port]) of an internal NTP source. Non-empty -> every VM points systemd-timesyncd at it via /etc/systemd/timesyncd.conf.d/. Empty (default) = image default NTP pool. `just up-connected` (INTERNAL_NTP=1) wires it to the centralized_dns hub. See specs/shared-ntp.md."
+  type        = string
+  default     = ""
+}
+
 variable "openobserve_endpoint" {
   description = "host:port of centralized_monitoring's OpenObserve. Non-empty -> both VMs run an otelcol-contrib agent pushing host logs via OTLP/HTTP. Empty (default) = disabled."
   type        = string
@@ -135,6 +147,32 @@ variable "stepca_ca_password" {
   description = "Password protecting the step-ca root/intermediate keys. Dev default; override via TF_VAR_stepca_ca_password."
   type        = string
   default     = "changeit-dev-pki-only"
+  sensitive   = true
+}
+
+# --- Persisted (pinned) CA material (opt-in; see specs/internal-ca.md) -------
+# Empty (default) => step-ca self-inits an EPHEMERAL root at first boot (today's behavior). When
+# all three are set (write them with `scripts/init_ca.py generate`, which lands them in the
+# gitignored ca-material.auto.tfvars), first boot pins this root+intermediate over step-ca's
+# self-generated pair so the CA identity SURVIVES `just recreate`. The intermediate key is
+# encrypted with var.stepca_ca_password. root_ca_key is never needed on the VM (it stays offline).
+
+variable "root_ca_cert" {
+  description = "PEM of the pinned root CA cert. Empty (default) = step-ca self-inits an ephemeral root. See scripts/init_ca.py."
+  type        = string
+  default     = ""
+}
+
+variable "intermediate_ca_cert" {
+  description = "PEM of the pinned intermediate CA cert (signed by root_ca_cert). Set together with root_ca_cert."
+  type        = string
+  default     = ""
+}
+
+variable "intermediate_ca_key" {
+  description = "PEM of the pinned intermediate CA key, encrypted with stepca_ca_password. Set together with root_ca_cert."
+  type        = string
+  default     = ""
   sensitive   = true
 }
 

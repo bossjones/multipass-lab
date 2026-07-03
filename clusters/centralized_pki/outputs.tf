@@ -17,9 +17,31 @@ output "hosts" {
   }
 }
 
+# Service hostname -> IP A-records for the fleet resolver. auth./warden./traefik. front the
+# Traefik/Authelia/Vaultwarden VM; ca. is step-ca. `just set-dns` registers these as AdGuard
+# rewrites — replacing the /etc/hosts entries USAGE.md describes.
+output "dns_records" {
+  description = "hostname -> ipv4 A-records to register in centralized_dns AdGuard. Consumed by `just set-dns`."
+  value = {
+    "auth.${var.domain}"    = multipass_instance.services.ipv4
+    "warden.${var.domain}"  = multipass_instance.services.ipv4
+    "traefik.${var.domain}" = multipass_instance.services.ipv4
+    "ca.${var.domain}"      = multipass_instance.ca.ipv4
+  }
+}
+
 output "domain" {
   description = "DNS suffix for internal services (ca./auth./warden. live under this)."
   value       = var.domain
+}
+
+# The pinned root CA PEM — the fleet-wide trust anchor. Static (known at apply time) whenever a
+# persisted root is configured (scripts/init_ca.py); `just up-connected` reads this and injects it
+# as internal_ca_cert into every cluster. Empty when the root is ephemeral (self-init at boot), in
+# which case fleet distribution must fall back to fetching /roots.pem. See specs/internal-ca.md.
+output "root_ca_pem" {
+  description = "PEM of the pinned internal root CA (empty when using an ephemeral self-init root)."
+  value       = var.root_ca_cert
 }
 
 output "acme_directory_url" {

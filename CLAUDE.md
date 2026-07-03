@@ -65,6 +65,29 @@ Prometheus (scp'd `prometheus.yml` + container restart — the monitoring VM is 
 the IP consumers push OTLP to never churns). `just verify-connected` is the live e2e. The reference
 consumer is `centralized_pki`; full design in `specs/cross-cluster.md`.
 
+**Internal-CA trust (opt-in).** `centralized_pki` (step-ca) is the lab CA. Every cluster accepts an
+`internal_ca_cert` var (empty default) that, when set, drops the root into
+`/usr/local/share/ca-certificates/` + runs `update-ca-certificates` at first boot — the same gated
+`write_files` idiom as `dns_server`. `scripts/init_ca.py generate` **persists** step-ca's
+root+intermediate (pinned into a gitignored `ca-material.auto.tfvars`; needs `just recreate
+centralized_pki`) so the root survives rebuilds and is static — hence `just up-connected` injects it
+fleet-wide with no hub ordering. `just trust-ca <cluster>`/`trust-ca-all` hot-push trust to running
+VMs; `just trust-ca-macos` trusts it on the Mac (System keychain + Firefox NSS via `certutil`).
+
+**Internal-CA TLS (Phase 2, opt-in).** Beyond `centralized_pki`, `centralized_monitoring` now serves
+its stack over internal-CA TLS: `use_internal_tls` (default off) makes the server issue a Traefik
+leaf from step-ca at first boot (via the shared, parameterized `clusters/_shared/cloud-init/
+issue-cert.sh.tftpl` + the JWK `admin` provisioner + a 12h renew timer) and front Grafana/Prometheus/
+Alertmanager/OpenObserve/Uptime-Kuma on `:443` at `<svc>.<domain>` — **additive**, the plain
+`http://IP:port` publishes stay up. It needs `ca_ip` + `stepca_ca_password` (must match
+`centralized_pki`'s) wired in, so it's off for a plain `just up`. `INTERNAL_TLS=1 just up-connected`
+wires it fleet-wide **when the CA VM is up** (reads `ca_ipv4`) and, as its final step, runs
+`just set-dns-all` to register every cluster's `dns_records` (incl. `<svc>.<domain>→VM-IP`) into the
+running AdGuard hub over the REST API (idempotent `adguard_cli rewrite-sync`; no recreate/restart —
+see the DNS auto-registration note below). Verify with `just tls-check-monitoring` (leaf chains to
+the root). Other clusters are still Phase 2 TODO. Combined design: `specs/pki-and-dns.md`; runbook:
+`docs/internal-ca-tutorial.md`.
+
 **Coroot (opt-in eBPF observability on k0s).** `enable_coroot` deploys the self-hosted
 [Coroot](https://github.com/coroot/coroot) stack (server + eBPF node-agent + cluster-agent +
 bundled Prometheus + ClickHouse) onto the `centralized_logging` k0s node via Helm, declaratively
@@ -201,14 +224,64 @@ The active machinery here is a Claude Code hook + skill system, not application 
 - **Override a `terraform.tfvars`-pinned var with `*.auto.tfvars`, NOT `TF_VAR_`.** OpenTofu env
   vars are *lower* precedence than `terraform.tfvars`, so `TF_VAR_enable_x=true just up` is silently
   ignored. Drop a throwaway `clusters/<name>/x.auto.tfvars` (it outranks `terraform.tfvars`); move
-  it out when done — `.auto.tfvars` is not gitignored.
+  it out when done — `.auto.tfvars` is not gitignored. **Gotcha:** `tofu test` (so `just check`)
+  *also* auto-loads `*.auto.tfvars`/`.auto.tfvars.json` from the cluster dir — a generated
+  `.cross-cluster.auto.tfvars.json` or a persisted `ca-material.auto.tfvars` then sets opt-in vars
+  during hermetic tests and breaks `*_off_by_default` assertions. Pin those vars OFF in each
+  `tests/tofu/*.tftest.hcl`'s **file-level** `variables {}` block (it outranks auto-loaded tfvars;
+  on-runs override at run level).
 - **Iterate on cloud-init without a full `just recreate`.** Provisioning runs async via a systemd
   oneshot (e.g. `netbox-stack.service`) in an idempotent retry loop; when a step blocks it can sit
   `activating` with no new output. SSH in, `sudo journalctl -u <svc>`, patch the `/opt/...` files or
   `/usr/local/sbin/<svc>.sh`, then `sudo systemctl restart --no-block <svc>` — far faster than
   destroy→up. Fold the fix back into the `.tftpl` afterward.
+- **Triage provisioning problems fast with `/system-debug <cluster> [role]`** (or `just system-debug
+  <cluster> [role]` / `uv run tools/system_debug.py <cluster> [role]`). It SSHes into the VM(s),
+  sweeps `cloud-init status` + `otelcol-contrib` + any `systemctl --failed` unit + a `journalctl -p
+  err` boot sweep, and **highlights** the smoking-gun lines (e.g. otelcol's `permission denied` /
+  missing `EnvironmentFile`), retrying up to 3× with exponential backoff and early-exiting once
+  healthy. Exit `0` healthy / `2` issues / `3` unreachable / `4` not-up. It **shells out to `ssh`**
+  (never a Python socket), so it sidesteps the macOS Local-Network block that hits the HTTP CLIs
+  (`[[macos-local-network-blocks-uv-cli]]`). Pure parsing/policy lives in `tools/_system_debug_core.py`
+  (stdlib-only, hermetically tested in `tools/tests/`); the manual fallback is
+  `just ssh <cluster> <role>` → `sudo journalctl -u <svc> -b -p err`.
+- **A VM stuck `cloud-init: running` for minutes with no `--failed` unit is a SILENT WAIT LOOP, not
+  slowness.** `multipass launch` (and so `tofu apply`) blocks until cloud-init is `done`, so tofu
+  prints `Still creating [Nm]` for a VM that's already `Running`. `system_debug`/`journalctl -p err`
+  show nothing because the loop is silent. The cause is almost always: an early one-shot network
+  install lost the **DNS warm-up race** (`curl: (6) Could not resolve host: get.k0s.sh` /
+  `registry-1.docker.io`) and failed *without aborting* (runcmd is `/bin/sh`, no `set -e`), so a
+  later `until <cmd>; do sleep 5; done` (e.g. `until k0s ... /readyz`) loops forever. **Which logs
+  to read:** `cloud-init status --long` (→ `degraded running`); `ps -o pid,ppid,args -ax | grep -E
+  'runcmd|sleep'` (the `/bin/sh …/instance/scripts/runcmd` proc alive with a child `sleep` = main
+  runcmd looping); read `/var/lib/cloud/instance/scripts/runcmd` for the `until` line; then `grep
+  -nE 'Could not resolve|not found' /var/log/cloud-init-output.log` for the real earlier failure.
+  Fix = a resolver-ready gate (`until getent hosts <host>; do sleep 2; done` after the
+  `systemctl restart systemd-resolved`) + a retry around the installer — the pattern in
+  `centralized_logging/docker-client.yaml.tftpl` and `centralized_monitoring/*.tftpl`. Full
+  signature map + recipe: `triage-patterns` skill (Example 4b) / `triage-logs` skill.
 - **The `pre_tool_use` hook matches on substrings**, so it blocks otherwise-fine commands containing
   `rm ` or `.env`: `docker run --rm`, `grep .env`, `rm -f` all get denied. Use `docker run` (+
   `docker container prune -f`), avoid the literal `.env` token, and `mv` to the scratchpad, not `rm`.
 - **zsh does not word-split unquoted vars.** `for x in $list` / `$CMD args` run the whole value as a
   single word — inline the list in the `for`, or use an array / `${=var}`.
+- **`tofu test` / `just check` auto-loads `*.auto.tfvars.json`.** A leftover
+  `.cross-cluster.auto.tfvars.json` (written by `up-connected`) silently flips the hermetic
+  "off by default" assertions to fail — the *hermetic* suite is not actually isolated from live
+  state. If `just check` fails only on `*_off_by_default` runs, check for that file (it's
+  gitignored, so `git status` won't show it) and move it aside before trusting the result.
+- **A leftover `.cross-cluster.auto.tfvars.json` also poisons a plain `just up`, not just
+  `just check`.** It's gitignored and survives single-cluster `just destroy` (kept on purpose so
+  `recreate`→`refresh-cross-cluster` can re-wire), so after tearing a fleet down and running a
+  plain `just up <cluster>`, OpenTofu auto-loads the stale file and renders a `dns_server`
+  systemd-resolved drop-in pointing at a **dead** hub IP → the VM can't resolve `archive.ubuntu.com`
+  → `apt`/`curl` installs hang → `tofu apply` blocks for many minutes with no `--failed` unit (looks
+  exactly like a boot race, but it's stale wiring). `just destroy-all` now purges these files; for a
+  targeted cleanup after single destroys use **`just unwire [CLUSTER]`** (omit the arg for the whole
+  fleet), then re-run `just up`. `up-connected`/`refresh-cross-cluster` regenerate them from live IPs.
+- **A newly-added tofu `output` isn't in state until you apply.** `tofu output -json <new>` errors
+  `Output "<new>" not found` until a `tofu apply` runs; that apply is outputs-only
+  (`0 added, 0 changed, 0 destroyed` — no VM recreated), so it's safe on a live cluster. Recipes
+  that consume `tofu output` (e.g. `set-dns-all`) must tolerate this (treat the error as empty).
+- **`ruff`/`ty` aren't on PATH** (the rtk shim can't spawn them): use `uvx ruff check <file>`.
+- **`jq --argjson` needs valid JSON** (quoted keys: `{"enable_x": true}`), not jq object syntax.

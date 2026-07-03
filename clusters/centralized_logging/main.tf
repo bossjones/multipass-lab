@@ -114,6 +114,16 @@ locals {
   dns_resolved_conf = local.use_dns ? templatefile("${path.module}/../_shared/cloud-init/use-dns.conf.tftpl", {
     dns_ip = split(":", var.dns_server)[0]
   }) : ""
+
+  # --- Baseline time sync (unconditional; see specs/shared-ntp.md) -------------
+  # Single-sourced UTC + systemd-timesyncd block, injected at column 0 of every VM template.
+  ntp_timesync = templatefile("${path.module}/../_shared/cloud-init/ntp-timesync.yaml.tftpl", {})
+
+  # Opt-in internal NTP source — mirrors dns_server. Non-empty -> timesyncd points at ntp_ip (by IP).
+  use_ntp = var.ntp_server != ""
+  ntp_conf = local.use_ntp ? templatefile("${path.module}/../_shared/cloud-init/use-ntp.conf.tftpl", {
+    ntp_ip = split(":", var.ntp_server)[0]
+  }) : ""
 }
 
 # --- Central logging VM (syslog-ng server) ----------------------------------
@@ -123,8 +133,12 @@ resource "local_file" "central_ci" {
   content = templatefile("${path.module}/cloud-init/central.yaml.tftpl", merge(local.flags, {
     ssh_pubkey        = local.ssh_pubkey
     server_conf       = local.server_conf
+    ntp_timesync      = local.ntp_timesync
+    ntp_server        = var.ntp_server
+    ntp_conf          = local.ntp_conf
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
+    internal_ca_cert  = var.internal_ca_cert
   }))
 }
 
@@ -144,8 +158,12 @@ resource "local_file" "k0s_ci" {
   content = templatefile("${path.module}/cloud-init/k0s-client.yaml.tftpl", merge(local.flags, {
     ssh_pubkey        = local.ssh_pubkey
     client_conf       = local.client_conf
+    ntp_timesync      = local.ntp_timesync
+    ntp_server        = var.ntp_server
+    ntp_conf          = local.ntp_conf
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
+    internal_ca_cert  = var.internal_ca_cert
     # Coroot (opt-in). enable_coroot/enable_ingress gate the %{ if } blocks; the rendered
     # coroot-ce values + pinned chart versions drive the in-VM Helm install. See specs/coroot.md.
     enable_coroot                = var.enable_coroot
@@ -173,8 +191,12 @@ resource "local_file" "docker_ci" {
     ssh_pubkey        = local.ssh_pubkey
     client_conf       = local.client_conf
     compose_conf      = local.compose_conf
+    ntp_timesync      = local.ntp_timesync
+    ntp_server        = var.ntp_server
+    ntp_conf          = local.ntp_conf
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
+    internal_ca_cert  = var.internal_ca_cert
     # Peer IPs for the local Prometheus scrape config. Referencing central/k0s here forces
     # both to be created (and their DHCP IPs known) before the docker VM renders — the same
     # runtime IP-injection edge the syslog-ng client_conf already creates for central.
@@ -196,4 +218,45 @@ resource "multipass_instance" "docker" {
   memory         = var.docker_client.memory
   disk           = var.docker_client.disk
   cloudinit_file = local_file.docker_ci.filename
+}
+
+# --- Hot-push artifacts (see specs/cross-cluster.md; `just refresh-cross-cluster`) ---
+# Discrete per-VM renders of the DNS resolver drop-in, so a centralized_dns IP change can be
+# scp'd onto an already-running VM (content-only tofu apply, no recreate) instead of a reprovision.
+resource "local_file" "central_resolved_conf" {
+  count    = local.use_dns ? 1 : 0
+  filename = "${local.render_dir}/central-resolved.conf"
+  content  = local.dns_resolved_conf
+}
+
+resource "local_file" "k0s_resolved_conf" {
+  count    = local.use_dns ? 1 : 0
+  filename = "${local.render_dir}/k0s-resolved.conf"
+  content  = local.dns_resolved_conf
+}
+
+resource "local_file" "docker_resolved_conf" {
+  count    = local.use_dns ? 1 : 0
+  filename = "${local.render_dir}/docker-resolved.conf"
+  content  = local.dns_resolved_conf
+}
+
+# Internal NTP source drop-in, rendered per-VM for scp onto a running VM by
+# `just refresh-cross-cluster` (mirrors the *_resolved_conf hot-push). count=0 keeps `just up` clean.
+resource "local_file" "central_ntp_conf" {
+  count    = local.use_ntp ? 1 : 0
+  filename = "${local.render_dir}/central-ntp.conf"
+  content  = local.ntp_conf
+}
+
+resource "local_file" "k0s_ntp_conf" {
+  count    = local.use_ntp ? 1 : 0
+  filename = "${local.render_dir}/k0s-ntp.conf"
+  content  = local.ntp_conf
+}
+
+resource "local_file" "docker_ntp_conf" {
+  count    = local.use_ntp ? 1 : 0
+  filename = "${local.render_dir}/docker-ntp.conf"
+  content  = local.ntp_conf
 }

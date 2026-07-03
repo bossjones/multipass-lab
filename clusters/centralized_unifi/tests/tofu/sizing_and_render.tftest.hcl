@@ -6,6 +6,11 @@ mock_provider "multipass" {}
 variables {
   # Provide an inline key so the test never depends on a real ~/.ssh file.
   ssh_pubkey = "ssh-ed25519 AAAATESTKEY centralized-unifi-tests"
+  # Pin cross-cluster opt-in vars OFF so *_off_by_default runs are hermetic to auto-loaded
+  # *.auto.tfvars (e.g. a leftover .cross-cluster.auto.tfvars.json). On-runs override. See specs/internal-ca.md.
+  dns_server       = ""
+  internal_ca_cert = ""
+  ntp_server       = ""
 }
 
 run "sizing_image_and_names" {
@@ -293,5 +298,66 @@ run "outputs_expose_versions_and_targets" {
   assert {
     condition     = contains(output.enabled_exporters, "node") && contains(output.enabled_exporters, "syslogng")
     error_message = "enabled_exporters must list node + syslogng by default"
+  }
+}
+
+# --- Fleet-wide CA trust (opt-in) — off by default, installs root CA when set --------
+
+run "internal_ca_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = !strcontains(local_file.controller_ci.content, "internal-root-ca.crt")
+    error_message = "with internal_ca_cert unset, controller cloud-init must NOT render the trust block"
+  }
+  assert {
+    condition     = !strcontains(local_file.usg_ci.content, "internal-root-ca.crt")
+    error_message = "with internal_ca_cert unset, usg cloud-init must NOT render the trust block"
+  }
+}
+
+run "internal_ca_on_renders_trust" {
+  command = plan
+
+  variables {
+    internal_ca_cert = "-----BEGIN CERTIFICATE-----\nMIITESTROOTCA\n-----END CERTIFICATE-----"
+  }
+
+  assert {
+    condition     = strcontains(local_file.controller_ci.content, "/usr/local/share/ca-certificates/internal-root-ca.crt") && strcontains(local_file.controller_ci.content, "update-ca-certificates")
+    error_message = "controller cloud-init must drop the internal root CA + run update-ca-certificates when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.usg_ci.content, "/usr/local/share/ca-certificates/internal-root-ca.crt") && strcontains(local_file.usg_ci.content, "update-ca-certificates")
+    error_message = "usg cloud-init must drop the internal root CA + run update-ca-certificates when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.controller_ci.content, "MIITESTROOTCA")
+    error_message = "controller trust block must carry the injected root CA PEM"
+  }
+}
+
+# --- Internal NTP source (opt-in) — off by default, wires timesyncd when set --------
+
+run "ntp_server_off_by_default" {
+  command = plan
+  assert {
+    condition     = alltrue([for c in [local_file.usg_ci.content, local_file.controller_ci.content] : !strcontains(c, "99-centralized-ntp.conf")])
+    error_message = "the internal NTP drop-in must be absent by default (ntp_server empty)"
+  }
+}
+
+run "ntp_server_on_renders_dropin" {
+  command = plan
+  variables {
+    ntp_server = "10.0.0.9"
+  }
+  assert {
+    condition     = alltrue([for c in [local_file.usg_ci.content, local_file.controller_ci.content] : strcontains(c, "/etc/systemd/timesyncd.conf.d/99-centralized-ntp.conf")])
+    error_message = "ntp_server set must render the timesyncd drop-in on every VM"
+  }
+  assert {
+    condition     = alltrue([for c in [local_file.usg_ci.content, local_file.controller_ci.content] : strcontains(c, "NTP=10.0.0.9")])
+    error_message = "the drop-in must point at the injected NTP IP"
   }
 }

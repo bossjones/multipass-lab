@@ -94,6 +94,16 @@ locals {
   dns_resolved_conf = local.use_dns ? templatefile("${path.module}/../_shared/cloud-init/use-dns.conf.tftpl", {
     dns_ip = split(":", var.dns_server)[0]
   }) : ""
+
+  # --- Baseline time sync (unconditional; see specs/shared-ntp.md) -------------
+  # Single-sourced UTC + systemd-timesyncd block, injected at column 0 of every VM template.
+  ntp_timesync = templatefile("${path.module}/../_shared/cloud-init/ntp-timesync.yaml.tftpl", {})
+
+  # Opt-in internal NTP source — mirrors dns_server. Non-empty -> timesyncd points at ntp_ip (by IP).
+  use_ntp = var.ntp_server != ""
+  ntp_conf = local.use_ntp ? templatefile("${path.module}/../_shared/cloud-init/use-ntp.conf.tftpl", {
+    ntp_ip = split(":", var.ntp_server)[0]
+  }) : ""
 }
 
 # --- k0s-client (the monitored host) — created FIRST ------------------------
@@ -106,8 +116,12 @@ resource "local_file" "k0s_ci" {
     ssh_pubkey      = local.ssh_pubkey
     k0s_otel_config = local.k0s_otel_placeholder
     # Cross-cluster DNS — gated on a non-empty dns_server. See specs/cross-cluster.md.
+    ntp_timesync      = local.ntp_timesync
+    ntp_server        = var.ntp_server
+    ntp_conf          = local.ntp_conf
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
+    internal_ca_cert  = var.internal_ca_cert
   }))
 }
 
@@ -139,7 +153,39 @@ locals {
   compose_conf = templatefile("${path.module}/cloud-init/docker/compose.yaml.tftpl", merge(local.flags, {
     grafana_admin_password = var.grafana_admin_password
     openobserve_password   = local.openobserve_password
+    # Internal-CA TLS (Phase 2): mounts the leaf + file-provider dynamic config into Traefik.
+    use_internal_tls = var.use_internal_tls
   }))
+
+  # --- Internal-CA TLS (opt-in; Phase 2, see specs/internal-ca.md) -----------
+  # At first boot the server issues a leaf from centralized_pki's step-ca (via the shared
+  # issue-cert.sh), Traefik's file provider serves it as the default cert, and hostname routers
+  # front each enabled service over :443. Rendered only when use_internal_tls is on (else "").
+  ca_url = "https://ca.${var.domain}:9000"
+  # Hostnames that get a leaf SAN + an HTTPS router — the always-on spine plus each enabled service.
+  tls_sans = concat(
+    ["grafana.${var.domain}", "prometheus.${var.domain}", "alertmanager.${var.domain}"],
+    var.enable_openobserve ? ["openobserve.${var.domain}"] : [],
+    var.enable_uptime_kuma ? ["uptime.${var.domain}"] : [],
+    var.enable_heimdall ? ["heimdall.${var.domain}"] : [],
+  )
+  issue_cert_sh = var.use_internal_tls ? templatefile("${path.module}/../_shared/cloud-init/issue-cert.sh.tftpl", {
+    ca_url          = local.ca_url
+    ca_ip           = var.ca_ip
+    domain          = var.domain
+    jwk_provisioner = "admin"
+    cert_subject    = "monitoring"
+    sans            = local.tls_sans
+    cert_dir        = "/opt/stack/traefik/certs"
+    cert_file       = "leaf.crt"
+    key_file        = "leaf.key"
+    secrets_dir     = "/opt/stack/secrets"
+    step_img        = "smallstep/step-cli:0.28.2"
+    reload_cmd      = "docker restart traefik"
+  }) : ""
+  traefik_dynamic = var.use_internal_tls ? templatefile("${path.module}/cloud-init/traefik/dynamic.yaml.tftpl", merge(local.flags, {
+    domain = var.domain
+  })) : ""
 
   grafana_datasources = templatefile("${path.module}/cloud-init/grafana/provisioning/datasources/datasources.yaml.tftpl", merge(local.flags, {
     openobserve_password = local.openobserve_password
@@ -224,8 +270,19 @@ resource "local_file" "server_ci" {
     syslog_client_conf  = local.syslog_client_conf
     # Cross-cluster DNS — the shared systemd-resolved drop-in, gated on a non-empty dns_server so
     # the default `just up` keeps the image default resolver. See specs/cross-cluster.md.
+    ntp_timesync      = local.ntp_timesync
+    ntp_server        = var.ntp_server
+    ntp_conf          = local.ntp_conf
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
+    internal_ca_cert  = var.internal_ca_cert
+    # Internal-CA TLS (Phase 2) — issue a leaf at first boot + serve it via Traefik :443, gated on
+    # use_internal_tls so the default `just up` stays plain-HTTP/turnkey. See specs/internal-ca.md.
+    use_internal_tls   = var.use_internal_tls
+    domain             = var.domain
+    stepca_ca_password = var.stepca_ca_password
+    issue_cert_sh      = local.issue_cert_sh
+    traefik_dynamic    = local.traefik_dynamic
     # Docker operator TUIs (wharf/oxker/dive) on the observability hub (the docker VM).
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
@@ -250,6 +307,39 @@ resource "multipass_instance" "server" {
 resource "local_file" "prometheus_yml" {
   filename = "${local.render_dir}/prometheus.yml"
   content  = local.prometheus_yml
+}
+
+# --- Hot-push artifacts (see specs/cross-cluster.md; `just refresh-cross-cluster`) ---
+# Discrete per-VM renders of the DNS resolver + syslog shipper drop-ins, so a hub IP change can be
+# scp'd onto an already-running VM (content-only tofu apply, no recreate) instead of a reprovision.
+resource "local_file" "server_resolved_conf" {
+  count    = local.use_dns ? 1 : 0
+  filename = "${local.render_dir}/server-resolved.conf"
+  content  = local.dns_resolved_conf
+}
+
+resource "local_file" "server_ntp_conf" {
+  count    = local.use_ntp ? 1 : 0
+  filename = "${local.render_dir}/server-ntp.conf"
+  content  = local.ntp_conf
+}
+
+resource "local_file" "k0s_resolved_conf" {
+  count    = local.use_dns ? 1 : 0
+  filename = "${local.render_dir}/k0s-resolved.conf"
+  content  = local.dns_resolved_conf
+}
+
+resource "local_file" "k0s_ntp_conf" {
+  count    = local.use_ntp ? 1 : 0
+  filename = "${local.render_dir}/k0s-ntp.conf"
+  content  = local.ntp_conf
+}
+
+resource "local_file" "server_ship_conf" {
+  count    = local.ship_logs ? 1 : 0
+  filename = "${local.render_dir}/server-ship.conf"
+  content  = local.syslog_client_conf
 }
 
 # --- k0s log shipping: post-apply endpoint injection ------------------------

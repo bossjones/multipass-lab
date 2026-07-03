@@ -12,6 +12,12 @@ variables {
   # plan/apply does. Runs that want them on override in their own variables {}.
   enable_coroot  = false
   enable_ingress = false
+
+  # Pin cross-cluster opt-in vars OFF so *_off_by_default runs are hermetic to auto-loaded
+  # *.auto.tfvars (e.g. a leftover .cross-cluster.auto.tfvars.json). On-runs override. See specs/internal-ca.md.
+  dns_server       = ""
+  internal_ca_cert = ""
+  ntp_server       = ""
 }
 
 run "sizing_image_names_and_central_render" {
@@ -268,6 +274,33 @@ run "ntp_timezone_render" {
       local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
     ] : can(yamldecode(c))])
     error_message = "rendered cloud-init must stay valid YAML after adding timezone/ntp"
+  }
+}
+
+# --- Internal NTP source (var.ntp_server) --------------------------------------------
+# Empty default => no timesyncd drop-in on any VM; non-empty => every VM points
+# systemd-timesyncd at the injected NTP IP. Mirrors the dns_server gating pattern.
+
+run "ntp_server_off_by_default" {
+  command = plan
+  assert {
+    condition     = alltrue([for c in [local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content] : !strcontains(c, "99-centralized-ntp.conf")])
+    error_message = "the internal NTP drop-in must be absent by default (ntp_server empty)"
+  }
+}
+
+run "ntp_server_on_renders_dropin" {
+  command = plan
+  variables {
+    ntp_server = "10.0.0.9"
+  }
+  assert {
+    condition     = alltrue([for c in [local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content] : strcontains(c, "/etc/systemd/timesyncd.conf.d/99-centralized-ntp.conf")])
+    error_message = "ntp_server set must render the timesyncd drop-in on every VM"
+  }
+  assert {
+    condition     = alltrue([for c in [local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content] : strcontains(c, "NTP=10.0.0.9")])
+    error_message = "the drop-in must point at the injected NTP IP"
   }
 }
 
@@ -600,5 +633,52 @@ run "dns_on_renders_resolved_conf" {
       local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
     ] : can(yamldecode(c))])
     error_message = "rendered cloud-init must stay valid YAML after adding the DNS drop-in"
+  }
+}
+
+# --- Fleet-wide internal-CA trust (var.internal_ca_cert) -----------------------------
+# Empty default => no CA cert file / update-ca-certificates on any VM; non-empty => every VM
+# drops the root CA into the OS trust store at first boot. Mirrors the dns_server gating pattern.
+# `just up-connected` injects it from centralized_pki. See specs/internal-ca.md.
+
+run "internal_ca_off_by_default" {
+  command = plan
+
+  # No internal_ca_cert var set: the trust-store cert file must be absent from every VM's cloud-init.
+  assert {
+    condition = alltrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : !strcontains(c, "internal-root-ca.crt")])
+    error_message = "internal_ca_cert unset must not render the internal-root-ca.crt trust-store file on any VM"
+  }
+}
+
+run "internal_ca_on_renders_trust" {
+  command = plan
+
+  variables {
+    internal_ca_cert = "-----BEGIN CERTIFICATE-----\nMIITESTROOTCA\n-----END CERTIFICATE-----"
+  }
+
+  # Every VM must gain the trust-store cert file...
+  assert {
+    condition = alltrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : strcontains(c, "/usr/local/share/ca-certificates/internal-root-ca.crt")])
+    error_message = "internal_ca_cert set must drop the root CA into /usr/local/share/ca-certificates on every VM"
+  }
+  # ...and run update-ca-certificates to install it into the OS trust store.
+  assert {
+    condition = alltrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : strcontains(c, "update-ca-certificates")])
+    error_message = "internal_ca_cert set must run update-ca-certificates on every VM"
+  }
+  # The PEM body must actually be spliced into the rendered cloud-init.
+  assert {
+    condition = anytrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : strcontains(c, "MIITESTROOTCA")])
+    error_message = "internal_ca_cert set must splice the CA PEM body into the rendered cloud-init"
   }
 }

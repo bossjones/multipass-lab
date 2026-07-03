@@ -77,3 +77,145 @@ def test_check_fails_when_status_unreachable(httpserver):
     httpserver.expect_request("/control/status").respond_with_data("nope", status=500)
     r = _run(httpserver.url_for(""), "--json", "check")
     assert r.exit_code == ag.dc.CHECK_FAIL_EXIT, r.output
+
+
+# --- DNS rewrites ------------------------------------------------------------
+
+
+def _posts_to(httpserver, path):
+    """Bodies of every POST the CLI made to `path`, in order (from the request log)."""
+    return [
+        req.get_json()
+        for req, _resp in httpserver.log
+        if req.path == path and req.method == "POST"
+    ]
+
+
+def test_rewrite_list(httpserver):
+    _login(httpserver)
+    httpserver.expect_request("/control/rewrite/list").respond_with_json(
+        [{"domain": "grafana.lab.example.com", "answer": "10.0.0.5"}]
+    )
+    r = _run(httpserver.url_for(""), "--json", "rewrite-list")
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)[0]["domain"] == "grafana.lab.example.com"
+
+
+def test_rewrite_set_adds_when_absent(httpserver):
+    _login(httpserver)
+    httpserver.expect_request("/control/rewrite/list").respond_with_json([])
+    httpserver.expect_request(
+        "/control/rewrite/add", method="POST"
+    ).respond_with_json({})
+    r = _run(httpserver.url_for(""), "--json", "rewrite-set", "netbox.lab.example.com", "10.0.0.9")
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["status"] == "added"
+    assert _posts_to(httpserver, "/control/rewrite/add") == [
+        {"domain": "netbox.lab.example.com", "answer": "10.0.0.9"}
+    ]
+    assert _posts_to(httpserver, "/control/rewrite/delete") == []
+
+
+def test_rewrite_set_deletes_then_adds_when_row_exists(httpserver):
+    _login(httpserver)
+    httpserver.expect_request("/control/rewrite/list").respond_with_json(
+        [{"domain": "netbox.lab.example.com", "answer": "10.0.0.1"}]
+    )
+    httpserver.expect_request(
+        "/control/rewrite/delete", method="POST"
+    ).respond_with_json({})
+    httpserver.expect_request(
+        "/control/rewrite/add", method="POST"
+    ).respond_with_json({})
+    r = _run(httpserver.url_for(""), "--json", "rewrite-set", "netbox.lab.example.com", "10.0.0.9")
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["status"] == "updated"
+    # Deletes the stale row (old IP) before adding the new one.
+    assert _posts_to(httpserver, "/control/rewrite/delete") == [
+        {"domain": "netbox.lab.example.com", "answer": "10.0.0.1"}
+    ]
+    assert _posts_to(httpserver, "/control/rewrite/add") == [
+        {"domain": "netbox.lab.example.com", "answer": "10.0.0.9"}
+    ]
+
+
+def test_rewrite_set_unchanged_when_already_correct(httpserver):
+    _login(httpserver)
+    httpserver.expect_request("/control/rewrite/list").respond_with_json(
+        [{"domain": "netbox.lab.example.com", "answer": "10.0.0.9"}]
+    )
+    r = _run(httpserver.url_for(""), "--json", "rewrite-set", "netbox.lab.example.com", "10.0.0.9")
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["status"] == "unchanged"
+    assert _posts_to(httpserver, "/control/rewrite/add") == []
+    assert _posts_to(httpserver, "/control/rewrite/delete") == []
+
+
+def test_rewrite_sync_batch_from_stdin(httpserver):
+    _login(httpserver)
+    # One new host, one host that needs its IP updated.
+    httpserver.expect_request("/control/rewrite/list").respond_with_json(
+        [{"domain": "grafana.lab.example.com", "answer": "10.0.0.1"}]
+    )
+    httpserver.expect_request(
+        "/control/rewrite/add", method="POST"
+    ).respond_with_json({})
+    httpserver.expect_request(
+        "/control/rewrite/delete", method="POST"
+    ).respond_with_json({})
+    payload = json.dumps(
+        {
+            "grafana.lab.example.com": "10.0.0.5",  # changed -> updated
+            "netbox.lab.example.com": "10.0.0.9",  # new -> added
+        }
+    )
+    r = runner.invoke(
+        ag.app,
+        ["--server-url", httpserver.url_for(""), "--json", "rewrite-sync", "--file", "-"],
+        input=payload,
+    )
+    assert r.exit_code == 0, r.output
+    doc = json.loads(r.output)
+    assert set(doc["added"]) == {"netbox.lab.example.com"}
+    assert set(doc["updated"]) == {"grafana.lab.example.com"}
+    # grafana's stale row deleted, both new answers added.
+    assert {"domain": "grafana.lab.example.com", "answer": "10.0.0.1"} in _posts_to(
+        httpserver, "/control/rewrite/delete"
+    )
+    adds = _posts_to(httpserver, "/control/rewrite/add")
+    assert {"domain": "grafana.lab.example.com", "answer": "10.0.0.5"} in adds
+    assert {"domain": "netbox.lab.example.com", "answer": "10.0.0.9"} in adds
+
+
+def test_rewrite_sync_prune_removes_unmanaged(httpserver):
+    _login(httpserver)
+    httpserver.expect_request("/control/rewrite/list").respond_with_json(
+        [
+            {"domain": "grafana.lab.example.com", "answer": "10.0.0.5"},
+            {"domain": "stale.lab.example.com", "answer": "10.0.0.99"},
+        ]
+    )
+    httpserver.expect_request(
+        "/control/rewrite/delete", method="POST"
+    ).respond_with_json({})
+    payload = json.dumps({"grafana.lab.example.com": "10.0.0.5"})
+    r = runner.invoke(
+        ag.app,
+        [
+            "--server-url",
+            httpserver.url_for(""),
+            "--json",
+            "rewrite-sync",
+            "--file",
+            "-",
+            "--prune",
+        ],
+        input=payload,
+    )
+    assert r.exit_code == 0, r.output
+    doc = json.loads(r.output)
+    assert doc["unchanged"] == ["grafana.lab.example.com"]
+    assert doc["pruned"] == ["stale.lab.example.com"]
+    assert {"domain": "stale.lab.example.com", "answer": "10.0.0.99"} in _posts_to(
+        httpserver, "/control/rewrite/delete"
+    )

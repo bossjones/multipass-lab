@@ -6,6 +6,11 @@ mock_provider "multipass" {}
 variables {
   # Provide an inline key so the test never depends on a real ~/.ssh file.
   ssh_pubkey = "ssh-ed25519 AAAATESTKEY centralized-dns-tests"
+  # Pin the opt-in NTP source + hub OFF so an auto-loaded .cross-cluster.auto.tfvars.json (which
+  # up-connected writes with ntp_server/enable_ntp_server when INTERNAL_NTP is set) can't flip the
+  # off-by-default runs. See specs/shared-ntp.md + the CLAUDE.md auto-tfvars gotcha.
+  ntp_server        = ""
+  enable_ntp_server = false
 }
 
 run "sizing_image_and_name" {
@@ -94,6 +99,58 @@ run "ntp_timezone_render" {
   assert {
     condition     = strcontains(local_file.server_ci.content, "timedatectl set-timezone Etc/UTC")
     error_message = "cloud-init runcmd must enforce timezone Etc/UTC"
+  }
+}
+
+run "ntp_server_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "99-centralized-ntp.conf")
+    error_message = "the internal NTP drop-in must be absent by default (ntp_server empty)"
+  }
+}
+
+run "ntp_server_on_renders_dropin" {
+  command = plan
+
+  variables {
+    ntp_server = "10.0.0.9"
+  }
+
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/etc/systemd/timesyncd.conf.d/99-centralized-ntp.conf")
+    error_message = "ntp_server set must render the timesyncd drop-in"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "NTP=10.0.0.9")
+    error_message = "the drop-in must point at the injected NTP IP"
+  }
+}
+
+run "ntp_hub_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "/etc/chrony/conf.d/lab-ntp.conf")
+    error_message = "the chrony NTP server must be absent by default (enable_ntp_server=false)"
+  }
+}
+
+run "ntp_hub_on_installs_chrony" {
+  command = plan
+
+  variables {
+    enable_ntp_server = true
+  }
+
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/etc/chrony/conf.d/lab-ntp.conf")
+    error_message = "enable_ntp_server must render the chrony server drop-in"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "apt-get install -y chrony")
+    error_message = "enable_ntp_server must install chrony to serve the fleet"
   }
 }
 

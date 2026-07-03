@@ -26,15 +26,20 @@ help:
     @echo "Typical loop:"
     @echo "  just check  CLUSTER        hermetic: fmt + validate + tofu test (no VMs)"
     @echo "  just up     CLUSTER        tofu apply -> launch all VMs (waits for cloud-init)"
+    @echo "  just up-all                tofu apply -> launch every cluster (glob-discovered)"
     @echo "  just up-connected          bring the whole fleet up wired for cross-cluster telemetry"
+    @echo "                             (centralized_logging + centralized_monitoring + centralized_dns first)"
     @echo "  just verify CLUSTER        live: pytest + testinfra over SSH"
-    @echo "  just verify-connected      live e2e for the cross-cluster wiring (after up-connected)"
-    @echo "  just init-all              tofu init every cluster (glob-discovered)"
     @echo "  just verify-all            run the live testinfra suite for every cluster"
+    @echo "  just verify-connected      live e2e for the cross-cluster wiring (after up-connected)"
+    @echo "  just verify-api CLUSTER    hit a cluster's HTTP APIs (Grafana/Prometheus/OpenObserve/NetBox/...) + assert"
+    @echo "  just init-all              tofu init every cluster (glob-discovered)"
     @echo "  just open   CLUSTER [--full]  open dashboards (core; --full adds /metrics endpoints)"
     @echo "  just open-all [--full]     open dashboards for every cluster (glob-discovered)"
     @echo "  just ssh    CLUSTER ROLE   shell onto the <name>-<role> VM"
+    @echo "  just status                multipass list"
     @echo "  just destroy CLUSTER       tofu destroy + prune orphaned VMs (one cluster, gone)"
+    @echo "  just destroy-all           tofu destroy + prune every cluster (glob-discovered)"
     @echo "  just recreate CLUSTER      destroy (incl. orphan cleanup) then up"
     @echo "  just prune CLUSTER         delete VMs tofu no longer tracks (fix a failed up)"
     @echo "  just down                  graceful multipass stop --all (all VMs, preserved)"
@@ -51,8 +56,11 @@ plan CLUSTER: (init CLUSTER)
     tofu -chdir={{cluster_root}}/{{CLUSTER}} plan
 
 # apply -> launch all VMs, wait for cloud-init:  just up (centralized_logging|centralized_monitoring)
+# PATH-prepended wrapper raises multipass launch's 5min default init timeout (see its header
+# comment) — a loaded fleet host can blow that mid-cloud-init, orphaning the VM tofu never records.
 up CLUSTER: (init CLUSTER)
-    tofu -chdir={{cluster_root}}/{{CLUSTER}} apply -auto-approve
+    PATH="{{justfile_directory()}}/{{cluster_root}}/_shared/scripts/multipass-timeout-wrapper:$PATH" \
+      tofu -chdir={{cluster_root}}/{{CLUSTER}} apply -auto-approve
     @tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts \
       | jq -r '.[].ipv4' \
       | while read ip; do \
@@ -88,6 +96,12 @@ up-all:
       cluster="$(basename "$dir")"
       [ -f "$dir/main.tf" ] || continue   # skip non-cluster dirs like _shared/
       echo "=== up: $cluster ==="
+      # Bulk bring-up enables the heavier opt-in features (they change cloud-init, so they must be
+      # set at first apply). `.auto.tfvars` outranks terraform.tfvars (TF_VAR_ would be lower).
+      case "$cluster" in
+        centralized_logging) echo '{"enable_coroot": true}'    > "$dir/.flags.auto.tfvars.json" ;;
+        centralized_netbox)  echo '{"enable_discovery": true}' > "$dir/.flags.auto.tfvars.json" ;;
+      esac
       just up "$cluster" || rc=1
     done
     exit "$rc"
@@ -103,7 +117,31 @@ destroy-all:
       echo "=== destroy: $cluster ==="
       just destroy "$cluster" || rc=1
     done
+    # Purge stale cross-cluster wiring + bulk-flag tfvars: the whole fleet is gone, so every IP they
+    # reference is dead. Leaving them behind poisons the NEXT plain `just up` — OpenTofu auto-loads
+    # `*.auto.tfvars(.json)`, so a dead `dns_server` repoints the resolver at a down hub and `apt`
+    # hangs (see the CLAUDE.md gotcha). `up-connected`/`refresh-cross-cluster` regenerate them from
+    # live IPs when needed, so this loses nothing.  (Single-cluster `destroy` deliberately does NOT
+    # do this — `recreate` relies on the file surviving; use `just unwire` for a targeted removal.)
+    echo "=== destroy-all: purging stale cross-cluster wiring files ==="
+    rm -f {{cluster_root}}/*/.cross-cluster.auto.tfvars.json {{cluster_root}}/*/.flags.auto.tfvars.json
     exit "$rc"
+
+# Drop cross-cluster wiring WITHOUT a teardown: remove the auto-loaded .cross-cluster.auto.tfvars.json
+# so the next plain `just up <cluster>` renders UNWIRED (resolver stays on DHCP, no syslog-ng/otel
+# shipper). Use after single-cluster `just destroy`s when you want a pristine plain `up` — the file
+# survives `destroy` on purpose (for `recreate`), but a dead hub IP in it will hang `apt` at boot.
+# Name a cluster to unwire just one, or omit to unwire the whole fleet.  just unwire centralized_pki
+unwire *CLUSTER:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    if [ -n "{{CLUSTER}}" ]; then
+      rm -f {{cluster_root}}/{{CLUSTER}}/.cross-cluster.auto.tfvars.json
+      echo "unwired {{CLUSTER}} (removed .cross-cluster.auto.tfvars.json if it was present)"
+    else
+      rm -f {{cluster_root}}/*/.cross-cluster.auto.tfvars.json
+      echo "unwired all clusters (removed every .cross-cluster.auto.tfvars.json)"
+    fi
 
 # Bring the whole fleet up ALREADY WIRED for cross-cluster telemetry (specs/cross-cluster.md):
 # every VM resolves through centralized_dns's AdGuard Home, consumer clusters ship logs to
@@ -119,16 +157,62 @@ destroy-all:
 up-connected:
     #!/usr/bin/env bash
     set -uo pipefail
+    rc=0
     dns=centralized_dns
     logging=centralized_logging
     monitoring=centralized_monitoring
 
-    # 0. DNS hub FIRST — pure :53 sink. No telemetry targets yet (the hubs don't exist).
+    # Internal-CA trust anchor: the pinned root written by `scripts/init_ca.py generate`. It is a
+    # STATIC file (no dependency on centralized_pki being up), so every cluster — including the
+    # hubs that boot first — can trust it at first boot. Empty when no persisted root is configured
+    # (then trust distribution is a no-op; use `just trust-ca <cluster>` after fetching /roots.pem).
+    # See specs/internal-ca.md.
+    ca_crt="{{cluster_root}}/centralized_pki/.ca/root_ca.crt"
+    ca_pem=""
+    if [ -f "$ca_crt" ]; then ca_pem="$(cat "$ca_crt")"; echo "internal CA: distributing $ca_crt fleet-wide"; \
+      else echo "internal CA: no pinned root ($ca_crt absent) — skipping fleet trust (run scripts/init_ca.py)"; fi
+
+    # Internal-CA TLS (Phase 2, opt-in): with INTERNAL_TLS set AND centralized_pki's CA up, front the
+    # monitoring stack with a step-ca leaf issued at the monitoring VM's first boot. tls_json (empty
+    # {} when off) is merged into the monitoring hub's tfvars; step 6 wires the AdGuard rewrites so
+    # the hostnames resolve. See specs/internal-ca.md §Phase 2.
+    tls_json='{}'
+    if [ -n "${INTERNAL_TLS:-}" ]; then
+      tls_ca_ip="$(tofu -chdir={{cluster_root}}/centralized_pki output -raw ca_ipv4 2>/dev/null || true)"
+      if [ -n "$tls_ca_ip" ]; then
+        echo "internal TLS: fronting monitoring via step-ca @ $tls_ca_ip"
+        tls_json="$(jq -n --arg ip "$tls_ca_ip" --arg dom "${INTERNAL_TLS_DOMAIN:-lab.theblacktonystark.com}" \
+          --arg pw "${STEPCA_CA_PASSWORD:-changeit-dev-pki-only}" \
+          '{use_internal_tls: true, ca_ip: $ip, domain: $dom, stepca_ca_password: $pw}')"
+      else
+        echo "internal TLS: INTERNAL_TLS set but centralized_pki CA not up (no ca_ipv4) — skipping TLS"
+      fi
+    fi
+
+    # Internal NTP (opt-in): with INTERNAL_NTP set, the DNS box runs chrony as the fleet NTP server
+    # (dns_ntp_json enables it at the box's first boot) and every other VM points systemd-timesyncd
+    # at that box by IP (ntp_json, set once dns_ip is known — by IP so time sync never races DNS at
+    # boot). Both empty {} when off, so a plain run is unchanged. See specs/shared-ntp.md.
+    dns_ntp_json='{}'
+    ntp_json='{}'
+    if [ -n "${INTERNAL_NTP:-}" ]; then
+      dns_ntp_json='{"enable_ntp_server": true}'
+      echo "internal NTP: DNS box will serve time via chrony; fleet disciplines against it"
+    fi
+
+    # 0. DNS hub FIRST — pure :53 sink. No telemetry targets yet (the hubs don't exist), but it DOES
+    #    get the CA trust anchor at first boot (static, so no ordering dependency on the PKI hub).
     echo "=== up-connected: dns hub ($dns) ==="
-    rm -f {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json 2>/dev/null || true
-    just up "$dns"
+    jq -n --arg ca "$ca_pem" --argjson ntp "$dns_ntp_json" '{internal_ca_cert: $ca} + $ntp' \
+      > {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json
+    just up "$dns" || { echo "FAILED hub: $dns"; rc=1; }
     dns_ip="$(tofu -chdir={{cluster_root}}/$dns output -raw server_ipv4)"
     echo "    AdGuard Home resolver: $dns_ip:53"
+    # Now that the DNS/NTP hub IP is known, point the fleet's timesyncd at it (INTERNAL_NTP only).
+    if [ -n "${INTERNAL_NTP:-}" ]; then
+      ntp_json="$(jq -n --arg ip "$dns_ip" '{ntp_server: $ip}')"
+      echo "    chrony NTP server: $dns_ip:123"
+    fi
     # health-gate: do NOT wire anyone until AdGuard actually answers, else a dependent VM switches
     # its resolver at boot and cannot resolve archive.ubuntu.com. `dig` ships with macOS.
     echo "    waiting for AdGuard Home to answer DNS on $dns_ip:53 ..."
@@ -137,19 +221,23 @@ up-connected:
       sleep 5
     done
 
-    # 1. logging hub — pure sink; now resolves via DNS.
+    # 1. logging hub — pure sink; now resolves via DNS + trusts the internal CA. enable_coroot brings
+    #    up the eBPF observability stack on the k0s node (bulk bring-up always includes it).
     echo "=== up-connected: logging hub ($logging) ==="
-    jq -n --arg dns "$dns_ip" '{dns_server: $dns}' \
+    jq -n --arg dns "$dns_ip" --arg ca "$ca_pem" --argjson ntp "$ntp_json" '{dns_server: $dns, internal_ca_cert: $ca, enable_coroot: true} + $ntp' \
       > {{cluster_root}}/$logging/.cross-cluster.auto.tfvars.json
-    just up "$logging"
+    just up "$logging" || { echo "FAILED hub: $logging"; rc=1; }
     log_ip="$(tofu -chdir={{cluster_root}}/$logging output -raw central_ipv4)"
     echo "    syslog-ng collector: $log_ip:514"
 
-    # 2. monitoring hub — resolves via DNS + self-ships its OWN OS logs (logging is already up).
+    # 2. monitoring hub — resolves via DNS + trusts the internal CA + self-ships its OWN OS logs.
     echo "=== up-connected: monitoring hub ($monitoring) ==="
-    jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" '{dns_server: $dns, log_shipping_target: $log}' \
+    # TLS (tls_json) must be set HERE — the VM is created by this `just up`, and use_internal_tls
+    # gates the leaf-issuance cloud-init; the step-5 re-apply is content-only and won't recreate it.
+    jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg ca "$ca_pem" --argjson tls "$tls_json" --argjson ntp "$ntp_json" \
+      '{dns_server: $dns, log_shipping_target: $log, internal_ca_cert: $ca} + $tls + $ntp' \
       > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
-    just up "$monitoring"
+    just up "$monitoring" || { echo "FAILED hub: $monitoring"; rc=1; }
     mon_ip="$(tofu -chdir={{cluster_root}}/$monitoring output -raw server_ipv4)"
     echo "    OpenObserve/OTLP sink: $mon_ip:5080"
 
@@ -161,10 +249,13 @@ up-connected:
       [ -f "$dir/main.tf" ] || continue
       case "$c" in "$dns"|"$logging"|"$monitoring") continue ;; esac
       echo "=== up-connected: consumer $c ==="
-      jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg oo "$mon_ip:5080" \
-        '{dns_server: $dns, log_shipping_target: $log, openobserve_endpoint: $oo}' \
+      # netbox joins the fleet with discovery on (Diode + orb-agent), per the bulk bring-up spec.
+      extra='{}'
+      [ "$c" = "centralized_netbox" ] && extra='{"enable_discovery": true}'
+      jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg oo "$mon_ip:5080" --arg ca "$ca_pem" --argjson extra "$extra" --argjson ntp "$ntp_json" \
+        '{dns_server: $dns, log_shipping_target: $log, openobserve_endpoint: $oo, internal_ca_cert: $ca} + $extra + $ntp' \
         > "$dir/.cross-cluster.auto.tfvars.json"
-      just up "$c"
+      just up "$c" || { echo "FAILED consumer: $c"; rc=1; }
       # accumulate this consumer's VM IPs as Prometheus scrape targets (node_exporter :9100)
       targets="$(tofu -chdir={{cluster_root}}/$c output -json hosts 2>/dev/null \
         | jq --argjson acc "$targets" \
@@ -176,38 +267,23 @@ up-connected:
             {job:"centralized-dns-adguard",ip:$ip,port:9618},
             {job:"centralized-dns-unbound",ip:$ip,port:9167}]')"
 
-    # 4. DNS-hub self-telemetry HOT-PUSH (mirrors the Prometheus scrape hot-push; no recreate):
+    # 4. DNS-hub self-telemetry HOT-PUSH (mirrors _hot-push-cross-cluster; no recreate):
     #    the DNS VM booted before the hubs, so wire its log shipping now. A targeted re-apply
     #    (content-only change — never recreates the VM) materializes the rendered drop-ins for scp.
     echo "=== up-connected: wiring DNS hub self-telemetry ==="
-    jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg oo "$mon_ip:5080" \
-      '{log_shipping_target: $log, openobserve_endpoint: $oo}' \
+    jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg oo "$mon_ip:5080" --arg ca "$ca_pem" --argjson ntp "$dns_ntp_json" \
+      '{log_shipping_target: $log, openobserve_endpoint: $oo, internal_ca_cert: $ca} + $ntp' \
       > {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json
     tofu -chdir={{cluster_root}}/$dns apply -auto-approve   # re-renders .rendered/ drop-ins only
-    scp {{ssh_opts}} -i {{ssh_key}} \
-      {{cluster_root}}/$dns/.rendered/10-ship.conf ubuntu@"$dns_ip":/tmp/10-ship.conf
-    scp {{ssh_opts}} -i {{ssh_key}} \
-      {{cluster_root}}/$dns/.rendered/otel-config.yaml ubuntu@"$dns_ip":/tmp/otel-config.yaml
-    ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$dns_ip" \
-      'set -e; \
-       sudo DEBIAN_FRONTEND=noninteractive apt-get install -y syslog-ng >/dev/null; \
-       sudo mkdir -p /var/lib/syslog-ng /etc/syslog-ng/conf.d /var/lib/otelcol-contrib/storage; \
-       sudo cp /tmp/10-ship.conf /etc/syslog-ng/conf.d/10-ship.conf; \
-       grep -q "conf.d/\*.conf" /etc/syslog-ng/syslog-ng.conf || echo "@include \"/etc/syslog-ng/conf.d/*.conf\"" | sudo tee -a /etc/syslog-ng/syslog-ng.conf >/dev/null; \
-       sudo systemctl enable syslog-ng >/dev/null 2>&1 || true; sudo systemctl restart syslog-ng; \
-       if ! command -v otelcol-contrib >/dev/null 2>&1; then \
-         V=0.109.0; A="$(dpkg --print-architecture)"; \
-         curl -sSLf "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v${V}/otelcol-contrib_${V}_linux_${A}.deb" -o /tmp/otelcol.deb; \
-         sudo dpkg -i /tmp/otelcol.deb || sudo DEBIAN_FRONTEND=noninteractive apt-get install -f -y; \
-       fi; \
-       sudo cp /tmp/otel-config.yaml /etc/otelcol-contrib/config.yaml; \
-       sudo systemctl enable otelcol-contrib >/dev/null 2>&1 || true; sudo systemctl restart otelcol-contrib'
+    just _hot-push-cross-cluster "$dns"
 
     # 5. hot-push the discovered scrape targets into the RUNNING monitoring server (no recreate).
     #    Keep log_shipping_target + dns_server so the re-apply preserves the hub's wiring in state.
     echo "=== up-connected: wiring Prometheus scrape targets ==="
-    echo "$targets" | jq -c --arg dns "$dns_ip" --arg log "$log_ip:514" \
-      '{dns_server: $dns, log_shipping_target: $log, extra_scrape_targets: .}' \
+    # Preserve tls_json here too so the content-only re-apply keeps use_internal_tls in state/render
+    # (it does NOT recreate the VM — the leaf was already issued at the step-2 boot).
+    echo "$targets" | jq -c --arg dns "$dns_ip" --arg log "$log_ip:514" --arg ca "$ca_pem" --argjson tls "$tls_json" --argjson ntp "$ntp_json" \
+      '{dns_server: $dns, log_shipping_target: $log, internal_ca_cert: $ca, extra_scrape_targets: .} + $tls + $ntp' \
       > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
     tofu -chdir={{cluster_root}}/$monitoring apply -auto-approve   # re-renders .rendered/prometheus.yml only
     scp {{ssh_opts}} -i {{ssh_key}} \
@@ -215,7 +291,254 @@ up-connected:
       ubuntu@"$mon_ip":/tmp/prometheus.yml
     ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$mon_ip" \
       'sudo cp /tmp/prometheus.yml /opt/stack/prometheus/prometheus.yml && sudo docker compose -f /opt/stack/compose.yaml restart prometheus'
-    echo "up-connected complete — $(echo "$targets" | jq 'length') cross-cluster scrape targets wired; fleet resolving via $dns_ip."
+    echo "up-connected: $(echo "$targets" | jq 'length') cross-cluster scrape targets wired; fleet resolving via $dns_ip."
+
+    # 6. DEAD LAST — register every up cluster's service hostnames as AdGuard rewrites, so
+    #    grafana.<domain>/netbox.<domain>/auth.<domain>/... resolve fleet-wide. Only meaningful
+    #    once the whole fleet is up (each cluster's dns_records needs its VM IPs).
+    echo "=== up-connected: registering fleet DNS records (set-dns-all) ==="
+    just set-dns-all || { echo "FAILED: set-dns-all"; rc=1; }
+
+    if [ "$rc" -ne 0 ]; then
+      echo "up-connected FAILED — one or more steps did not complete (see the FAILED lines above)." >&2
+    else
+      echo "up-connected complete — fleet up, wired, and DNS-registered."
+    fi
+    exit "$rc"
+
+# up-connected with internal-CA TLS + internal NTP both wired (INTERNAL_NTP=1 INTERNAL_TLS=1).
+# Needs centralized_pki's persisted root (ca-material.auto.tfvars) for TLS to activate.  just up-connected-full
+up-connected-full:
+    INTERNAL_NTP=1 INTERNAL_TLS=1 just up-connected
+
+# cold-boot validation: destroy-all (purges stale cross-cluster wiring) -> up-connected-full ->
+# verify-connected + verify-dns + tls-check-monitoring. Proves the committed cloud-init hardening
+# works at first boot with no hot-patching.  just cold-boot-validate
+cold-boot-validate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just destroy-all
+    just up-connected-full
+    just verify-connected
+    just verify-dns
+    just tls-check-monitoring
+
+# register ONE cluster's service hostnames (its `dns_records` output) into centralized_dns's
+# AdGuard Home as idempotent DNS rewrites, so <service>.<domain> resolves fleet-wide.
+# Requires that cluster AND the dns hub to be up.  just set-dns centralized_pki
+set-dns CLUSTER:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    records="$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json dns_records 2>/dev/null || true)"
+    if [ -z "$records" ] || [ "$records" = "{}" ]; then
+      echo "no dns_records for {{CLUSTER}} (not up, or no records) — nothing to register"
+      exit 0
+    fi
+    echo "$records" | jq .
+    echo "$records" | uv run {{cluster_root}}/centralized_dns/scripts/adguard_cli.py \
+      --cluster centralized_dns rewrite-sync --file -
+
+# register EVERY up cluster's `dns_records` into AdGuard in one idempotent sync. Clusters that
+# aren't up contribute nothing (their `tofu output` errors -> {}). Run after the fleet is up
+# (up-connected does this automatically as its last step).  just set-dns-all
+set-dns-all:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    docs=()
+    for dir in {{cluster_root}}/*/; do
+      [ -f "$dir/main.tf" ] || continue   # skip non-cluster dirs like _shared/
+      records="$(tofu -chdir="$dir" output -json dns_records 2>/dev/null || echo '{}')"
+      [ -n "$records" ] || records='{}'
+      docs+=("$records")
+    done
+    merged="$(printf '%s\n' "${docs[@]}" | jq -s 'reduce .[] as $x ({}; . * $x)')"
+    echo "$merged" | jq .
+    if [ "$merged" = "{}" ] || [ -z "$merged" ]; then
+      echo "no dns_records found across clusters — nothing to register (is the fleet up?)"
+      exit 0
+    fi
+    echo "$merged" | uv run {{cluster_root}}/centralized_dns/scripts/adguard_cli.py \
+      --cluster centralized_dns rewrite-sync --file -
+
+# live: assert every registered record resolves through AdGuard to the expected IP (dig against
+# the dns hub). Nonzero exit on any mismatch.  just verify-dns
+verify-dns:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    dns_ip="$(tofu -chdir={{cluster_root}}/centralized_dns output -raw server_ipv4 2>/dev/null || true)"
+    if [ -z "$dns_ip" ]; then
+      echo "centralized_dns is not up (no server_ipv4) — cannot verify" >&2
+      exit 1
+    fi
+    docs=()
+    for dir in {{cluster_root}}/*/; do
+      [ -f "$dir/main.tf" ] || continue
+      records="$(tofu -chdir="$dir" output -json dns_records 2>/dev/null || echo '{}')"
+      [ -n "$records" ] || records='{}'
+      docs+=("$records")
+    done
+    merged="$(printf '%s\n' "${docs[@]}" | jq -s 'reduce .[] as $x ({}; . * $x)')"
+    rc=0
+    while IFS=$'\t' read -r host ip; do
+      [ -n "$host" ] || continue
+      got="$(dig +short +time=2 +tries=1 @"$dns_ip" "$host" 2>/dev/null | head -1)"
+      if [ "$got" = "$ip" ]; then
+        echo "ok:   $host -> $got"
+      else
+        echo "FAIL: $host -> expected $ip, got '${got:-<none>}'"
+        rc=1
+      fi
+    done < <(echo "$merged" | jq -r 'to_entries[] | "\(.key)\t\(.value)"')
+    [ "$rc" -eq 0 ] && echo "verify-dns: all records resolve via $dns_ip" || echo "verify-dns: MISMATCHES above" >&2
+    exit "$rc"
+
+# generic hot-push: pushes whichever of {resolved.conf, ship.conf, otel.yaml} exist under
+# CLUSTER's .rendered/ onto EVERY currently-running VM of that cluster (per `hosts` output),
+# keyed by role name (<role>-resolved.conf / <role>-ship.conf / <role>-otel.yaml). Content-only;
+# never touches tofu state, never recreates a VM. Skips silently if CLUSTER isn't up.
+_hot-push-cross-cluster CLUSTER:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    dir="{{cluster_root}}/{{CLUSTER}}"
+    hosts_json="$(tofu -chdir="$dir" output -json hosts 2>/dev/null)" || { echo "    ({{CLUSTER}} not up — skip hot-push)"; exit 0; }
+    [ -n "$hosts_json" ] && [ "$hosts_json" != "null" ] || exit 0
+    while IFS=$'\t' read -r role ip; do
+      [ -n "$role" ] && [ -n "$ip" ] || continue
+
+      if [ -f "$dir/.rendered/${role}-resolved.conf" ]; then
+        echo "    [{{CLUSTER}}/$role] dns resolver -> $ip"
+        scp {{ssh_opts}} -i {{ssh_key}} "$dir/.rendered/${role}-resolved.conf" ubuntu@"$ip":/tmp/99-centralized-dns.conf
+        ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" \
+          'sudo cp /tmp/99-centralized-dns.conf /etc/systemd/resolved.conf.d/99-centralized-dns.conf && sudo systemctl restart systemd-resolved'
+      fi
+
+      if [ -f "$dir/.rendered/${role}-ship.conf" ]; then
+        echo "    [{{CLUSTER}}/$role] syslog-ng shipper -> $ip"
+        scp {{ssh_opts}} -i {{ssh_key}} "$dir/.rendered/${role}-ship.conf" ubuntu@"$ip":/tmp/10-ship.conf
+        ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" '
+          set -e
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y syslog-ng >/dev/null
+          sudo mkdir -p /var/lib/syslog-ng /etc/syslog-ng/conf.d
+          sudo cp /tmp/10-ship.conf /etc/syslog-ng/conf.d/10-ship.conf
+          grep -q "conf.d/\*.conf" /etc/syslog-ng/syslog-ng.conf || echo "@include \"/etc/syslog-ng/conf.d/*.conf\"" | sudo tee -a /etc/syslog-ng/syslog-ng.conf >/dev/null
+          sudo systemctl enable syslog-ng >/dev/null 2>&1 || true
+          sudo systemctl restart syslog-ng'
+      fi
+
+      if [ -f "$dir/.rendered/${role}-otel.yaml" ]; then
+        echo "    [{{CLUSTER}}/$role] otelcol-contrib -> $ip"
+        scp {{ssh_opts}} -i {{ssh_key}} "$dir/.rendered/${role}-otel.yaml" ubuntu@"$ip":/tmp/otel-config.yaml
+        ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" '
+          set -e
+          sudo mkdir -p /var/lib/otelcol-contrib/storage
+          if ! command -v otelcol-contrib >/dev/null 2>&1; then
+            V=0.109.0; A="$(dpkg --print-architecture)"
+            curl -sSLf "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v${V}/otelcol-contrib_${V}_linux_${A}.deb" -o /tmp/otelcol.deb
+            sudo DEBIAN_FRONTEND=noninteractive dpkg --force-confdef --force-confold -i /tmp/otelcol.deb || sudo DEBIAN_FRONTEND=noninteractive apt-get install -f -y
+          fi
+          sudo cp /tmp/otel-config.yaml /etc/otelcol-contrib/config.yaml
+          sudo chown -R otelcol-contrib:otelcol-contrib /var/lib/otelcol-contrib/storage
+          sudo usermod -aG adm otelcol-contrib
+          sudo systemctl enable otelcol-contrib >/dev/null 2>&1 || true
+          sudo systemctl restart otelcol-contrib'
+      fi
+    done < <(echo "$hosts_json" | jq -r 'to_entries[] | "\(.key)\t\(.value.ipv4)"')
+
+# re-discover the 3 hub IPs, rewrite every ALREADY-WIRED cluster's .cross-cluster.auto.tfvars.json,
+# content-only `tofu apply`, then hot-push. Run after recreating a hub (see `recreate`), or any
+# time you suspect wiring has drifted.  just refresh-cross-cluster
+refresh-cross-cluster:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=0
+    dns=centralized_dns; logging=centralized_logging; monitoring=centralized_monitoring
+
+    dns_ip="$(tofu -chdir={{cluster_root}}/$dns output -raw server_ipv4 2>/dev/null || true)"
+    log_ip="$(tofu -chdir={{cluster_root}}/$logging output -raw central_ipv4 2>/dev/null || true)"
+    mon_ip="$(tofu -chdir={{cluster_root}}/$monitoring output -raw server_ipv4 2>/dev/null || true)"
+    log_target=""; [ -n "$log_ip" ] && log_target="$log_ip:514"
+    oo_target="";  [ -n "$mon_ip" ] && oo_target="$mon_ip:5080"
+    echo "=== refresh-cross-cluster: dns=$dns_ip logging=$log_ip monitoring=$mon_ip ==="
+
+    # Preserve internal-NTP wiring across the rewrite: honor INTERNAL_NTP, or auto-detect it from the
+    # DNS box's existing tfvars (enable_ntp_server:true) so a plain refresh doesn't silently unwire it.
+    dns_ntp_json='{}'; ntp_json='{}'
+    if [ -n "${INTERNAL_NTP:-}" ] || grep -sq '"enable_ntp_server": *true' {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json; then
+      dns_ntp_json='{"enable_ntp_server": true}'
+      [ -n "$dns_ip" ] && ntp_json="$(jq -n --arg ip "$dns_ip" '{ntp_server: $ip}')"
+      echo "    internal NTP: preserving chrony hub + fleet ntp_server=$dns_ip"
+    fi
+
+    # recompute extra_scrape_targets from every currently-up, already-wired cluster
+    targets='[]'
+    for dir in {{cluster_root}}/*/; do
+      c="$(basename "$dir")"
+      [ -f "$dir/main.tf" ] || continue
+      case "$c" in "$dns"|"$logging"|"$monitoring") continue ;; esac
+      [ -f "$dir/.cross-cluster.auto.tfvars.json" ] || continue
+      new_targets="$(tofu -chdir="$dir" output -json hosts 2>/dev/null \
+        | jq --argjson acc "$targets" '$acc + [to_entries[] | {job: .value.name, ip: .value.ipv4, port: 9100}]' \
+        2>/dev/null)" && targets="$new_targets"
+    done
+    if [ -n "$dns_ip" ]; then
+      targets="$(echo "$targets" | jq --arg ip "$dns_ip" \
+        '. + [{job:"centralized-dns-server",ip:$ip,port:9100},
+              {job:"centralized-dns-adguard",ip:$ip,port:9618},
+              {job:"centralized-dns-unbound",ip:$ip,port:9167}]')"
+    fi
+
+    if [ -f {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json ]; then
+      echo "=== refresh: $dns (self-telemetry) ==="
+      jq -n --arg log "$log_target" --arg oo "$oo_target" --argjson ntp "$dns_ntp_json" \
+        '{log_shipping_target: $log, openobserve_endpoint: $oo} + $ntp' \
+        > {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json
+      tofu -chdir={{cluster_root}}/$dns apply -auto-approve || { echo "FAILED apply: $dns"; rc=1; }
+      just _hot-push-cross-cluster "$dns" || rc=1
+    fi
+
+    if [ -f {{cluster_root}}/$logging/.cross-cluster.auto.tfvars.json ]; then
+      echo "=== refresh: $logging ==="
+      jq -n --arg dns "$dns_ip" --argjson ntp "$ntp_json" '{dns_server: $dns, enable_coroot: true} + $ntp' \
+        > {{cluster_root}}/$logging/.cross-cluster.auto.tfvars.json
+      tofu -chdir={{cluster_root}}/$logging apply -auto-approve || { echo "FAILED apply: $logging"; rc=1; }
+      just _hot-push-cross-cluster "$logging" || rc=1
+    fi
+
+    if [ -f {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json ]; then
+      echo "=== refresh: $monitoring ==="
+      echo "$targets" | jq -c --arg dns "$dns_ip" --arg log "$log_target" --argjson ntp "$ntp_json" \
+        '{dns_server: $dns, log_shipping_target: $log, extra_scrape_targets: .} + $ntp' \
+        > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
+      tofu -chdir={{cluster_root}}/$monitoring apply -auto-approve || { echo "FAILED apply: $monitoring"; rc=1; }
+      just _hot-push-cross-cluster "$monitoring" || rc=1
+      mon_ip_now="$(tofu -chdir={{cluster_root}}/$monitoring output -raw server_ipv4 2>/dev/null || true)"
+      if [ -n "$mon_ip_now" ]; then
+        scp {{ssh_opts}} -i {{ssh_key}} {{cluster_root}}/$monitoring/.rendered/prometheus.yml ubuntu@"$mon_ip_now":/tmp/prometheus.yml
+        ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$mon_ip_now" \
+          'sudo cp /tmp/prometheus.yml /opt/stack/prometheus/prometheus.yml && sudo docker compose -f /opt/stack/compose.yaml restart prometheus'
+      fi
+    fi
+
+    for dir in {{cluster_root}}/*/; do
+      c="$(basename "$dir")"
+      [ -f "$dir/main.tf" ] || continue
+      case "$c" in "$dns"|"$logging"|"$monitoring") continue ;; esac
+      if [ ! -f "$dir/.cross-cluster.auto.tfvars.json" ]; then
+        echo "=== skip $c (never opted into cross-cluster wiring) ==="; continue
+      fi
+      echo "=== refresh: $c ==="
+      extra='{}'
+      [ "$c" = "centralized_netbox" ] && extra='{"enable_discovery": true}'
+      jq -n --arg dns "$dns_ip" --arg log "$log_target" --arg oo "$oo_target" --argjson extra "$extra" --argjson ntp "$ntp_json" \
+        '{dns_server: $dns, log_shipping_target: $log, openobserve_endpoint: $oo} + $extra + $ntp' \
+        > "$dir/.cross-cluster.auto.tfvars.json"
+      tofu -chdir="$dir" apply -auto-approve || { echo "FAILED apply: $c"; rc=1; continue; }
+      just _hot-push-cross-cluster "$c" || rc=1
+    done
+
+    echo "=== refresh-cross-cluster: re-registering fleet DNS records ==="
+    just set-dns-all || { echo "FAILED: set-dns-all"; rc=1; }
+    exit "$rc"
 
 # delete + purge Multipass VMs for this cluster that OpenTofu no longer tracks.
 # A failed `up` (e.g. a launch timeout) leaves a VM behind that `tofu destroy` can't
@@ -235,8 +558,20 @@ prune CLUSTER:
     done
     if [ "$found" -eq 1 ]; then multipass purge; else echo "no orphaned VMs for {{CLUSTER}}"; fi
 
-# destroy (incl. orphan cleanup) then bring the cluster back up:  just recreate centralized_logging
+# destroy (incl. orphan cleanup) then bring the cluster back up. If CLUSTER is one of the 3
+# cross-cluster hubs, its IP just churned — automatically refresh every dependent cluster's
+# wiring afterward. Plain consumer recreates are unaffected (their own recreate never stales
+# anyone else's config).  just recreate centralized_logging
 recreate CLUSTER: (destroy CLUSTER) (up CLUSTER)
+    #!/usr/bin/env bash
+    set -uo pipefail
+    case "{{CLUSTER}}" in
+      centralized_dns|centralized_logging|centralized_monitoring)
+        echo "=== {{CLUSTER}} is a cross-cluster hub — refreshing dependent wiring ==="
+        just refresh-cross-cluster
+        ;;
+      *) ;;
+    esac
 
 # hermetic: fmt + validate + tofu test (no VMs):  just check (centralized_logging|centralized_monitoring)
 check CLUSTER: (init CLUSTER)
@@ -293,6 +628,22 @@ verify-connected:
     fi
     echo "=== verify-connected: metrics scrape (Prometheus -> dns hub) ==="
     just prometheus-query centralized_monitoring 'up{job=~"centralized-dns.*"}' || rc=1
+
+    echo "=== verify-connected: time sync (pki VM clock synchronized) ==="
+    if ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$pki_ip" "timedatectl show -p NTP --value | grep -qx yes && timedatectl show -p NTPSynchronized --value | grep -qx yes"; then
+      echo "PASS: pki VM clock is synchronized (NTP=yes)"
+    else
+      echo "FAIL: pki VM clock not synchronized"; rc=1
+    fi
+    # When the fleet was wired with INTERNAL_NTP, assert the consumer disciplines against the DNS hub.
+    if [ -n "${INTERNAL_NTP:-}" ]; then
+      echo "=== verify-connected: internal NTP source (pki VM -> centralized_dns chrony) ==="
+      if ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$pki_ip" "grep -qs $dns_ip /etc/systemd/timesyncd.conf.d/99-centralized-ntp.conf"; then
+        echo "PASS: pki VM timesyncd points at the internal NTP hub ($dns_ip)"
+      else
+        echo "FAIL: pki VM is not pointed at the internal NTP hub $dns_ip"; rc=1
+      fi
+    fi
     exit "$rc"
 
 # reconcile Heimdall tiles (generate -> sync --prune):  just heimdall-sync centralized_monitoring
@@ -423,6 +774,61 @@ vaultwarden-check CLUSTER:
 tls-check CLUSTER HOST *ARGS:
     uv run {{cluster_root}}/{{CLUSTER}}/scripts/tls_cli.py --cluster {{CLUSTER}} check {{HOST}} {{ARGS}}
 
+# --- Internal-CA trust distribution (see specs/internal-ca.md) ----------------
+# Fleet-wide trust of the internal root CA is normally baked in at first boot by `just up-connected`
+# (the internal_ca_cert var). These recipes HOT-PUSH the root onto already-running VMs — repair a VM
+# without a full recreate, or trust a cluster brought up with a plain `just up`. Source of the root:
+# the pinned clusters/centralized_pki/.ca/root_ca.crt (scripts/init_ca.py); if that's absent, fetch
+# step-ca's current root from the CA's /roots.pem TOFU endpoint.
+
+# install/refresh the internal root CA on every running VM of a cluster (no recreate):  just trust-ca centralized_netbox
+trust-ca CLUSTER:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ca_crt="{{cluster_root}}/centralized_pki/.ca/root_ca.crt"
+    tmp="$(mktemp -t internal-root-ca.XXXXXX.crt)"
+    trap 'rm -f "$tmp"' EXIT
+    if [ -f "$ca_crt" ]; then
+      cp "$ca_crt" "$tmp"
+      echo "trust-ca: using pinned root $ca_crt"
+    else
+      ca_ip="$(tofu -chdir={{cluster_root}}/centralized_pki output -raw ca_ipv4)"
+      echo "trust-ca: no pinned root — fetching https://$ca_ip:9000/roots.pem (TOFU)"
+      curl -fsSk "https://$ca_ip:9000/roots.pem" -o "$tmp"
+    fi
+    tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.[].ipv4' | while read ip; do
+      echo "=== trust-ca: {{CLUSTER}} @ $ip ==="
+      scp {{ssh_opts}} -i {{ssh_key}} "$tmp" ubuntu@"$ip":/tmp/internal-root-ca.crt
+      ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" \
+        'sudo cp /tmp/internal-root-ca.crt /usr/local/share/ca-certificates/internal-root-ca.crt && sudo update-ca-certificates'
+    done
+
+# install/refresh the internal root CA on every VM of every cluster (glob-discovered):  just trust-ca-all
+trust-ca-all:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=0
+    for dir in {{cluster_root}}/*/; do
+      cluster="$(basename "$dir")"
+      [ -f "$dir/main.tf" ] || continue   # skip non-cluster dirs like _shared/
+      echo "=== trust-ca: $cluster ==="
+      just trust-ca "$cluster" || rc=1
+    done
+    exit "$rc"
+
+# install/refresh the internal root CA into the macOS host trust store (Chrome/Safari + Firefox):  just trust-ca-macos
+# Mutates the login/System keychain + Firefox NSS DBs, so it prints what it will do and prompts.
+trust-ca-macos *ARGS:
+    uv run {{cluster_root}}/centralized_pki/scripts/macos_trust_cli.py {{ARGS}} install
+
+# assert the monitoring stack's Traefik leaf chains to the internal root (via centralized_pki):  just tls-check-monitoring
+tls-check-monitoring *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mon_ip="$(tofu -chdir={{cluster_root}}/centralized_monitoring output -raw server_ipv4)"
+    domain="$(tofu -chdir={{cluster_root}}/centralized_monitoring output -raw domain 2>/dev/null || echo lab.theblacktonystark.com)"
+    uv run {{cluster_root}}/centralized_pki/scripts/tls_cli.py --cluster centralized_pki check "$mon_ip" --sni "grafana.$domain" {{ARGS}}
+
 # NetBox health + auth + self-registration, exit nonzero on failure:  just netbox-check centralized_netbox
 netbox-check CLUSTER:
     uv run {{cluster_root}}/{{CLUSTER}}/scripts/netbox_cli.py --cluster {{CLUSTER}} check
@@ -518,6 +924,12 @@ alias down := stop
 ssh CLUSTER ROLE:
     @ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.{{ROLE}}.ipv4'); \
      ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip"
+
+# triage provisioning problems: sweep journals & highlight the root cause (3 tries, exp backoff):  just system-debug centralized_pki [services]
+# interactive wrapper — "issues found" (exit 2) is the normal case here, so it doesn't fail the recipe.
+# For the meaningful exit code (CI / the /system-debug command) call `uv run tools/system_debug.py ... --json` directly.
+system-debug CLUSTER ROLE="":
+    @uv run tools/system_debug.py {{CLUSTER}} {{ROLE}} || true
 
 # no flag -> core human dashboards;  --full (or --all) -> + every enabled /metrics endpoint.
 # Override the browser with BROWSER_APP=...; falls back to the macOS default browser.

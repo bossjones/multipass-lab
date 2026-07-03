@@ -6,6 +6,11 @@ mock_provider "multipass" {}
 variables {
   # Provide an inline key so the test never depends on a real ~/.ssh file.
   ssh_pubkey = "ssh-ed25519 AAAATESTKEY centralized-netbox-tests"
+  # Pin cross-cluster opt-in vars OFF so *_off_by_default runs are hermetic to auto-loaded
+  # *.auto.tfvars (e.g. a leftover .cross-cluster.auto.tfvars.json). On-runs override. See specs/internal-ca.md.
+  dns_server       = ""
+  internal_ca_cert = ""
+  ntp_server       = ""
 }
 
 run "sizing_image_and_names" {
@@ -663,5 +668,89 @@ run "dns_on_points_resolved_at_hub" {
       local_file.server_ci.content, local_file.client_ci.content, local_file.agent_ci[0].content,
     ] : strcontains(c, "DNS=10.7.7.7")])
     error_message = "the rendered resolved drop-in must set DNS= to the dns_server IP on every VM"
+  }
+}
+
+# --- Fleet-wide internal-CA trust (opt-in var.internal_ca_cert; see specs/internal-ca.md) ----
+
+run "internal_ca_off_by_default" {
+  command = plan
+
+  # No internal_ca_cert set — every VM must omit the trust block.
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "internal-root-ca.crt")
+    error_message = "with internal_ca_cert unset, server cloud-init must NOT render the trust block"
+  }
+  assert {
+    condition     = !strcontains(local_file.client_ci.content, "internal-root-ca.crt")
+    error_message = "with internal_ca_cert unset, client cloud-init must NOT render the trust block"
+  }
+}
+
+run "internal_ca_on_renders_trust" {
+  command = plan
+
+  variables {
+    internal_ca_cert = "-----BEGIN CERTIFICATE-----\nMIITESTROOTCA\n-----END CERTIFICATE-----"
+  }
+
+  # Both VMs drop the root PEM into the OS trust store and run update-ca-certificates.
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/usr/local/share/ca-certificates/internal-root-ca.crt")
+    error_message = "server cloud-init must drop the internal root CA when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "update-ca-certificates")
+    error_message = "server cloud-init must run update-ca-certificates when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.client_ci.content, "/usr/local/share/ca-certificates/internal-root-ca.crt")
+    error_message = "client cloud-init must drop the internal root CA when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.client_ci.content, "update-ca-certificates")
+    error_message = "client cloud-init must run update-ca-certificates when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "MIITESTROOTCA")
+    error_message = "server trust block must carry the injected root CA PEM"
+  }
+}
+
+# --- Internal NTP source (opt-in var.ntp_server; see specs/shared-ntp.md) ----
+
+run "ntp_server_off_by_default" {
+  command = plan
+
+  # No ntp_server set — every VM must omit the timesyncd drop-in. (agent_ci is count-gated on
+  # enable_discovery, absent here, so only the always-present server + client VMs are asserted.)
+  assert {
+    condition = alltrue([for c in [
+      local_file.server_ci.content, local_file.client_ci.content,
+    ] : !strcontains(c, "99-centralized-ntp.conf")])
+    error_message = "the internal NTP drop-in must be absent by default (ntp_server empty)"
+  }
+}
+
+run "ntp_server_on_renders_dropin" {
+  command = plan
+
+  variables {
+    ntp_server = "10.0.0.9"
+    # enable_discovery so the agent VM (count-gated) also renders and is asserted.
+    enable_discovery = true
+  }
+
+  assert {
+    condition = alltrue([for c in [
+      local_file.server_ci.content, local_file.client_ci.content, local_file.agent_ci[0].content,
+    ] : strcontains(c, "/etc/systemd/timesyncd.conf.d/99-centralized-ntp.conf")])
+    error_message = "ntp_server set must render the timesyncd drop-in on every VM"
+  }
+  assert {
+    condition = alltrue([for c in [
+      local_file.server_ci.content, local_file.client_ci.content, local_file.agent_ci[0].content,
+    ] : strcontains(c, "NTP=10.0.0.9")])
+    error_message = "the drop-in must point at the injected NTP IP"
   }
 }

@@ -11,10 +11,7 @@
 package_update: true
 package_upgrade: true
 
-timezone: Etc/UTC
-ntp:
-  enabled: true
-  ntp_client: systemd-timesyncd
+${ntp_timesync}
 
 packages:
   - curl
@@ -139,12 +136,45 @@ write_files:
     content: |
       ${indent(6, dns_resolved_conf)}
 %{ endif ~}
+%{ if ntp_server != "" ~}
+
+  # Internal NTP source — point systemd-timesyncd at the lab NTP server (shared snippet). See specs/shared-ntp.md.
+  - path: /etc/systemd/timesyncd.conf.d/99-centralized-ntp.conf
+    permissions: '0644'
+    content: |
+      ${indent(6, ntp_conf)}
+%{ endif ~}
+%{ if internal_ca_cert != "" ~}
+
+  # Fleet-wide trust — the internal root CA, installed into the OS trust store by a runcmd. See specs/internal-ca.md.
+  - path: /usr/local/share/ca-certificates/internal-root-ca.crt
+    permissions: '0644'
+    content: |
+      ${indent(6, internal_ca_cert)}
+%{ endif ~}
 
 runcmd:
   - timedatectl set-timezone Etc/UTC
+%{ if ntp_server != "" ~}
+  # Internal NTP source — apply the timesyncd drop-in written above. See specs/shared-ntp.md.
+  - systemctl restart systemd-timesyncd
+%{ endif ~}
 %{ if dns_server != "" ~}
   # Cross-cluster DNS — point this VM's resolver at the centralized_dns AdGuard Home hub.
   - systemctl restart systemd-resolved
+  # Wait until the new resolver actually answers before the docker pull / archive.debian.org curl /
+  # image build below run — otherwise a boot-time race with the AdGuard hub warming up makes them
+  # hang ("Could not resolve host"), stalling the apply with no failed unit. One getent probe proves
+  # the resolver answers any external name. Mirrors centralized_logging/docker-client.yaml.tftpl.
+  - |
+    for i in $(seq 1 30); do
+      getent hosts registry-1.docker.io >/dev/null 2>&1 && break
+      sleep 2
+    done
+%{ endif ~}
+%{ if internal_ca_cert != "" ~}
+  # Fleet-wide trust — install the internal root CA into the OS trust store. See specs/internal-ca.md.
+  - update-ca-certificates
 %{ endif ~}
 %{ if exact ~}
   - mkdir -p /etc/docker /opt/unifi
@@ -159,7 +189,12 @@ runcmd:
   - mkdir -p /opt/unifi/rsyslog-root/etc/rsyslog.d
   - dpkg-deb -x /opt/unifi/rsyslog.deb /opt/unifi/rsyslog-root
   # Build + start the exact-version rsyslog container (emulated amd64 — first build is slow).
-  - docker compose -f /opt/unifi/compose.yaml up -d --build
+  # Retry so a transient DNS/registry SERVFAIL on a base-image pull can't abort the build.
+  - |
+    for i in $(seq 1 5); do
+      docker compose -f /opt/unifi/compose.yaml up -d --build && break
+      echo "usg compose up attempt $i failed; retrying"; sleep 10
+    done
 %{ if enable_docker_tools ~}
   # Interactive docker operator TUIs (wharf/oxker/dive); best-effort so a download blip can't
   # break boot. Idempotent — re-run with `sudo /usr/local/sbin/install-docker-tools.sh`.

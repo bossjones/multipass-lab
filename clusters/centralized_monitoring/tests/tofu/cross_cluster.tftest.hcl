@@ -13,6 +13,19 @@ mock_provider "multipass" {
 
 variables {
   ssh_pubkey = "ssh-ed25519 AAAATESTKEY centralized-monitoring-tests"
+  # Pin opt-in vars OFF so the *_off_by_default runs stay hermetic to whatever *.auto.tfvars
+  # OpenTofu auto-loads from the cluster dir (a leftover .cross-cluster.auto.tfvars.json from a
+  # prior `just up-connected`, or ca-material.auto.tfvars). On-runs override at the run level.
+  # See specs/internal-ca.md.
+  dns_server           = ""
+  internal_ca_cert     = ""
+  log_shipping_target  = ""
+  extra_scrape_targets = []
+  # Phase 2 internal-CA TLS opt-in — pinned OFF here too (a leftover .cross-cluster.auto.tfvars.json
+  # from `just up-connected --INTERNAL_TLS` would otherwise flip use_internal_tls on during tests).
+  use_internal_tls   = false
+  ca_ip              = ""
+  stepca_ca_password = ""
 }
 
 # --- default: no cross-cluster jobs -----------------------------------------
@@ -127,5 +140,133 @@ run "dns_on_renders_resolved_conf" {
   assert {
     condition     = strcontains(local_file.k0s_ci.content, "DNS=10.7.7.7")
     error_message = "k0s DNS drop-in must point at the injected centralized_dns IP"
+  }
+}
+
+# --- default: no fleet-wide internal-CA trust -------------------------------
+run "internal_ca_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "internal-root-ca.crt")
+    error_message = "with internal_ca_cert unset, server cloud-init must NOT drop the internal root CA"
+  }
+  assert {
+    condition     = !strcontains(local_file.k0s_ci.content, "internal-root-ca.crt")
+    error_message = "with internal_ca_cert unset, k0s cloud-init must NOT drop the internal root CA"
+  }
+}
+
+# --- internal CA on: every VM installs the root into the OS trust store ------
+run "internal_ca_on_renders_trust" {
+  command = plan
+
+  variables {
+    internal_ca_cert = "-----BEGIN CERTIFICATE-----\nMIITESTROOTCA\n-----END CERTIFICATE-----"
+  }
+
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/usr/local/share/ca-certificates/internal-root-ca.crt")
+    error_message = "server cloud-init must drop the internal root CA into the OS trust store when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "update-ca-certificates")
+    error_message = "server cloud-init must run update-ca-certificates when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "/usr/local/share/ca-certificates/internal-root-ca.crt")
+    error_message = "k0s cloud-init must drop the internal root CA into the OS trust store when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "update-ca-certificates")
+    error_message = "k0s cloud-init must run update-ca-certificates when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "MIITESTROOTCA")
+    error_message = "server cloud-init must embed the injected internal root CA PEM"
+  }
+}
+
+# --- default: no internal-CA TLS (Phase 2) ----------------------------------
+run "internal_tls_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "/usr/local/sbin/issue-cert.sh")
+    error_message = "with use_internal_tls off, server cloud-init must NOT drop issue-cert.sh"
+  }
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "monitoring-cert-renew")
+    error_message = "with use_internal_tls off, server cloud-init must NOT arm the cert-renew timer"
+  }
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "/etc/traefik/dynamic.yaml")
+    error_message = "with use_internal_tls off, Traefik must NOT mount the file-provider dynamic config"
+  }
+  assert {
+    condition     = alltrue([for u in output.web_urls.core : startswith(u, "http://")])
+    error_message = "with use_internal_tls off, web_urls.core must stay plain http://IP:port"
+  }
+}
+
+# --- internal TLS on: issue a leaf + front the stack over :443 --------------
+run "internal_tls_on_renders_leaf_and_proxy" {
+  command = plan
+
+  variables {
+    use_internal_tls   = true
+    enable_traefik     = true
+    domain             = "lab.theblacktonystark.com"
+    ca_ip              = "10.99.99.5"
+    stepca_ca_password = "test-provisioner-pw"
+  }
+
+  # leaf issuance (shared snippet) via the JWK admin provisioner + the right SANs
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/usr/local/sbin/issue-cert.sh")
+    error_message = "use_internal_tls must drop the shared issue-cert.sh"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "--provisioner admin")
+    error_message = "issue-cert.sh must authenticate to step-ca via the JWK admin provisioner"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "--san \"grafana.lab.theblacktonystark.com\"")
+    error_message = "issued leaf must carry the grafana.<domain> SAN"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "--san \"prometheus.lab.theblacktonystark.com\"")
+    error_message = "issued leaf must carry the prometheus.<domain> SAN"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "ca.lab.theblacktonystark.com:10.99.99.5")
+    error_message = "issue-cert.sh must --add-host the injected CA IP for DNS-less reachback"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/opt/stack/secrets/provisioner_password")
+    error_message = "server cloud-init must write the provisioner password file"
+  }
+  # Traefik serves the leaf via the file provider
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "defaultCertificate")
+    error_message = "Traefik dynamic config must set the leaf as the default certificate"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "--providers.file.filename=/etc/traefik/dynamic.yaml")
+    error_message = "Traefik must load the file provider when use_internal_tls is on"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "monitoring-cert-renew.timer")
+    error_message = "server cloud-init must arm the 12h cert-renew timer"
+  }
+  # web_urls flip to the green-lock hostnames
+  assert {
+    condition     = contains(output.web_urls.core, "https://grafana.lab.theblacktonystark.com")
+    error_message = "web_urls.core must expose https://grafana.<domain> when use_internal_tls is on"
+  }
+  # the embedded script + nested Traefik config must not corrupt the cloud-init YAML
+  assert {
+    condition     = can(yamldecode(local_file.server_ci.content))
+    error_message = "server cloud-init must remain valid YAML with the TLS write_files blocks"
   }
 }

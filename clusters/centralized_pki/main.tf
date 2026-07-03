@@ -38,6 +38,11 @@ locals {
   jwk_provisioner    = "admin"
   acme_directory_url = "${local.ca_url}/acme/${local.acme_provisioner}/directory"
 
+  # Pin the persisted root/intermediate over step-ca's self-generated pair when all three are
+  # provided (scripts/init_ca.py). Empty => step-ca self-inits an ephemeral root (today's behavior).
+  # See specs/internal-ca.md.
+  pin_ca = var.root_ca_cert != "" && var.intermediate_ca_cert != "" && var.intermediate_ca_key != ""
+
   # --- CA VM sub-config (step-ca compose) ---------------------------------
   # The CA's own IP can't be self-referenced in tofu, so DNS names carry a $${SELF_IP}
   # placeholder substituted at boot by a runcmd (the __SELF_IP__ pattern from docker-client).
@@ -96,6 +101,16 @@ locals {
     dns_ip = split(":", var.dns_server)[0]
   }) : ""
 
+  # --- Baseline time sync (unconditional; see specs/shared-ntp.md) -------------
+  # Single-sourced UTC + systemd-timesyncd block, injected at column 0 of every VM template.
+  ntp_timesync = templatefile("${path.module}/../_shared/cloud-init/ntp-timesync.yaml.tftpl", {})
+
+  # Opt-in internal NTP source — mirrors dns_server. Non-empty -> timesyncd points at ntp_ip (by IP).
+  use_ntp = var.ntp_server != ""
+  ntp_conf = local.use_ntp ? templatefile("${path.module}/../_shared/cloud-init/use-ntp.conf.tftpl", {
+    ntp_ip = split(":", var.ntp_server)[0]
+  }) : ""
+
   # One OTLP agent config per VM — OpenObserve derives the destination stream from stream-name,
   # so the ca and services VMs land in distinct streams.
   otel_agent_conf_ca = local.push_otlp ? templatefile("${path.module}/../_shared/cloud-init/otel-agent-config.yaml.tftpl", {
@@ -127,8 +142,19 @@ resource "local_file" "ca_ci" {
     openobserve_endpoint = var.openobserve_endpoint
     syslog_client_conf   = local.syslog_client_conf
     otel_agent_conf      = local.otel_agent_conf_ca
+    ntp_timesync         = local.ntp_timesync
+    ntp_server           = var.ntp_server
+    ntp_conf             = local.ntp_conf
     dns_server           = var.dns_server
     dns_resolved_conf    = local.dns_resolved_conf
+    # Fleet-wide trust of the internal root CA (specs/internal-ca.md).
+    internal_ca_cert = var.internal_ca_cert
+    # Persisted-root pinning (Phase 0). pin_ca gates a runcmd that swaps step-ca's self-generated
+    # root/intermediate for this pinned pair so the CA identity survives `just recreate`.
+    pin_ca               = local.pin_ca
+    root_ca_cert         = var.root_ca_cert
+    intermediate_ca_cert = var.intermediate_ca_cert
+    intermediate_ca_key  = var.intermediate_ca_key
     # Docker operator TUIs (wharf/oxker/dive) — the CA VM runs docker (step-ca).
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
@@ -168,8 +194,13 @@ resource "local_file" "services_ci" {
     openobserve_endpoint = var.openobserve_endpoint
     syslog_client_conf   = local.syslog_client_conf
     otel_agent_conf      = local.otel_agent_conf_services
+    ntp_timesync         = local.ntp_timesync
+    ntp_server           = var.ntp_server
+    ntp_conf             = local.ntp_conf
     dns_server           = var.dns_server
     dns_resolved_conf    = local.dns_resolved_conf
+    # Fleet-wide trust of the internal root CA (specs/internal-ca.md).
+    internal_ca_cert = var.internal_ca_cert
     # Docker operator TUIs (wharf/oxker/dive) — the services VM runs docker (Traefik/Authelia/etc).
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
@@ -183,4 +214,55 @@ resource "multipass_instance" "services" {
   memory         = var.services.memory
   disk           = var.services.disk
   cloudinit_file = local_file.services_ci.filename
+}
+
+# --- Hot-push artifacts (see specs/cross-cluster.md; `just refresh-cross-cluster`) ---
+# Discrete per-VM renders of the cross-cluster drop-ins, so a hub IP change can be scp'd onto an
+# already-running VM (content-only tofu apply, no recreate) instead of requiring a full reprovision.
+resource "local_file" "ca_resolved_conf" {
+  count    = local.use_dns ? 1 : 0
+  filename = "${local.render_dir}/ca-resolved.conf"
+  content  = local.dns_resolved_conf
+}
+
+resource "local_file" "services_resolved_conf" {
+  count    = local.use_dns ? 1 : 0
+  filename = "${local.render_dir}/services-resolved.conf"
+  content  = local.dns_resolved_conf
+}
+
+resource "local_file" "ca_ntp_conf" {
+  count    = local.use_ntp ? 1 : 0
+  filename = "${local.render_dir}/ca-ntp.conf"
+  content  = local.ntp_conf
+}
+
+resource "local_file" "services_ntp_conf" {
+  count    = local.use_ntp ? 1 : 0
+  filename = "${local.render_dir}/services-ntp.conf"
+  content  = local.ntp_conf
+}
+
+resource "local_file" "ca_ship_conf" {
+  count    = local.ship_logs ? 1 : 0
+  filename = "${local.render_dir}/ca-ship.conf"
+  content  = local.syslog_client_conf
+}
+
+resource "local_file" "services_ship_conf" {
+  count    = local.ship_logs ? 1 : 0
+  filename = "${local.render_dir}/services-ship.conf"
+  content  = local.syslog_client_conf
+}
+
+resource "local_file" "ca_otel_conf" {
+  count    = local.push_otlp ? 1 : 0
+  filename = "${local.render_dir}/ca-otel.yaml"
+  content  = local.otel_agent_conf_ca
+}
+
+resource "local_file" "services_otel_conf" {
+  count    = local.push_otlp ? 1 : 0
+  filename = "${local.render_dir}/services-otel.yaml"
+  content  = local.otel_agent_conf_services
 }

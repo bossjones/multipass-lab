@@ -5,12 +5,7 @@
 package_update: true
 package_upgrade: true
 
-# Time sync — pin every VM to UTC and keep the clock disciplined via systemd-timesyncd.
-# Declared here (not left to the image default) so log/metric timestamps align cluster-wide.
-timezone: Etc/UTC
-ntp:
-  enabled: true
-  ntp_client: systemd-timesyncd
+${ntp_timesync}
 
 packages:
   - syslog-ng
@@ -35,6 +30,22 @@ write_files:
     permissions: '0644'
     content: |
       ${indent(6, dns_resolved_conf)}
+%{ endif ~}
+%{ if ntp_server != "" ~}
+
+  # Internal NTP source — point systemd-timesyncd at the lab NTP server (shared snippet). See specs/shared-ntp.md.
+  - path: /etc/systemd/timesyncd.conf.d/99-centralized-ntp.conf
+    permissions: '0644'
+    content: |
+      ${indent(6, ntp_conf)}
+%{ endif ~}
+%{ if internal_ca_cert != "" ~}
+
+  # Fleet-wide trust — the internal root CA, installed into the OS trust store by a runcmd. See specs/internal-ca.md.
+  - path: /usr/local/share/ca-certificates/internal-root-ca.crt
+    permissions: '0644'
+    content: |
+      ${indent(6, internal_ca_cert)}
 %{ endif ~}
 
   # Generic exporter installer (copied from the centralized_monitoring cluster).
@@ -250,9 +261,26 @@ runcmd:
   # declarative `timezone:` key above. runcmd runs after the config modules, so it wins.
   # Harmless on Proxmox (already UTC). See specs/ntp.md.
   - timedatectl set-timezone Etc/UTC
+%{ if ntp_server != "" ~}
+  # Internal NTP source — apply the timesyncd drop-in written above. See specs/shared-ntp.md.
+  - systemctl restart systemd-timesyncd
+%{ endif ~}
 %{ if dns_server != "" ~}
   # Cross-cluster DNS — point this VM's resolver at the centralized_dns AdGuard Home hub.
   - systemctl restart systemd-resolved
+  # Wait until the new resolver actually answers before anything below pulls over the network
+  # (Docker's installer + `docker compose up` both need working DNS) — otherwise a boot-time race
+  # with the AdGuard hub warming up leaves the docker stack permanently empty (SERVFAIL on the
+  # image registry, no retry). Mirrors the wait pattern in centralized_dns/server.yaml.tftpl.
+  - |
+    for i in $(seq 1 30); do
+      getent hosts registry-1.docker.io >/dev/null 2>&1 && break
+      sleep 2
+    done
+%{ endif ~}
+%{ if internal_ca_cert != "" ~}
+  # Fleet-wide trust — install the internal root CA into the OS trust store. See specs/internal-ca.md.
+  - update-ca-certificates
 %{ endif ~}
   # syslog-ng shipper
   - mkdir -p /var/lib/syslog-ng /opt/stack
@@ -269,7 +297,13 @@ runcmd:
   - |
     SELF_IP=$(ip -4 route get 1.1.1.1 | awk '{print $7; exit}')
     sed -i "s/__SELF_IP__/$SELF_IP/g" /opt/stack/prometheus.yml
-  - docker compose -f /opt/stack/compose.yaml up -d
+  # Retry the stack bring-up so a transient DNS/registry SERVFAIL on a single image pull can't leave
+  # the stack down. See specs/cross-cluster.md.
+  - |
+    for i in $(seq 1 5); do
+      docker compose -f /opt/stack/compose.yaml up -d && break
+      echo "stack compose up attempt $i failed; retrying"; sleep 10
+    done
 %{ if enable_docker_tools ~}
   # Interactive docker operator TUIs (wharf/oxker/dive); best-effort so a download blip can't
   # break boot. Idempotent — re-run with `sudo /usr/local/sbin/install-docker-tools.sh`.

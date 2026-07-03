@@ -24,6 +24,16 @@ locals {
     dns_ip = split(":", var.dns_server)[0]
   }) : ""
 
+  # --- Baseline time sync (unconditional; see specs/shared-ntp.md) -------------
+  # Single-sourced UTC + systemd-timesyncd block, injected at column 0 of every VM template.
+  ntp_timesync = templatefile("${path.module}/../_shared/cloud-init/ntp-timesync.yaml.tftpl", {})
+
+  # Opt-in internal NTP source — mirrors dns_server. Non-empty -> timesyncd points at ntp_ip (by IP).
+  use_ntp = var.ntp_server != ""
+  ntp_conf = local.use_ntp ? templatefile("${path.module}/../_shared/cloud-init/use-ntp.conf.tftpl", {
+    ntp_ip = split(":", var.ntp_server)[0]
+  }) : ""
+
   # One map merged into every templatefile() so each cloud-init renders its own
   # %{ if ... ~}…%{ endif ~} blocks (mirrors clusters/centralized_logging/main.tf).
   flags = {
@@ -101,9 +111,13 @@ resource "local_file" "controller_ci" {
     # Docker operator TUIs (wharf/oxker/dive) — only installed in `exact` mode (docker present).
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
+    ntp_timesync           = local.ntp_timesync
+    ntp_server             = var.ntp_server
+    ntp_conf               = local.ntp_conf
     # Cross-cluster DNS (opt-in): point systemd-resolved at the centralized_dns hub at first boot.
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
+    internal_ca_cert  = var.internal_ca_cert
   }))
 }
 
@@ -131,9 +145,13 @@ resource "local_file" "usg_ci" {
     # Docker operator TUIs (wharf/oxker/dive) — only installed in `exact` mode (docker present).
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
+    ntp_timesync           = local.ntp_timesync
+    ntp_server             = var.ntp_server
+    ntp_conf               = local.ntp_conf
     # Cross-cluster DNS (opt-in): point systemd-resolved at the centralized_dns hub at first boot.
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
+    internal_ca_cert  = var.internal_ca_cert
   }))
 }
 
@@ -144,4 +162,31 @@ resource "multipass_instance" "usg" {
   memory         = var.usg.memory
   disk           = var.usg.disk
   cloudinit_file = local_file.usg_ci.filename
+}
+
+# --- Hot-push artifacts (see specs/cross-cluster.md; `just refresh-cross-cluster`) ---
+# Discrete per-VM renders of the DNS resolver drop-in, so a centralized_dns IP change can be
+# scp'd onto an already-running VM (content-only tofu apply, no recreate) instead of a reprovision.
+resource "local_file" "controller_resolved_conf" {
+  count    = local.use_dns ? 1 : 0
+  filename = "${local.render_dir}/controller-resolved.conf"
+  content  = local.dns_resolved_conf
+}
+
+resource "local_file" "usg_resolved_conf" {
+  count    = local.use_dns ? 1 : 0
+  filename = "${local.render_dir}/usg-resolved.conf"
+  content  = local.dns_resolved_conf
+}
+
+resource "local_file" "controller_ntp_conf" {
+  count    = local.use_ntp ? 1 : 0
+  filename = "${local.render_dir}/controller-ntp.conf"
+  content  = local.ntp_conf
+}
+
+resource "local_file" "usg_ntp_conf" {
+  count    = local.use_ntp ? 1 : 0
+  filename = "${local.render_dir}/usg-ntp.conf"
+  content  = local.ntp_conf
 }

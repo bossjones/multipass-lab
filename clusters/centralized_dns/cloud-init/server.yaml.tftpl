@@ -6,12 +6,17 @@
 package_update: true
 package_upgrade: false
 
-# Time sync — pin UTC + systemd-timesyncd (declared here, re-enforced in runcmd because
-# Multipass injects the host timezone at first boot; see specs/ntp.md).
-timezone: Etc/UTC
-ntp:
-  enabled: true
-  ntp_client: systemd-timesyncd
+${ntp_timesync}
+
+# unbound's postinst pulls in resolvconf and triggers unbound-resolvconf.service to register
+# unbound's loopback listener (127.0.0.1:5335) with systemd-resolved's per-link DNS mechanism —
+# which refuses loopback links ("Failed to set DNS configuration: Link lo is loopback device"),
+# so the unit fails on every boot. This box's resolver is systemd-resolved-driven, never
+# resolvconf-driven (see the DNSStubListener/resolv.conf handling below), so the hook is dead
+# weight. bootcmd runs before `packages:` installs unbound, so masking here makes the
+# postinst-triggered start a no-op instead of a failure.
+bootcmd:
+  - systemctl mask unbound-resolvconf.service
 
 packages:
   - curl
@@ -147,6 +152,34 @@ write_files:
     content: |
       ${indent(6, dns_resolved_conf)}
 %{ endif ~}
+%{ if ntp_server != "" ~}
+
+  # Internal NTP source — point systemd-timesyncd at the lab NTP server (shared snippet). See specs/shared-ntp.md.
+  - path: /etc/systemd/timesyncd.conf.d/99-centralized-ntp.conf
+    permissions: '0644'
+    content: |
+      ${indent(6, ntp_conf)}
+%{ endif ~}
+%{ if enable_ntp_server ~}
+
+  # Fleet NTP server — chrony serves time to the lab subnet (this box is the centralized_dns hub).
+  # `local stratum 10` keeps it serving even if upstream is briefly unreachable; chrony's own
+  # `pool` (from the base config) still disciplines this clock. Installing chrony (runcmd below)
+  # disables systemd-timesyncd — the two are alternatives. See specs/shared-ntp.md.
+  - path: /etc/chrony/conf.d/lab-ntp.conf
+    permissions: '0644'
+    content: |
+      allow all
+      local stratum 10
+%{ endif ~}
+%{ if internal_ca_cert != "" ~}
+
+  # Fleet-wide trust — the internal root CA, installed into the OS trust store by a runcmd. See specs/internal-ca.md.
+  - path: /usr/local/share/ca-certificates/internal-root-ca.crt
+    permissions: '0644'
+    content: |
+      ${indent(6, internal_ca_cert)}
+%{ endif ~}
 %{ if log_shipping_target != "" ~}
 
   # Cross-cluster log shipping — syslog-ng client drop-in (shared snippet). See specs/cross-cluster.md.
@@ -165,17 +198,33 @@ write_files:
 %{ endif ~}
 
 runcmd:
-  # Enforce UTC late (Multipass injects the host timezone during first boot). See specs/ntp.md.
+  # Enforce UTC late (Multipass injects the host timezone during first boot). See specs/shared-ntp.md.
   - timedatectl set-timezone Etc/UTC
+%{ if ntp_server != "" ~}
+  # Internal NTP source — apply the timesyncd drop-in written above. See specs/shared-ntp.md.
+  - systemctl restart systemd-timesyncd
+%{ endif ~}
+%{ if enable_ntp_server ~}
+  # Fleet NTP server — install chrony (disables timesyncd) and serve the lab subnet. See specs/shared-ntp.md.
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y chrony
+  - systemctl enable --now chrony
+  - systemctl restart chrony
+%{ endif ~}
 %{ if dns_server != "" ~}
   # Cross-cluster DNS — point this VM's resolver at the external AdGuard hub.
   - systemctl restart systemd-resolved
 %{ endif ~}
+%{ if internal_ca_cert != "" ~}
+  # Fleet-wide trust — install the internal root CA into the OS trust store. See specs/internal-ca.md.
+  - update-ca-certificates
+%{ endif ~}
 
   # --- Unbound (recursive upstream, 127.0.0.1:5335) -------------------------
   # apt's unbound ships built-in root hints + the packaged DNSSEC anchor (dns-root-data), so no
-  # downloads are needed. reset-failed clears any start-limit hit from the pre-config apt start.
-  - systemctl reset-failed unbound || true
+  # downloads are needed. reset-failed clears any start-limit hit from the pre-config apt start;
+  # unbound-resolvconf is included too as a safety net in case some trigger path bypasses the
+  # bootcmd mask above.
+  - systemctl reset-failed unbound unbound-resolvconf || true
   - unbound-checkconf || true
   - systemctl enable --now unbound
   # Wait until Unbound resolves before AdGuard is pointed at it.
@@ -247,7 +296,14 @@ runcmd:
     OTEL_VER=0.109.0
     arch="$(dpkg --print-architecture)"
     curl -sSLf "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$${OTEL_VER}/otelcol-contrib_$${OTEL_VER}_linux_$${arch}.deb" -o /tmp/otelcol.deb
-    DEBIAN_FRONTEND=noninteractive dpkg -i /tmp/otelcol.deb || DEBIAN_FRONTEND=noninteractive apt-get install -f -y
+    DEBIAN_FRONTEND=noninteractive dpkg --force-confdef --force-confold -i /tmp/otelcol.deb || DEBIAN_FRONTEND=noninteractive apt-get install -f -y
+  # The .deb's unit runs as otelcol-contrib:otelcol-contrib, not root — the dir above was created
+  # before that user existed, so it must be chowned after install or the collector crash-loops on
+  # "permission denied" opening its file_storage extension.
+  - chown -R otelcol-contrib:otelcol-contrib /var/lib/otelcol-contrib/storage
+  # /var/log/syslog is root:adm 0640 — the otelcol-contrib user must join `adm` or its filelog/host
+  # receiver silently fails every poll with "permission denied" (unit stays "active", logs never ship).
+  - usermod -aG adm otelcol-contrib
   - systemctl enable otelcol-contrib
   - systemctl restart otelcol-contrib
 %{ endif ~}
