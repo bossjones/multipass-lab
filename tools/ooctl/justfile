@@ -1,0 +1,53 @@
+# ooctl — async OpenObserve log-tailing CLI.
+# `just <recipe>`; run from tools/ooctl/. The tail/search/streams/health recipes
+# resolve the OpenObserve endpoint from the centralized_monitoring cluster's tofu
+# output and inject it via $OOCTL_ENDPOINT (overrides the profile's endpoint), so
+# `just up centralized_monitoring` is the only prerequisite for a live tail.
+
+# repo root is three levels up: tools/ooctl -> tools -> repo
+repo_root := justfile_directory() / ".." / ".."
+config := justfile_directory() / "example.config.yaml"
+
+default: install lint test
+
+install:
+    uv sync
+
+lint:
+    uv run ruff check .
+    uv run ruff format --check .
+
+fmt:
+    uv run ruff format .
+
+# hermetic unit tests (integration deselected by default)
+test:
+    uv run pytest
+
+# live integration tests (needs `just up centralized_monitoring`)
+test-int:
+    OOCTL_ENDPOINT="$(just _endpoint)" uv run pytest -m integration
+
+# resolve http://<server_ipv4>:5080 from tofu (internal helper)
+_endpoint:
+    @echo "http://$(tofu -chdir={{repo_root}}/clusters/centralized_monitoring output -raw server_ipv4):5080"
+
+# tail live logs, following:  just tail            (or: just tail dev)
+tail PROFILE="default" *ARGS:
+    OOCTL_ENDPOINT="$(just _endpoint)" uv run ooctl --config {{config}} --profile {{PROFILE}} logs tail -f {{ARGS}}
+
+# one-shot search:  just search default 'SELECT * FROM default'
+search PROFILE="default" SQL="SELECT * FROM default":
+    OOCTL_ENDPOINT="$(just _endpoint)" uv run ooctl --config {{config}} --profile {{PROFILE}} logs search --sql {{quote(SQL)}}
+
+# list streams:  just streams
+streams PROFILE="default":
+    OOCTL_ENDPOINT="$(just _endpoint)" uv run ooctl --config {{config}} --profile {{PROFILE}} streams list
+
+# liveness probe (exit nonzero if down):  just health
+health PROFILE="default":
+    OOCTL_ENDPOINT="$(just _endpoint)" uv run ooctl --config {{config}} --profile {{PROFILE}} health
+
+# print the resolved endpoint (debug)
+endpoint:
+    @just _endpoint

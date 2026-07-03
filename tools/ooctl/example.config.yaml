@@ -1,0 +1,25 @@
+# Example ooctl config. Copy to ~/.ooctl/config.yaml (or pass --config / $OOCTL_CONFIG).
+#
+# Schema mirrors o2-cli: a `profiles:` map keyed by profile name. Select one with
+# `--profile <name>` (default: "default"). Any field can be overridden at runtime
+# with an env var: OOCTL_ENDPOINT, OOCTL_ORG, OOCTL_USERNAME, OOCTL_PASSWORD.
+#
+# Lab note: OpenObserve runs in the centralized_monitoring cluster on the server VM
+# at :5080. Because Multipass hands out DHCP IPs, discover the endpoint with:
+#   tofu -chdir=clusters/centralized_monitoring output -raw server_ipv4   # -> http://<ip>:5080
+# and inject it via OOCTL_ENDPOINT (the tools/ooctl justfile does this for you).
+
+profiles:
+  default:
+    endpoint: http://127.0.0.1:5080
+    organization: default
+    username: admin@example.com
+    password: "Complexpass#123"   # lab dev default (local.openobserve_password)
+
+  dev:
+    endpoint: https://dev.openobserve.com
+    organization: dev-org
+    username: dev-user@company.com
+    password: dev-password
+    timeout: 30
+    verify: true
