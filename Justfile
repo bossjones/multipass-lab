@@ -32,6 +32,7 @@ help:
     @echo "  just init-all              tofu init every cluster (glob-discovered)"
     @echo "  just verify-all            run the live testinfra suite for every cluster"
     @echo "  just open   CLUSTER [--full]  open dashboards (core; --full adds /metrics endpoints)"
+    @echo "  just open-all [--full]     open dashboards for every cluster (glob-discovered)"
     @echo "  just ssh    CLUSTER ROLE   shell onto the <name>-<role> VM"
     @echo "  just destroy CLUSTER       tofu destroy + prune orphaned VMs (one cluster, gone)"
     @echo "  just recreate CLUSTER      destroy (incl. orphan cleanup) then up"
@@ -451,6 +452,19 @@ open CLUSTER *FLAGS:
       open -a "${BROWSER_APP:-Google Chrome}" "$u" 2>/dev/null || open "$u"
       sleep 0.25
     done <<< "$urls"
+
+# open dashboards for every cluster (glob-discovered; --full adds /metrics endpoints):  just open-all [--full]
+open-all *FLAGS:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=0
+    for dir in {{cluster_root}}/*/; do
+      cluster="$(basename "$dir")"
+      [ -f "$dir/main.tf" ] || continue   # skip non-cluster dirs like _shared/
+      echo "=== open: $cluster ==="
+      just open "$cluster" {{FLAGS}} || rc=1
+    done
+    exit "$rc"
 
 # list collected log files (central VM):  just logs centralized_logging
 logs CLUSTER:
