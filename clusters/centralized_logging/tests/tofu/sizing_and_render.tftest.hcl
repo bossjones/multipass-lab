@@ -6,6 +6,12 @@ mock_provider "multipass" {}
 variables {
   # Provide an inline key so the test never depends on a real ~/.ssh file.
   ssh_pubkey = "ssh-ed25519 AAAATESTKEY centralized-logging-tests"
+
+  # Pin these so the suite stays hermetic to whatever a developer has locally
+  # uncommented in terraform.tfvars — `tofu test` auto-loads that file just like
+  # plan/apply does. Runs that want them on override in their own variables {}.
+  enable_coroot  = false
+  enable_ingress = false
 }
 
 run "sizing_image_names_and_central_render" {
