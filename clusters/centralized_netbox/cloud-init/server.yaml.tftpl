@@ -69,25 +69,16 @@ write_files:
     permissions: '0644'
     content: |
       ${indent(6, diode_credentials)}
-  # Representative community-shaped Hydra bootstrap — registers the pinned OAuth2 clients from
-  # client-credentials.json into Ory Hydra. Adjust to the exact diode-server release in Phase 0.
-  - path: /opt/diode-seed/bootstrap-clients.sh
+  # Multi-DB initdb script — creates the `diode` + `hydra` databases in the shared postgres. This is
+  # the reconciliation for stock postgres ignoring POSTGRES_MULTIPLE_DATABASES; it reproduces the
+  # upstream diode compose's init SQL as a mounted /docker-entrypoint-initdb.d script. The three
+  # OAuth2 clients are registered into Hydra by the diode-auth image's own bootstrap-clients.sh
+  # (Ory Hydra CLI), which the compose invokes against the mounted client-credentials.json — so we
+  # no longer hand-roll that script. See specs/netbox-discovery.md.
+  - path: /opt/diode-seed/postgres-init.sh
     permissions: '0755'
     content: |
-      #!/usr/bin/env bash
-      set -uo pipefail
-      ADMIN="$${HYDRA_ADMIN_URL:-http://hydra:4445}"
-      CREDS=/etc/config/oauth2/client/client-credentials.json
-      for _ in $(seq 1 60); do curl -sf "$${ADMIN}/health/ready" >/dev/null 2>&1 && break; sleep 2; done
-      jq -c '.[]' "$${CREDS}" | while read -r c; do
-        cid="$(echo "$${c}" | jq -r .client_id)"
-        csec="$(echo "$${c}" | jq -r .client_secret)"
-        cscope="$(echo "$${c}" | jq -r .scope)"
-        curl -sf -X POST "$${ADMIN}/admin/clients" -H 'Content-Type: application/json' \
-          -d "{\"client_id\":\"$${cid}\",\"client_secret\":\"$${csec}\",\"grant_types\":[\"client_credentials\"],\"scope\":\"$${cscope}\",\"token_endpoint_auth_method\":\"client_secret_post\"}" \
-          >/dev/null 2>&1 || true
-      done
-      echo "diode oauth2 clients bootstrapped"
+      ${indent(6, diode_postgres_init)}
 %{ endif ~}
 
   # Async bring-up: clone + pull + up the stack, ensure the admin user + pinned v1 token via
@@ -190,17 +181,21 @@ write_files:
         /usr/local/sbin/netbox-seed.sh || return 1
 
 %{ if enable_discovery ~}
-        # 8. Bring up the Diode server stack (separate compose project under /opt/diode) with the
-        # pinned OAuth2 secrets. __SERVER_IP__ in the env is substituted with the runtime IP so the
-        # reconciler can reach NetBox's /api/plugins/diode over the host.
+        # 8. Bring up the Diode server stack (separate compose project under /opt/diode), reconciled
+        # to the actual netboxlabs/diode release layout: the compose reads /opt/diode/.env, mounts
+        # nginx.conf at conf.d/default.conf, the postgres initdb script at
+        # /docker-entrypoint-initdb.d, and oauth2/client/client-credentials.json (the diode-auth
+        # image's baked bootstrap-clients.sh registers the pinned clients into Hydra). __SERVER_IP__
+        # in the env is substituted with the runtime IP so the reconciler reaches NetBox's
+        # /api/plugins/diode over the host.
         SRV_IP="$(ip -4 route get 1.1.1.1 | awk '{print $7; exit}')"
-        mkdir -p /opt/diode/nginx /opt/diode/oauth2/client
+        mkdir -p /opt/diode/nginx /opt/diode/oauth2/client /opt/diode/postgres-init
         cp /opt/diode-seed/docker-compose.yaml /opt/diode/docker-compose.yaml
         sed "s/__SERVER_IP__/$SRV_IP/g" /opt/diode-seed/env > /opt/diode/.env
         cp /opt/diode-seed/nginx.conf /opt/diode/nginx/nginx.conf
         cp /opt/diode-seed/client-credentials.json /opt/diode/oauth2/client/client-credentials.json
-        cp /opt/diode-seed/bootstrap-clients.sh /opt/diode/oauth2/bootstrap-clients.sh
-        chmod +x /opt/diode/oauth2/bootstrap-clients.sh
+        cp /opt/diode-seed/postgres-init.sh /opt/diode/postgres-init/01-init-databases.sh
+        chmod +x /opt/diode/postgres-init/01-init-databases.sh
         ( cd /opt/diode && docker compose pull && docker compose up -d )
         touch /var/lib/netbox-bootstrap/discovery-done
 %{ endif ~}

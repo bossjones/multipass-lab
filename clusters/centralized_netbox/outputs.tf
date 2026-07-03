@@ -79,13 +79,8 @@ output "discovery_enabled" {
 }
 
 output "diode_url" {
-  description = "Base URL of the Diode ingress (gRPC + HTTP multiplexed on nginx). orb-agent targets grpc://<host>:<diode_port>/diode."
+  description = "Base URL of the Diode ingress (gRPC + HTTP multiplexed on nginx — the only host-published Diode port). orb-agent targets grpc://<host>:<diode_port>/diode."
   value       = "http://${multipass_instance.server.ipv4}:${var.diode_port}"
-}
-
-output "diode_metrics_url" {
-  description = "Diode Prometheus /metrics URL (published when enable_discovery)."
-  value       = "http://${multipass_instance.server.ipv4}:${var.diode_metrics_port}/metrics"
 }
 
 output "diode_ingest_client_id" {
@@ -95,9 +90,9 @@ output "diode_ingest_client_id" {
 
 # Browser URLs for `just open centralized_netbox [--full]`. core = the NetBox UI; all folds in
 # the API root (handy for a quick token-less 200 check in the browser) plus, when discovery is on,
-# the Diode /metrics endpoint.
+# the Diode ingress URL (the only host-published Diode port).
 output "web_urls" {
-  description = "Browser URLs. core = NetBox UI; all = core + the REST API root (+ Diode /metrics when enable_discovery). Consumed by `just open <cluster> [--full]`."
+  description = "Browser URLs. core = NetBox UI; all = core + the REST API root (+ the Diode ingress URL when enable_discovery). Consumed by `just open <cluster> [--full]`."
   value = {
     core = ["http://${multipass_instance.server.ipv4}:${var.netbox_port}/"]
     all = concat(
@@ -105,7 +100,7 @@ output "web_urls" {
         "http://${multipass_instance.server.ipv4}:${var.netbox_port}/",
         "http://${multipass_instance.server.ipv4}:${var.netbox_port}/api/",
       ],
-      var.enable_discovery ? ["http://${multipass_instance.server.ipv4}:${var.diode_metrics_port}/metrics"] : [],
+      var.enable_discovery ? ["http://${multipass_instance.server.ipv4}:${var.diode_port}"] : [],
     )
   }
 }

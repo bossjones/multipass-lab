@@ -128,11 +128,14 @@ def client(hosts, ssh_config_file):
 
 @pytest.fixture(scope="session")
 def discovery(tofu_output):
-    """Discovery (opt-in Diode + orb-agent) coordinates. {enabled, diode_url, diode_metrics_url}."""
+    """Discovery (opt-in Diode + orb-agent) coordinates. {enabled, diode_url}.
+
+    The real netboxlabs/diode release publishes only the nginx ingress port (gRPC + HTTP mux); it
+    does not publish per-service Prometheus /metrics ports, so there is no metrics URL to expose.
+    """
     return {
         "enabled": tofu_output["discovery_enabled"]["value"],
         "diode_url": tofu_output["diode_url"]["value"],
-        "diode_metrics_url": tofu_output["diode_metrics_url"]["value"],
     }
 
 
