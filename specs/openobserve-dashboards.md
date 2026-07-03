@@ -67,6 +67,7 @@ fields.)
 | `LogAnalysis` | Day-to-day log analysis — volume, errors, per-host, containers, pods. (Named `LogAnalysis`, not `Logs`, to avoid the `**/logs` gitignore rule on case-insensitive filesystems.) |
 | `Correlation` | Cross-signal boards that line logs up against metrics and traces. |
 | `Infrastructure` | Single-signal metrics/traces boards — host resources, container resources, uptime probing, Prometheus self-health, and OTLP traces. See "Imported/adapted from OpenObserve community dashboards" below. |
+| `DNS` | AdGuard Home + Unbound resolver health, PromQL over the `metrics` stream. Cross-cluster — populates only after `just up-connected` scrapes the `centralized_dns` exporters. |
 
 ## Dashboard inventory
 
@@ -87,6 +88,17 @@ Files live under `clusters/centralized_monitoring/openobserve/dashboards/<Folder
 | `Infrastructure/traces-by-service.json` | **Traces By Service** | Per-service span count over time, errors by service, p95 latency by service (GROUP BY, no variable — see below). |
 | `Infrastructure/host-metrics.json` | **Host Metrics** | node_exporter CPU/memory/disk/network/load, per instance (monitoring server + k0s node). |
 | `Infrastructure/container-metrics.json` | **Container Metrics** | cadvisor CPU/memory/network/filesystem per container (`container_label_com_docker_compose_service`), on the server + k0s node only — does not cover NetBox's Postgres/Redis containers (not cadvisor-scraped). |
+| `DNS/adguard-home.json` | **AdGuard Home** | PromQL over `metrics`: running/queries/blocked/block-% stats, queries-vs-blocked timeseries, query types, top queried/blocked domains + top clients (SQL tables over the `adguard_top_*` metric streams), processing-time percentiles, scrape errors. |
+| `DNS/unbound.json` | **Unbound Resolver** | PromQL over `metrics`: up/total-queries/cache-hit-ratio/recursion stats, query rate, cache hits-vs-misses, answer RCODEs, DNSSEC secure/bogus, query types, request list, cache memory, unwanted queries/replies. |
+
+**DNS boards (`henrywhitaker3/adguard-exporter` + `letsencrypt/unbound_exporter`).** Both boards
+query the `metrics` stream via `queryType: "promql"` (mirroring `Infrastructure/*`), against the
+`adguard_*` / `unbound_*` series `remote_write`n from this cluster's Prometheus — which only scrapes
+the `centralized_dns` exporters (jobs `centralized-dns-adguard` `:9618`, `centralized-dns-unbound`
+`:9167`) **after `just up-connected`**. Until then the panels are empty. The `top_*` tables use SQL
+over the per-metric streams (`SELECT domain, max(value) FROM "adguard_top_queried_domains" …`); AdGuard
+`_queries`/`_blocked_*` are 24h-window gauges (raw), Unbound `*_total` are counters (`rate()`).
+See `specs/dns-dashboards.md`.
 
 ### Imported/adapted from OpenObserve community dashboards
 

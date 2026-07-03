@@ -525,6 +525,8 @@ run "grafana_dashboards_render" {
       "/opt/stack/grafana/dashboards/Netdata/netdata-fleet.json",
       "/opt/stack/grafana/dashboards/Netdata/netdata-instance.json",
       "/opt/stack/grafana/dashboards/Netdata/netdata-containers.json",
+      "/opt/stack/grafana/dashboards/DNS/adguard-home.json",
+      "/opt/stack/grafana/dashboards/DNS/unbound.json",
     ] : strcontains(local_file.server_ci.content, p)])
     error_message = "every dashboard JSON must be spliced into the server cloud-init under its folder subdir"
   }
@@ -558,6 +560,8 @@ run "openobserve_dashboards_render" {
       "/opt/stack/openobserve/dashboards/Infrastructure/traces-overview.json",
       "/opt/stack/openobserve/dashboards/LogAnalysis/log-overview.json",
       "/opt/stack/openobserve/dashboards/Correlation/cause-effect.json",
+      "/opt/stack/openobserve/dashboards/DNS/adguard-home.json",
+      "/opt/stack/openobserve/dashboards/DNS/unbound.json",
       "/usr/local/sbin/openobserve-provision.sh",
       "openobserve-provision.sh || true",
     ] : strcontains(local_file.server_ci.content, marker)])

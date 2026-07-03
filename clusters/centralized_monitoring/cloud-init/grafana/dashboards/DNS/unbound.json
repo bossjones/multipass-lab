@@ -1,0 +1,241 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["dns", "unbound"],
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "label": "Instance",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(unbound_up, instance)",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(unbound_up, instance)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "sort": 1,
+        "includeAll": true,
+        "multi": false,
+        "current": {},
+        "options": []
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "title": "Unbound Resolver",
+  "uid": "unbound",
+  "version": 1,
+  "panels": [
+    {
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "type": "text",
+      "title": "",
+      "options": {
+        "mode": "markdown",
+        "content": "**Unbound** — recursive DNSSEC-validating upstream on the `centralized_dns` VM (`127.0.0.1:5335`, `unbound_exporter` `:9167`, Prometheus job `centralized-dns-unbound`). Panels populate only after `just up-connected` wires the DNS exporters into this cluster's Prometheus. Unbound `*_total` series are counters — charted with `rate()`."
+      }
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 3 },
+      "id": 1,
+      "title": "Up",
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ],
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "max(unbound_up{instance=~\"$instance\"})", "instant": true, "legendFormat": "up", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 5, "x": 4, "y": 3 },
+      "id": 2,
+      "title": "Uptime",
+      "type": "stat",
+      "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": { "colorMode": "none", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "max(unbound_time_up_seconds_total{instance=~\"$instance\"})", "instant": true, "legendFormat": "uptime", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 5, "x": 9, "y": 3 },
+      "id": 3,
+      "title": "Total queries",
+      "type": "stat",
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": { "colorMode": "none", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "sum(unbound_queries_total{instance=~\"$instance\"})", "instant": true, "legendFormat": "queries", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 5, "x": 14, "y": 3 },
+      "id": 4,
+      "title": "Cache hit ratio",
+      "type": "gauge",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit", "min": 0, "max": 1,
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 0.5 }, { "color": "green", "value": 0.8 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "sum(rate(unbound_cache_hits_total{instance=~\"$instance\"}[5m])) / clamp_min(sum(rate(unbound_cache_hits_total{instance=~\"$instance\"}[5m])) + sum(rate(unbound_cache_misses_total{instance=~\"$instance\"}[5m])), 1)", "instant": true, "legendFormat": "hit ratio", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 5, "x": 19, "y": 3 },
+      "id": 5,
+      "title": "Avg recursion time",
+      "type": "stat",
+      "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": { "colorMode": "none", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "avg(unbound_recursion_time_seconds_avg{instance=~\"$instance\"})", "instant": true, "legendFormat": "recursion", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
+      "id": 6,
+      "title": "Query rate",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "qps", "custom": { "fillOpacity": 20 } }, "overrides": [] },
+      "targets": [
+        { "expr": "sum(rate(unbound_queries_total{instance=~\"$instance\"}[5m]))", "legendFormat": "queries/s", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
+      "id": 7,
+      "title": "Cache hits vs misses",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "fillOpacity": 20 } }, "overrides": [] },
+      "targets": [
+        { "expr": "sum(rate(unbound_cache_hits_total{instance=~\"$instance\"}[5m]))", "legendFormat": "hits/s", "refId": "A" },
+        { "expr": "sum(rate(unbound_cache_misses_total{instance=~\"$instance\"}[5m]))", "legendFormat": "misses/s", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "id": 8,
+      "title": "Cache hit ratio %",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        { "expr": "sum(rate(unbound_cache_hits_total{instance=~\"$instance\"}[5m])) / clamp_min(sum(rate(unbound_cache_hits_total{instance=~\"$instance\"}[5m])) + sum(rate(unbound_cache_misses_total{instance=~\"$instance\"}[5m])), 1)", "legendFormat": "hit ratio", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "id": 9,
+      "title": "Answer RCODEs",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "fillOpacity": 30, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "targets": [
+        { "expr": "sum by (rcode) (rate(unbound_answer_rcodes_total{instance=~\"$instance\"}[5m]))", "legendFormat": "{{rcode}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 },
+      "id": 10,
+      "title": "DNSSEC validation",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "expr": "sum(rate(unbound_answers_secure_total{instance=~\"$instance\"}[5m]))", "legendFormat": "secure/s", "refId": "A" },
+        { "expr": "sum(rate(unbound_answers_bogus_total{instance=~\"$instance\"}[5m]))", "legendFormat": "bogus/s", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
+      "id": 11,
+      "title": "Query types",
+      "type": "bargauge",
+      "fieldConfig": { "defaults": { "unit": "ops", "color": { "mode": "palette-classic" } }, "overrides": [] },
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"], "values": false } },
+      "targets": [
+        { "expr": "sum by (type) (rate(unbound_query_types_total{instance=~\"$instance\"}[5m]))", "instant": true, "legendFormat": "{{type}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 31 },
+      "id": 12,
+      "title": "Recursion time",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "expr": "avg(unbound_recursion_time_seconds_avg{instance=~\"$instance\"})", "legendFormat": "avg", "refId": "A" },
+        { "expr": "avg(unbound_recursion_time_seconds_median{instance=~\"$instance\"})", "legendFormat": "median", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 31 },
+      "id": 13,
+      "title": "Request list",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "expr": "sum(unbound_request_list_current_all{instance=~\"$instance\"})", "legendFormat": "current (all)", "refId": "A" },
+        { "expr": "sum(unbound_request_list_current_user{instance=~\"$instance\"})", "legendFormat": "current (user)", "refId": "B" },
+        { "expr": "max(unbound_request_list_max{instance=~\"$instance\"})", "legendFormat": "max", "refId": "C" },
+        { "expr": "sum(rate(unbound_request_list_exceeded_total{instance=~\"$instance\"}[5m]))", "legendFormat": "exceeded/s", "refId": "D" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 39 },
+      "id": 14,
+      "title": "Cache memory",
+      "type": "bargauge",
+      "fieldConfig": { "defaults": { "unit": "bytes", "color": { "mode": "continuous-BlPu" } }, "overrides": [] },
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"], "values": false } },
+      "targets": [
+        { "expr": "sum by (cache) (unbound_memory_caches_bytes{instance=~\"$instance\"})", "instant": true, "legendFormat": "cache {{cache}}", "refId": "A" },
+        { "expr": "sum by (module) (unbound_memory_modules_bytes{instance=~\"$instance\"})", "instant": true, "legendFormat": "module {{module}}", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 39 },
+      "id": 15,
+      "title": "Unwanted queries / replies",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "expr": "sum(rate(unbound_unwanted_queries_total{instance=~\"$instance\"}[5m]))", "legendFormat": "unwanted queries/s", "refId": "A" },
+        { "expr": "sum(rate(unbound_unwanted_replies_total{instance=~\"$instance\"}[5m]))", "legendFormat": "unwanted replies/s", "refId": "B" }
+      ]
+    }
+  ]
+}

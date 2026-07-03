@@ -109,6 +109,8 @@ def test_grafana_dashboards_provisioned(server):
         "netdata-fleet",
         "netdata-instance",
         "netdata-containers",
+        "adguard-home",
+        "unbound",
     }
     missing = expected - uids
     assert not missing, f"dashboards not provisioned: {missing} (have {uids})"

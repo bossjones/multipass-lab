@@ -41,6 +41,7 @@ dashboards imported from [grafana.com](https://grafana.com/grafana/dashboards/).
 | `Kubernetes` | k0s node / cluster state (cAdvisor + kube-state-metrics). |
 | `Logging` | syslog-ng pipeline health (logging cluster only). |
 | `Netdata` | Real-time host + container views from the scraped `netdata_*` series. |
+| `DNS` | AdGuard Home + Unbound resolver health (cross-cluster — see below). |
 
 ## Dashboard inventory
 
@@ -54,9 +55,24 @@ dashboards imported from [grafana.com](https://grafana.com/grafana/dashboards/).
 | `Netdata/netdata-fleet.json` | Netdata — Fleet | `$instance` (multi); per-second CPU busy %, RAM used %, load1, root-FS used %, net rx/tx across every VM from the scraped `netdata_*` series. |
 | `Netdata/netdata-instance.json` | Netdata — Instance | `$instance`; realtime deep dive — CPU by mode (stacked), memory breakdown, per-mount disk, disk I/O, per-interface net, load. |
 | `Netdata/netdata-containers.json` | Netdata — Containers | `$instance` + `$container`; per-container CPU/mem/net/PIDs/throttling keyed on netdata's resolved **`cgroup_name`** + **`image`** labels — never a container id. |
+| `DNS/adguard-home.json` | AdGuard Home | `$instance`; running/protection/queries/blocked/block-% stats, queries-vs-blocked + blocked-by-reason timeseries, query-types + top queried/blocked domains + top clients + top-upstream response (bargauge), processing-time percentiles. |
+| `DNS/unbound.json` | Unbound Resolver | `$instance`; up/uptime/total-queries/cache-hit-ratio/recursion stats, query rate, cache hits-vs-misses + ratio, answer RCODEs, DNSSEC secure/bogus, query types, recursion time, request list, cache memory, unwanted queries/replies. |
 
 The two original starter dashboards are retained (moved to `Instances/`) with their
 datasource uid corrected.
+
+**DNS boards are cross-cluster (populate only after `just up-connected`).** The AdGuard/Unbound
+exporters live on the `centralized_dns` VM and are scraped by **this** cluster's Prometheus only
+after `just up-connected` hot-pushes them as `extra_scrape_targets` (jobs `centralized-dns-adguard`
+`:9618`, `centralized-dns-unbound` `:9167`, `centralized-dns-server` `:9100`). A standalone
+`just up centralized_monitoring` leaves the DNS panels empty — documented via a text panel on each
+board. Metric names track the deployed exporters: `adguard_*` from
+[`henrywhitaker3/adguard-exporter`](https://github.com/henrywhitaker3/adguard-exporter) (grafana.com
+[20799](https://grafana.com/grafana/dashboards/20799)) and `unbound_*` from
+[`letsencrypt/unbound_exporter`](https://github.com/letsencrypt/unbound_exporter) (grafana.com
+[18077](https://grafana.com/grafana/dashboards/18077), [`ar51an/unbound-dashboard`](https://github.com/ar51an/unbound-dashboard)).
+AdGuard `_queries`/`_blocked_*`/`top_*` are **24h-window gauges** (plotted raw / `topk()`, never
+`rate()`); Unbound `*_total` are counters (`rate()`). See `specs/dns-dashboards.md`.
 
 **Netdata series names (verified live, netdata v2.10.3).** The `netdata_*` metric names are
 version-dependent — panels were built against a live `curl :19999/api/v1/allmetrics?format=prometheus`
