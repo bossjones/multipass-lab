@@ -561,5 +561,8 @@ clusters/*/.cross-cluster.auto.tfvars.json
 clusters/*/ca-material.auto.tfvars
 clusters/*/.ca/
 
+# Bulk bring-up feature flags written by `just up-all` (enable_coroot / enable_discovery)
+clusters/*/.flags.auto.tfvars.json
+
 **/.claude/data
 **/logs

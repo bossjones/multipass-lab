@@ -52,6 +52,12 @@ variable "internal_ca_cert" {
   default     = ""
 }
 
+variable "domain" {
+  description = "DNS suffix for internal service hostnames registered into centralized_dns AdGuard (via `just set-dns`)."
+  type        = string
+  default     = "lab.theblacktonystark.com"
+}
+
 # --- Metrics / exporter layer feature flags ---------------------------------
 # Each flag gates an exporter's *install* in cloud-init (there is no local scrape to
 # gate — see specs/centralized_logging_metrics.md). A disabled flag = not installed,

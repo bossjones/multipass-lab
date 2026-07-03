@@ -120,8 +120,9 @@ Reuse the PKI cluster's proven "get a leaf" recipe (`issue-cert.sh` + JWK `admin
      boot and fronts Grafana/Prometheus/Alertmanager/OpenObserve/Uptime-Kuma via Traefik `:443`
      (file provider + `defaultCertificate`), **additive** to the existing `http://IP:port` publishes.
      SANs `grafana.<domain>` etc. `INTERNAL_TLS=1 just up-connected` wires `ca_ip`/`stepca_ca_password`
-     (when the CA is up) + `just dns-register` hot-pushes the AdGuard rewrites; `just
-     tls-check-monitoring` verifies the chain.
+     (when the CA is up) + runs `just set-dns-all` as its final step to register the AdGuard rewrites
+     (via `adguard_cli rewrite-sync`); `just tls-check-monitoring` verifies the chain. The DNS
+     auto-registration mechanism is covered in the combined spec `specs/pki-and-dns.md`.
   2. **centralized_logging** — already runs Traefik `:80`; add `:443` + leaf for Heimdall/Grafana.
   3. **centralized_netbox** — NetBox UI/API + the Diode nginx ingress (gRPC benefits from TLS).
   4. **centralized_dns** — AdGuard Home UI (single service; lower priority).

@@ -285,6 +285,12 @@ variable "internal_ca_cert" {
   default     = ""
 }
 
+variable "domain" {
+  description = "DNS suffix for internal service hostnames registered into centralized_dns AdGuard (via `just set-dns`)."
+  type        = string
+  default     = "lab.theblacktonystark.com"
+}
+
 variable "ssh_pubkey_path" {
   description = "Path to the SSH public key injected into the ubuntu user (used by the testinfra verify loop)."
   type        = string

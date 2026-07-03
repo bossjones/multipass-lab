@@ -1,5 +1,16 @@
 # Phase 2 tutorial: internal-CA TLS for `centralized_monitoring`
 
+> **⚠️ DNS-registration mechanism changed (superseded by `specs/pki-and-dns.md`).** This tutorial
+> was written when TLS hostnames were resolved by a `dns_rewrites` var baked into `AdGuardHome.yaml`
+> plus a `just dns-register` recipe (scp the rendered config + restart AdGuard). That mechanism has
+> been **retired**. Service hostnames are now registered at runtime over the AdGuard REST API by
+> **`just set-dns <cluster>` / `just set-dns-all`** (each cluster exposes a `dns_records` output;
+> `adguard_cli rewrite-sync` pushes them idempotently — no recreate, no restart). `up-connected`
+> runs `set-dns-all` as its final step. Wherever this doc says `just dns-register centralized_monitoring`,
+> run **`just set-dns centralized_monitoring`** instead; the `dns_rewrites` var / `AdGuardHome.yaml`
+> templating / `dns_rewrites_*` tofu tests no longer exist. See `specs/pki-and-dns.md` for the
+> current design. The TLS-issuance half of this tutorial (Parts A–C) is unchanged and still accurate.
+
 This is a runbook and mental-model walkthrough for **Phase 2** of `specs/internal-ca.md`: the
 first cluster in the lab to actually *serve* HTTPS with a leaf issued by the internal step-ca,
 instead of merely trusting its root. It builds directly on `docs/internal-ca-tutorial.md`
@@ -592,7 +603,7 @@ domain            = "lab.theblacktonystark.com"
 EOF
 just check centralized_monitoring     # hermetic sanity check first
 just recreate centralized_monitoring  # MUST be recreate — cloud-init changed
-just dns-register centralized_monitoring
+just set-dns centralized_monitoring    # register grafana.<domain> etc. into AdGuard (REST, no recreate)
 ```
 
 Remember to remove `tls.auto.tfvars` afterward if you don't want it silently affecting future

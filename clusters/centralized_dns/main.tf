@@ -31,7 +31,6 @@ locals {
     adguard_web_port      = var.adguard_web_port
     upstream_unbound      = var.upstream_unbound
     blocklists            = var.blocklists
-    dns_rewrites          = var.dns_rewrites
   })
 
   unbound_conf = file("${path.module}/cloud-init/unbound/unbound.conf")
@@ -104,20 +103,19 @@ resource "multipass_instance" "server" {
 # for scp onto the running VM. count=0 (empty files absent) keeps a plain `just up` clean.
 resource "local_file" "ship_conf" {
   count    = local.ship_logs ? 1 : 0
-  filename = "${local.render_dir}/10-ship.conf"
+  filename = "${local.render_dir}/server-ship.conf"
   content  = local.syslog_client_conf
 }
 
 resource "local_file" "otel_conf" {
   count    = local.push_otlp ? 1 : 0
-  filename = "${local.render_dir}/otel-config.yaml"
+  filename = "${local.render_dir}/server-otel.yaml"
   content  = local.otel_agent_conf
 }
 
-# The seeded AdGuard config, rendered standalone so `just dns-register <cluster>` can hot-push
-# updated host rewrites (internal-CA TLS hostnames) onto the running VM without a recreate — the
-# DNS IP the whole fleet points at must stay stable. Always present (mirrors the embedded copy in
-# server.yaml's write_files). See specs/internal-ca.md.
+# The seeded AdGuard config, rendered standalone (mirrors the embedded copy in server.yaml's
+# write_files). Host rewrites start empty here; service hostnames are registered at runtime over
+# the AdGuard REST API by `just set-dns` / `set-dns-all`. See specs/pki-and-dns.md.
 resource "local_file" "adguard_conf" {
   filename = "${local.render_dir}/AdGuardHome.yaml"
   content  = local.adguard_conf

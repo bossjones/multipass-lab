@@ -17,6 +17,16 @@ output "hosts" {
   }
 }
 
+# Service hostname -> IP A-record for the fleet resolver. This is a logging stand-in (the
+# controller VM runs syslog-ng, not a real UniFi controller UI), but the record is registered
+# for uniformity so `unifi.<domain>` resolves to that VM. `just set-dns` registers it in AdGuard.
+output "dns_records" {
+  description = "hostname -> ipv4 A-records to register in centralized_dns AdGuard. Consumed by `just set-dns`."
+  value = {
+    "unifi.${var.domain}" = multipass_instance.controller.ipv4
+  }
+}
+
 output "version_mode" {
   description = "Fidelity mode in effect: 'exact' (period Debian packages in containers) or 'modern' (Ubuntu-stock on the bare VM)."
   value       = var.version_mode

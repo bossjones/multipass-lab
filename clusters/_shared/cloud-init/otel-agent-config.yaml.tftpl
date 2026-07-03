@@ -15,7 +15,9 @@ receivers:
     storage: file_storage
 
 extensions:
-  # Persistent filelog read offsets. The unit runs as root, so this dir is writable.
+  # Persistent filelog read offsets. The rendering cloud-init must chown this dir to whatever
+  # user the otelcol-contrib unit runs as (the upstream .deb's unit is otelcol-contrib:otelcol-contrib,
+  # not root) — see clusters/centralized_dns and centralized_pki's runcmd for the chown step.
   file_storage:
     directory: /var/lib/otelcol-contrib/storage
 

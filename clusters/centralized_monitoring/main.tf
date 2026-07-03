@@ -293,6 +293,27 @@ resource "local_file" "prometheus_yml" {
   content  = local.prometheus_yml
 }
 
+# --- Hot-push artifacts (see specs/cross-cluster.md; `just refresh-cross-cluster`) ---
+# Discrete per-VM renders of the DNS resolver + syslog shipper drop-ins, so a hub IP change can be
+# scp'd onto an already-running VM (content-only tofu apply, no recreate) instead of a reprovision.
+resource "local_file" "server_resolved_conf" {
+  count    = local.use_dns ? 1 : 0
+  filename = "${local.render_dir}/server-resolved.conf"
+  content  = local.dns_resolved_conf
+}
+
+resource "local_file" "k0s_resolved_conf" {
+  count    = local.use_dns ? 1 : 0
+  filename = "${local.render_dir}/k0s-resolved.conf"
+  content  = local.dns_resolved_conf
+}
+
+resource "local_file" "server_ship_conf" {
+  count    = local.ship_logs ? 1 : 0
+  filename = "${local.render_dir}/server-ship.conf"
+  content  = local.syslog_client_conf
+}
+
 # --- k0s log shipping: post-apply endpoint injection ------------------------
 # The k0s VM boots before the server, so its otelcol agent ships to a 127.0.0.1 placeholder
 # until now. Re-render the agent config with the server's real IP, then push it onto the k0s

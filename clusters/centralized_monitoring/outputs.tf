@@ -3,8 +3,8 @@ output "server_ipv4" {
   value       = multipass_instance.server.ipv4
 }
 
-# DNS suffix for the internal-CA TLS hostnames (grafana.<domain>, …). Read by `just dns-register`
-# and the tls_cli chain check. See specs/internal-ca.md.
+# DNS suffix for the internal-CA TLS hostnames (grafana.<domain>, …). Feeds the dns_records output
+# (below) that `just set-dns` registers, and the tls_cli chain check. See specs/pki-and-dns.md.
 output "domain" {
   description = "DNS suffix for internal service hostnames when use_internal_tls is on."
   value       = var.domain
@@ -21,6 +21,19 @@ output "hosts" {
   value = {
     server = { name = local.server_name, ipv4 = multipass_instance.server.ipv4 }
     k0s    = { name = local.k0s_name, ipv4 = multipass_instance.k0s.ipv4 }
+  }
+}
+
+# Service hostname -> IP A-records for the fleet resolver (all dashboards live on the server VM).
+# `just set-dns` reads this and registers each as an AdGuard rewrite.
+output "dns_records" {
+  description = "hostname -> ipv4 A-records to register in centralized_dns AdGuard. Consumed by `just set-dns`."
+  value = {
+    "grafana.${var.domain}"      = multipass_instance.server.ipv4
+    "prometheus.${var.domain}"   = multipass_instance.server.ipv4
+    "alertmanager.${var.domain}" = multipass_instance.server.ipv4
+    "openobserve.${var.domain}"  = multipass_instance.server.ipv4
+    "uptime.${var.domain}"       = multipass_instance.server.ipv4
   }
 }
 

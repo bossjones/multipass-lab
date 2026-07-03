@@ -43,18 +43,10 @@ filtering:
   enabled: true
   filtering_enabled: true
   protection_enabled: true
-  # Host rewrites (domain -> IP). Seeded from var.dns_rewrites so internal-CA TLS hostnames
-  # (grafana.<domain>, …) resolve to the fronting service's IP for green-lock browsing. Empty by
-  # default. See specs/internal-ca.md.
-%{ if length(dns_rewrites) > 0 ~}
-  rewrites:
-%{ for r in dns_rewrites ~}
-    - domain: ${r.domain}
-      answer: ${r.answer}
-%{ endfor ~}
-%{ else ~}
+  # Host rewrites (domain -> IP) start empty; service hostnames (grafana.<domain>, netbox.<domain>,
+  # …) are registered at runtime via the AdGuard REST API by `just set-dns` / `set-dns-all`
+  # (adguard_cli rewrite-sync), which writes them back into this file. See specs/pki-and-dns.md.
   rewrites: []
-%{ endif ~}
   blocked_services:
     schedule:
       time_zone: Local

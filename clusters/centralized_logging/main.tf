@@ -200,3 +200,24 @@ resource "multipass_instance" "docker" {
   disk           = var.docker_client.disk
   cloudinit_file = local_file.docker_ci.filename
 }
+
+# --- Hot-push artifacts (see specs/cross-cluster.md; `just refresh-cross-cluster`) ---
+# Discrete per-VM renders of the DNS resolver drop-in, so a centralized_dns IP change can be
+# scp'd onto an already-running VM (content-only tofu apply, no recreate) instead of a reprovision.
+resource "local_file" "central_resolved_conf" {
+  count    = local.use_dns ? 1 : 0
+  filename = "${local.render_dir}/central-resolved.conf"
+  content  = local.dns_resolved_conf
+}
+
+resource "local_file" "k0s_resolved_conf" {
+  count    = local.use_dns ? 1 : 0
+  filename = "${local.render_dir}/k0s-resolved.conf"
+  content  = local.dns_resolved_conf
+}
+
+resource "local_file" "docker_resolved_conf" {
+  count    = local.use_dns ? 1 : 0
+  filename = "${local.render_dir}/docker-resolved.conf"
+  content  = local.dns_resolved_conf
+}

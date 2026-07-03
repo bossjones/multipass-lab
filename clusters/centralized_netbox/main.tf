@@ -260,3 +260,24 @@ resource "multipass_instance" "agent" {
   disk           = var.agent.disk
   cloudinit_file = local_file.agent_ci[0].filename
 }
+
+# --- Hot-push artifacts (see specs/cross-cluster.md; `just refresh-cross-cluster`) ---
+# Discrete per-VM renders of the DNS resolver drop-in, so a centralized_dns IP change can be
+# scp'd onto an already-running VM (content-only tofu apply, no recreate) instead of a reprovision.
+resource "local_file" "server_resolved_conf" {
+  count    = local.use_dns ? 1 : 0
+  filename = "${local.render_dir}/server-resolved.conf"
+  content  = local.dns_resolved_conf
+}
+
+resource "local_file" "client_resolved_conf" {
+  count    = local.use_dns ? 1 : 0
+  filename = "${local.render_dir}/client-resolved.conf"
+  content  = local.dns_resolved_conf
+}
+
+resource "local_file" "agent_resolved_conf" {
+  count    = local.use_dns && var.enable_discovery ? 1 : 0
+  filename = "${local.render_dir}/agent-resolved.conf"
+  content  = local.dns_resolved_conf
+}

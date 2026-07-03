@@ -41,6 +41,12 @@ variable "internal_ca_cert" {
   default     = ""
 }
 
+variable "domain" {
+  description = "DNS suffix for internal service hostnames registered into centralized_dns AdGuard (via `just set-dns`)."
+  type        = string
+  default     = "lab.theblacktonystark.com"
+}
+
 # --- Fidelity model ----------------------------------------------------------
 # `exact` (default): run the appliances' ACTUAL Debian packages in containers —
 #   syslog-ng 3.28.1 (bullseye, native arm64) + rsyslog 5.8.11 (wheezy, emulated amd64),

@@ -23,6 +23,20 @@ output "hosts" {
   )
 }
 
+# Service hostname -> IP A-records for the fleet resolver. NetBox on the server VM; the Diode
+# ingress (same VM) only when enable_discovery. `just set-dns` registers each as an AdGuard rewrite.
+output "dns_records" {
+  description = "hostname -> ipv4 A-records to register in centralized_dns AdGuard. Consumed by `just set-dns`."
+  value = merge(
+    {
+      "netbox.${var.domain}" = multipass_instance.server.ipv4
+    },
+    var.enable_discovery ? {
+      "diode.${var.domain}" = multipass_instance.server.ipv4
+    } : {},
+  )
+}
+
 output "netbox_url" {
   description = "Base URL of the NetBox API/UI. Consumed by netbox_cli.py and the testinfra suite."
   value       = "http://${multipass_instance.server.ipv4}:${var.netbox_port}"

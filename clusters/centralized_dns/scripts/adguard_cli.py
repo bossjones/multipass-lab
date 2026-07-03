@@ -156,6 +156,21 @@ def _get(c: Ctx, path: str):
         client.close()
 
 
+def _post(c: Ctx, path: str, json_body: dict[str, str]):
+    """POST to /control, mirroring _get. AdGuard's write endpoints reply 200 with an empty body."""
+    import httpx
+
+    client = c.client()  # already logged in; do NOT reopen with `with`
+    try:
+        resp = client.post(path, json=json_body)
+        resp.raise_for_status()
+        return resp.json() if resp.content else {}
+    except httpx.HTTPError as exc:
+        _die(f"POST {path} failed: {exc}")
+    finally:
+        client.close()
+
+
 # --- introspection commands --------------------------------------------------
 
 
@@ -207,6 +222,138 @@ def querylog(ctx: typer.Context, limit: int = typer.Option(20, "--limit")):
     data = _get(c, f"/querylog?limit={limit}")
     rows = data.get("data") if isinstance(data, dict) else data
     _emit(c, rows or [], title="adguard querylog")
+
+
+# --- DNS rewrites (custom hostname -> IP records) ----------------------------
+
+
+def _rewrite_list(c: Ctx):
+    """Current AdGuard rewrites as a list of {"domain","answer"} rows."""
+    return _get(c, "/rewrite/list") or []
+
+
+def _apply_rewrite_set(
+    c: Ctx, domain: str, answer: str, rows: list[dict[str, str]]
+) -> tuple[str, list[str]]:
+    """Idempotently ensure a single domain->answer rewrite exists.
+
+    `rows` is a snapshot of the current rewrite list (from `_rewrite_list`). AdGuard's
+    /rewrite/add is additive (allows duplicate rows), so a real "set" must delete every
+    existing row for the domain first. Returns (status, previous_answers) where status is
+    one of unchanged/updated/added. Does not mutate `rows`; the caller refreshes its view.
+    """
+    existing = [r for r in rows if r.get("domain") == domain]
+    old_answers = [str(r.get("answer", "")) for r in existing]
+    if len(existing) == 1 and existing[0].get("answer") == answer:
+        return "unchanged", old_answers
+    for prev in old_answers:
+        _post(c, "/rewrite/delete", {"domain": domain, "answer": prev})
+    _post(c, "/rewrite/add", {"domain": domain, "answer": answer})
+    return ("updated" if existing else "added"), old_answers
+
+
+@app.command(name="rewrite-list")
+def rewrite_list_cmd(ctx: typer.Context):
+    """List custom DNS rewrites (GET /control/rewrite/list)."""
+    c = resolve(ctx.obj)
+    _emit(c, _rewrite_list(c), title="adguard rewrites")
+
+
+@app.command(name="rewrite-add")
+def rewrite_add(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="hostname, e.g. grafana.lab.example.com"),
+    answer: str = typer.Argument(..., help="A-record IP the hostname resolves to"),
+):
+    """Add a rewrite (POST /control/rewrite/add). Additive — allows duplicates."""
+    c = resolve(ctx.obj)
+    _post(c, "/rewrite/add", {"domain": domain, "answer": answer})
+    _emit(c, {"domain": domain, "answer": answer, "status": "added"})
+
+
+@app.command(name="rewrite-delete")
+def rewrite_delete(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="hostname to remove"),
+    answer: str = typer.Argument(..., help="the A-record IP of the row to remove"),
+):
+    """Delete a rewrite (POST /control/rewrite/delete)."""
+    c = resolve(ctx.obj)
+    _post(c, "/rewrite/delete", {"domain": domain, "answer": answer})
+    _emit(c, {"domain": domain, "answer": answer, "status": "deleted"})
+
+
+@app.command(name="rewrite-set")
+def rewrite_set(
+    ctx: typer.Context,
+    domain: str = typer.Argument(..., help="hostname"),
+    answer: str = typer.Argument(..., help="A-record IP"),
+):
+    """Idempotently set a hostname->IP rewrite (delete any existing rows, then add)."""
+    c = resolve(ctx.obj)
+    rows = _rewrite_list(c)
+    status, previous = _apply_rewrite_set(c, domain, answer, rows)
+    _emit(c, {"domain": domain, "answer": answer, "status": status, "previous": previous})
+
+
+@app.command(name="rewrite-sync")
+def rewrite_sync(
+    ctx: typer.Context,
+    file: str = typer.Option(
+        ..., "--file", help="JSON object {hostname: answer}; '-' reads stdin"
+    ),
+    prune: bool = typer.Option(
+        False, "--prune", help="also delete AdGuard rewrites not present in the payload"
+    ),
+):
+    """Idempotently sync a batch of hostname->IP rewrites from a JSON object.
+
+    Reads {"grafana.lab.example.com": "10.0.0.5", ...} from --file (or stdin via '-') and
+    applies rewrite-set for each entry. Re-running is safe: unchanged rows are left alone,
+    changed IPs overwrite the old answer. With --prune, rewrites whose domain is absent from
+    the payload are removed (default off, so unmanaged rows are preserved).
+    """
+    import json
+    import sys
+    from pathlib import Path
+
+    c = resolve(ctx.obj)
+    raw = sys.stdin.read() if file == "-" else Path(file).read_text()
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        _die(f"--file is not valid JSON: {exc}")
+    if not isinstance(payload, dict):
+        _die("--file must be a JSON object of {hostname: answer}")
+
+    rows = _rewrite_list(c)
+    results: dict[str, list[str]] = {
+        "added": [],
+        "updated": [],
+        "unchanged": [],
+        "pruned": [],
+    }
+    for domain, answer in payload.items():
+        status, _prev = _apply_rewrite_set(c, domain, str(answer), rows)
+        results[status].append(domain)
+
+    if prune:
+        keep = set(payload.keys())
+        for row in rows:
+            dom = row.get("domain")
+            if dom and dom not in keep:
+                _post(
+                    c,
+                    "/rewrite/delete",
+                    {"domain": dom, "answer": str(row.get("answer", ""))},
+                )
+                results["pruned"].append(dom)
+
+    if c.as_json:
+        dc.print_json(results)
+    else:
+        summary = {k: len(v) for k, v in results.items()}
+        _emit(c, summary, title="adguard rewrite-sync")
 
 
 # --- check -------------------------------------------------------------------

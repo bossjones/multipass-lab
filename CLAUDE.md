@@ -81,10 +81,11 @@ issue-cert.sh.tftpl` + the JWK `admin` provisioner + a 12h renew timer) and fron
 Alertmanager/OpenObserve/Uptime-Kuma on `:443` at `<svc>.<domain>` — **additive**, the plain
 `http://IP:port` publishes stay up. It needs `ca_ip` + `stepca_ca_password` (must match
 `centralized_pki`'s) wired in, so it's off for a plain `just up`. `INTERNAL_TLS=1 just up-connected`
-wires it fleet-wide **when the CA VM is up** (reads `ca_ipv4`) and calls `just dns-register <cluster>`
-to hot-push `<svc>.<domain>→VM-IP` rewrites into the running AdGuard hub (new `dns_rewrites` var on
-`centralized_dns`; no recreate). Verify with `just tls-check-monitoring` (leaf chains to the root).
-Other clusters are still Phase 2 TODO. Design: `specs/internal-ca.md`; runbook:
+wires it fleet-wide **when the CA VM is up** (reads `ca_ipv4`) and, as its final step, runs
+`just set-dns-all` to register every cluster's `dns_records` (incl. `<svc>.<domain>→VM-IP`) into the
+running AdGuard hub over the REST API (idempotent `adguard_cli rewrite-sync`; no recreate/restart —
+see the DNS auto-registration note below). Verify with `just tls-check-monitoring` (leaf chains to
+the root). Other clusters are still Phase 2 TODO. Combined design: `specs/pki-and-dns.md`; runbook:
 `docs/internal-ca-tutorial.md`.
 
 **Coroot (opt-in eBPF observability on k0s).** `enable_coroot` deploys the self-hosted
@@ -234,8 +235,29 @@ The active machinery here is a Claude Code hook + skill system, not application 
   `activating` with no new output. SSH in, `sudo journalctl -u <svc>`, patch the `/opt/...` files or
   `/usr/local/sbin/<svc>.sh`, then `sudo systemctl restart --no-block <svc>` — far faster than
   destroy→up. Fold the fix back into the `.tftpl` afterward.
+- **Triage provisioning problems fast with `/system-debug <cluster> [role]`** (or `just system-debug
+  <cluster> [role]` / `uv run tools/system_debug.py <cluster> [role]`). It SSHes into the VM(s),
+  sweeps `cloud-init status` + `otelcol-contrib` + any `systemctl --failed` unit + a `journalctl -p
+  err` boot sweep, and **highlights** the smoking-gun lines (e.g. otelcol's `permission denied` /
+  missing `EnvironmentFile`), retrying up to 3× with exponential backoff and early-exiting once
+  healthy. Exit `0` healthy / `2` issues / `3` unreachable / `4` not-up. It **shells out to `ssh`**
+  (never a Python socket), so it sidesteps the macOS Local-Network block that hits the HTTP CLIs
+  (`[[macos-local-network-blocks-uv-cli]]`). Pure parsing/policy lives in `tools/_system_debug_core.py`
+  (stdlib-only, hermetically tested in `tools/tests/`); the manual fallback is
+  `just ssh <cluster> <role>` → `sudo journalctl -u <svc> -b -p err`.
 - **The `pre_tool_use` hook matches on substrings**, so it blocks otherwise-fine commands containing
   `rm ` or `.env`: `docker run --rm`, `grep .env`, `rm -f` all get denied. Use `docker run` (+
   `docker container prune -f`), avoid the literal `.env` token, and `mv` to the scratchpad, not `rm`.
 - **zsh does not word-split unquoted vars.** `for x in $list` / `$CMD args` run the whole value as a
   single word — inline the list in the `for`, or use an array / `${=var}`.
+- **`tofu test` / `just check` auto-loads `*.auto.tfvars.json`.** A leftover
+  `.cross-cluster.auto.tfvars.json` (written by `up-connected`) silently flips the hermetic
+  "off by default" assertions to fail — the *hermetic* suite is not actually isolated from live
+  state. If `just check` fails only on `*_off_by_default` runs, check for that file (it's
+  gitignored, so `git status` won't show it) and move it aside before trusting the result.
+- **A newly-added tofu `output` isn't in state until you apply.** `tofu output -json <new>` errors
+  `Output "<new>" not found` until a `tofu apply` runs; that apply is outputs-only
+  (`0 added, 0 changed, 0 destroyed` — no VM recreated), so it's safe on a live cluster. Recipes
+  that consume `tofu output` (e.g. `set-dns-all`) must tolerate this (treat the error as empty).
+- **`ruff`/`ty` aren't on PATH** (the rtk shim can't spawn them): use `uvx ruff check <file>`.
+- **`jq --argjson` needs valid JSON** (quoted keys: `{"enable_x": true}`), not jq object syntax.
