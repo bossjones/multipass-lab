@@ -364,6 +364,17 @@ netbox-vms CLUSTER:
 netbox-clusters CLUSTER:
     uv run {{cluster_root}}/{{CLUSTER}}/scripts/netbox_cli.py --cluster {{CLUSTER}} clusters
 
+# Diode plugin status + discovered IPs (opt-in discovery):  just netbox-discovery centralized_netbox
+netbox-discovery CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/netbox_cli.py --cluster {{CLUSTER}} discovery
+
+# trigger an on-demand orb-agent scan (opt-in; needs enable_discovery):  just netbox-discover centralized_netbox
+netbox-discover CLUSTER:
+    @ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.agent.ipv4 // ""'); \
+     if [ -z "$ip" ]; then echo "no agent VM — set enable_discovery=true and 'just recreate {{CLUSTER}}'"; exit 1; fi; \
+     ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" 'sudo systemctl restart orb-agent.service'; \
+     echo "orb-agent restarted on $ip — a scan will run; re-check with: just netbox-check {{CLUSTER}}"
+
 # import the OpenObserve log dashboards (idempotent; see specs/openobserve-dashboards.md):  just openobserve-dashboards centralized_monitoring
 # afterwards `... check --require-dashboards` asserts they resolve (not in verify-api since import is on-demand).
 openobserve-dashboards CLUSTER:

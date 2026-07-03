@@ -78,6 +78,11 @@ def _prefix(id_=1, prefix="192.168.252.0/24"):
             "vlan": {"id": 1, "vid": 100, "name": "lab"}, "status": {"value": "active"}}
 
 
+def _ip(address="192.168.252.7/24", id_=1):
+    return {"id": id_, "url": "", "address": address, "status": {"value": "active"},
+            "assigned_object": None}
+
+
 def _healthy(
     httpserver,
     *,
@@ -92,10 +97,15 @@ def _healthy(
     racks=None,
     devices=None,
     prefixes=None,
+    plugins=None,
+    ip_addresses=None,
 ):
-    httpserver.expect_request("/api/status/").respond_with_json(
-        {"netbox-version": "4.2.0", "django-version": "5.1", "rq-workers-running": 1},
-        status=status_code,
+    status_body = {"netbox-version": "4.2.0", "django-version": "5.1", "rq-workers-running": 1}
+    if plugins is not None:
+        status_body["plugins"] = plugins
+    httpserver.expect_request("/api/status/").respond_with_json(status_body, status=status_code)
+    httpserver.expect_request("/api/ipam/ip-addresses/").respond_with_json(
+        _paginated(ip_addresses if ip_addresses is not None else [_ip()])
     )
     # pynetbox may probe the API root; answer harmlessly.
     httpserver.expect_request("/api/").respond_with_json({})
@@ -268,3 +278,54 @@ def test_prefixes_lists_seeded_prefix(httpserver):
     assert r.exit_code == 0, r.output
     rows = json.loads(r.output)
     assert any(row["prefix"] == "192.168.252.0/24" for row in rows)
+
+
+# --- discovery (opt-in) ------------------------------------------------------
+
+
+def test_discovery_reports_plugin_and_ips(httpserver):
+    base = _healthy(
+        httpserver,
+        plugins={"netbox_diode_plugin": "1.7.0"},
+        ip_addresses=[_ip("192.168.252.7/24"), _ip("192.168.252.1/24", id_=2)],
+    )
+    r = _run(base, "--json", "discovery")
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.output)
+    assert out["diode_plugin"] == "1.7.0"
+    assert out["ip_count"] == 2
+
+
+def test_check_skips_discovery_when_disabled(httpserver):
+    # No --discovery flag: the discovery rows must be skipped (not failed) and check still passes.
+    base = _healthy(httpserver)
+    r = _run(base, "--json", "check")
+    assert r.exit_code == 0, r.output
+    checks = {c["name"]: c["status"] for c in json.loads(r.output)["checks"]}
+    assert checks["diode plugin installed"] == "skip"
+    assert checks["discovered ips present"] == "skip"
+
+
+def test_check_asserts_discovery_when_enabled(httpserver):
+    base = _healthy(httpserver, plugins={"netbox_diode_plugin": "1.7.0"})
+    r = _run(base, "--discovery", "--json", "check")
+    assert r.exit_code == 0, r.output
+    checks = {c["name"]: c["status"] for c in json.loads(r.output)["checks"]}
+    assert checks["diode plugin installed"] == "pass"
+    assert checks["discovered ips present"] == "pass"
+
+
+def test_check_fails_when_plugin_missing(httpserver):
+    base = _healthy(httpserver, plugins={})  # discovery on but plugin absent
+    r = _run(base, "--discovery", "--json", "check")
+    assert r.exit_code == 2
+    checks = json.loads(r.output)["checks"]
+    assert any(c["name"] == "diode plugin installed" and c["status"] == "fail" for c in checks)
+
+
+def test_check_fails_when_no_discovered_ips(httpserver):
+    base = _healthy(httpserver, plugins={"netbox_diode_plugin": "1.7.0"}, ip_addresses=[])
+    r = _run(base, "--discovery", "--json", "check")
+    assert r.exit_code == 2
+    checks = json.loads(r.output)["checks"]
+    assert any(c["name"] == "discovered ips present" and c["status"] == "fail" for c in checks)

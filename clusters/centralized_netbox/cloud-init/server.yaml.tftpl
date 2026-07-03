@@ -41,6 +41,46 @@ write_files:
     content: |
       ${indent(6, override_conf)}
 
+%{ if enable_discovery ~}
+  # --- discovery (opt-in) staging: the diode-netbox-plugin files + the whole Diode server stack.
+  # netbox-stack.sh stages these into /opt/netbox-docker and /opt/diode and brings the stack up.
+  # See specs/netbox-discovery.md.
+  - path: /opt/netbox-seed/plugin_requirements.txt
+    permissions: '0644'
+    content: |
+      ${indent(6, plugin_requirements)}
+  - path: /opt/netbox-seed/plugins.py
+    permissions: '0644'
+    content: |
+      ${indent(6, plugin_config)}
+  - path: /opt/diode-seed/docker-compose.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, diode_compose)}
+  - path: /opt/diode-seed/env
+    permissions: '0644'
+    content: |
+      ${indent(6, diode_env)}
+  - path: /opt/diode-seed/nginx.conf
+    permissions: '0644'
+    content: |
+      ${indent(6, diode_nginx)}
+  - path: /opt/diode-seed/client-credentials.json
+    permissions: '0644'
+    content: |
+      ${indent(6, diode_credentials)}
+  # Multi-DB initdb script — creates the `diode` + `hydra` databases in the shared postgres. This is
+  # the reconciliation for stock postgres ignoring POSTGRES_MULTIPLE_DATABASES; it reproduces the
+  # upstream diode compose's init SQL as a mounted /docker-entrypoint-initdb.d script. The three
+  # OAuth2 clients are registered into Hydra by the diode-auth image's own bootstrap-clients.sh
+  # (Ory Hydra CLI), which the compose invokes against the mounted client-credentials.json — so we
+  # no longer hand-roll that script. See specs/netbox-discovery.md.
+  - path: /opt/diode-seed/postgres-init.sh
+    permissions: '0755'
+    content: |
+      ${indent(6, diode_postgres_init)}
+%{ endif ~}
+
   # Async bring-up: clone + pull + up the stack, ensure the admin user + pinned v1 token via
   # manage.py, then idempotently ensure the virtualization cluster-type + cluster exist. Every step
   # is idempotent and the whole thing is retried, so a flaky registry pull just tries again.
@@ -62,8 +102,28 @@ write_files:
         fi
         cp /opt/netbox-seed/docker-compose.override.yml /opt/netbox-docker/docker-compose.override.yml
         cd /opt/netbox-docker
+%{ if enable_discovery ~}
+        # Stage the diode-netbox-plugin into the cloned repo and build the custom image. The runtime
+        # server IP is substituted into plugins.py's diode_target_override (Diode is reached over the
+        # host IP). netbox-docker ships only `Dockerfile`, so we generate a `Dockerfile-Plugins` that
+        # layers the plugin onto the pinned base image (tag resolved from the compose's default
+        # VERSION, so it tracks netbox_docker_ref_discovery); configuration/plugins.py is mounted.
+        # The image is uv-managed (no venv/bin/pip) — install via `uv pip` into the image's VIRTUAL_ENV.
+        # We build with the legacy builder (DOCKER_BUILDKIT=0) because the docker.io package ships no
+        # buildx, so `docker compose build` (which wants BuildKit/Bake) hangs. The override points
+        # netbox/worker/housekeeping at the pre-built image (pull_policy: never), so `up` reuses it.
+        SRV_IP="$(ip -4 route get 1.1.1.1 | awk '{print $7; exit}')"
+        cp /opt/netbox-seed/plugin_requirements.txt /opt/netbox-docker/plugin_requirements.txt
+        mkdir -p /opt/netbox-docker/configuration
+        sed "s/__DIODE_HOST__/$SRV_IP/g" /opt/netbox-seed/plugins.py > /opt/netbox-docker/configuration/plugins.py
+        NB_TAG="$(grep -oE 'netboxcommunity/netbox:[^}]+' /opt/netbox-docker/docker-compose.yml | head -1 | sed -E 's/.*VERSION-//')"
+        printf 'FROM netboxcommunity/netbox:%s\nCOPY ./plugin_requirements.txt /opt/netbox/\nRUN /usr/local/bin/uv pip install -r /opt/netbox/plugin_requirements.txt\n' "$NB_TAG" > /opt/netbox-docker/Dockerfile-Plugins
+        DOCKER_BUILDKIT=0 docker build -t netbox:latest-plugins -f /opt/netbox-docker/Dockerfile-Plugins /opt/netbox-docker
+        docker compose up -d
+%{ else ~}
         docker compose pull
         docker compose up -d
+%{ endif ~}
 
         # 2. Wait until NetBox responds (200/401/403 all mean the app is up + migrations are done).
         for _ in $(seq 1 180); do
@@ -84,6 +144,11 @@ write_files:
       Token.objects.get_or_create(key="${netbox_api_token}", defaults={"user": u})
       print("netbox-provisioned")
       PYEOF
+
+%{ if enable_discovery ~}
+        # 3b. Apply the Diode plugin migrations (idempotent; netbox-docker also runs these on start).
+        docker compose exec -T netbox /opt/netbox/netbox/manage.py migrate netbox_diode_plugin || true
+%{ endif ~}
 
         # 4. cluster-type "${cluster_type}"
         ct_id="$(curl -sf "$${auth[@]}" "$NETBOX_URL/api/virtualization/cluster-types/?name=${cluster_type}" | jq -r '.results[0].id // empty')"
@@ -114,6 +179,26 @@ write_files:
         # its `set -e`, so a bare seed call would let a failed seed still fall through to `touch done`.
         export NETBOX_URL TOKEN
         /usr/local/sbin/netbox-seed.sh || return 1
+
+%{ if enable_discovery ~}
+        # 8. Bring up the Diode server stack (separate compose project under /opt/diode), reconciled
+        # to the actual netboxlabs/diode release layout: the compose reads /opt/diode/.env, mounts
+        # nginx.conf at conf.d/default.conf, the postgres initdb script at
+        # /docker-entrypoint-initdb.d, and oauth2/client/client-credentials.json (the diode-auth
+        # image's baked bootstrap-clients.sh registers the pinned clients into Hydra). __SERVER_IP__
+        # in the env is substituted with the runtime IP so the reconciler reaches NetBox's
+        # /api/plugins/diode over the host.
+        SRV_IP="$(ip -4 route get 1.1.1.1 | awk '{print $7; exit}')"
+        mkdir -p /opt/diode/nginx /opt/diode/oauth2/client /opt/diode/postgres-init
+        cp /opt/diode-seed/docker-compose.yaml /opt/diode/docker-compose.yaml
+        sed "s/__SERVER_IP__/$SRV_IP/g" /opt/diode-seed/env > /opt/diode/.env
+        cp /opt/diode-seed/nginx.conf /opt/diode/nginx/nginx.conf
+        cp /opt/diode-seed/client-credentials.json /opt/diode/oauth2/client/client-credentials.json
+        cp /opt/diode-seed/postgres-init.sh /opt/diode/postgres-init/01-init-databases.sh
+        chmod +x /opt/diode/postgres-init/01-init-databases.sh
+        ( cd /opt/diode && docker compose pull && docker compose up -d )
+        touch /var/lib/netbox-bootstrap/discovery-done
+%{ endif ~}
 
         mkdir -p /var/lib/netbox-bootstrap
         touch /var/lib/netbox-bootstrap/done
