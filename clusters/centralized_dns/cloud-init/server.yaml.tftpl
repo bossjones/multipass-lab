@@ -252,6 +252,9 @@ runcmd:
   # before that user existed, so it must be chowned after install or the collector crash-loops on
   # "permission denied" opening its file_storage extension.
   - chown -R otelcol-contrib:otelcol-contrib /var/lib/otelcol-contrib/storage
+  # /var/log/syslog is root:adm 0640 — the otelcol-contrib user must join `adm` or its filelog/host
+  # receiver silently fails every poll with "permission denied" (unit stays "active", logs never ship).
+  - usermod -aG adm otelcol-contrib
   - systemctl enable otelcol-contrib
   - systemctl restart otelcol-contrib
 %{ endif ~}

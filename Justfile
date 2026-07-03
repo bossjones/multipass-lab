@@ -347,6 +347,7 @@ _hot-push-cross-cluster CLUSTER:
           fi
           sudo cp /tmp/otel-config.yaml /etc/otelcol-contrib/config.yaml
           sudo chown -R otelcol-contrib:otelcol-contrib /var/lib/otelcol-contrib/storage
+          sudo usermod -aG adm otelcol-contrib
           sudo systemctl enable otelcol-contrib >/dev/null 2>&1 || true
           sudo systemctl restart otelcol-contrib'
       fi
