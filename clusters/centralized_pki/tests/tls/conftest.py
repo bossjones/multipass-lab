@@ -153,7 +153,7 @@ def wrong_root_pem(tmp_path):
 def internal_server(tmp_path, root_pem):
     """A leaf signed by the step-ca root, served over TLS. Yields the listening port."""
     _path, ca_key, ca_cert = root_pem
-    leaf_key, leaf_cert = _make_leaf(ca_key, ca_cert, "vault.lab.test", ["vault.lab.test"])
+    leaf_key, leaf_cert = _make_leaf(ca_key, ca_cert, "warden.lab.test", ["warden.lab.test"])
     cf = _write(tmp_path / "leaf.crt", _pem_cert(leaf_cert))
     kf = _write(tmp_path / "leaf.key", _pem_key(leaf_key))
     server = _TLSServer(cf, kf)

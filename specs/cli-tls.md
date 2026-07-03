@@ -62,14 +62,14 @@ Any `fail` → exit 2. Unreachable host / missing root → `fail` + exit 2.
   from a threaded `ssl` TLS server on a random port. Tests: correct root → exit 0, wrong root
   → exit 2, staging issuer with `--staging` → exit 0, non-staging issuer with `--staging` →
   exit 2, `inspect` reports issuer/subject/SANs.
-- **Live (secondary):** `just tls-check centralized_pki <services-ip> --sni vault.<domain>`
+- **Live (secondary):** `just tls-check centralized_pki <services-ip> --sni warden.<domain>`
   exits 0 (also driven by `just verify-pki`).
 
 ## Justfile
 
 ```
 just tls-check CLUSTER HOST [--sni h.<domain>] [--ca-cert root.pem]   # check → exit code
-just verify-pki CLUSTER                                                # all service checks + tls-check auth./vault.
+just verify-pki CLUSTER                                                # all service checks + tls-check auth./warden.
 ```
 
 See also [`cli-stepca.md`](cli-stepca.md), [`cli-authelia.md`](cli-authelia.md),

@@ -24,9 +24,9 @@ def test_inspect_reports_issuer_subject_and_sans(internal_server):
     r = _run("--json", "inspect", "127.0.0.1", "--port", str(internal_server))
     assert r.exit_code == 0, r.output
     data = json.loads(r.output)
-    assert data["subject_cn"] == "vault.lab.test"
+    assert data["subject_cn"] == "warden.lab.test"
     assert "centralized-pki-ca Root CA" in data["issuer_cn"]
-    assert "vault.lab.test" in data["sans"]
+    assert "warden.lab.test" in data["sans"]
 
 
 # ---- check: internal (chain to step-ca root) ----

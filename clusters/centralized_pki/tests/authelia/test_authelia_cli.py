@@ -17,7 +17,7 @@ def _healthy(
     *,
     health_status=200,
     admin_status=302,
-    admin_location="https://auth.example.com/?rd=https%3A%2F%2Fvault.example.com%2Fadmin",
+    admin_location="https://auth.example.com/?rd=https%3A%2F%2Fwarden.example.com%2Fadmin",
 ):
     httpserver.expect_request("/api/health").respond_with_json(
         {"status": "OK"}, status=health_status

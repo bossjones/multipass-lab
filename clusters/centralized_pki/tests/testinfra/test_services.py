@@ -61,7 +61,7 @@ def test_authelia_reachable_through_traefik(services, domain):
 def test_vaultwarden_reachable_through_traefik(services, domain):
     got = _wait(
         lambda: services.run(
-            f"curl -fsSk -H 'Host: vault.{domain}' https://localhost/alive"
+            f"curl -fsSk -H 'Host: warden.{domain}' https://localhost/alive"
         ).rc
         == 0
     )

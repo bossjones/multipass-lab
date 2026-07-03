@@ -11,7 +11,7 @@ variable "image" {
 }
 
 variable "domain" {
-  description = "DNS suffix for internal services. Hostnames ca./auth./vault. live under this (e.g. auth.lab.theblacktonystark.com)."
+  description = "DNS suffix for internal services. Hostnames ca./auth./warden. live under this (e.g. auth.lab.theblacktonystark.com)."
   type        = string
   default     = "lab.theblacktonystark.com"
 }

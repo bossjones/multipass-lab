@@ -3,8 +3,8 @@
 ## Context
 
 `clusters/centralized_pki` runs **Vaultwarden** (`vaultwarden/server:1.32.0`) on the
-`services` VM behind Traefik at `https://vault.<domain>` (Bitwarden-compatible vault). The
-CLI reaches it **through Traefik** at the services VM's IP with a `Host: vault.<domain>`
+`services` VM behind Traefik at `https://warden.<domain>` (Bitwarden-compatible vault). The
+CLI reaches it **through Traefik** at the services VM's IP with a `Host: warden.<domain>`
 header (no laptop-side DNS needed).
 
 This spec designs `vaultwarden_cli.py` — a **uv single-file CLI** for a liveness `check`,
@@ -26,8 +26,8 @@ covered by a hermetic pytest suite (in-process HTTP server, no VM).
 ```
   operator laptop                        centralized-pki-services VM (Traefik :443)
   ┌───────────────────────────┐  HTTPS  ┌─────────────────────────────────────────┐
-  │ vaultwarden_cli.py (uv/httpx)│ ─────► │ Traefik ─Host: vault.<domain>─► Vaultwarden│
-  │  Host: vault.<domain>        │        │   /alive   /api/version                 │
+  │ vaultwarden_cli.py (uv/httpx)│ ─────► │ Traefik ─Host: warden.<domain>─► Vaultwarden│
+  │  Host: warden.<domain>        │        │   /alive   /api/version                 │
   └───────────────────────────┘         └─────────────────────────────────────────┘
 ```
 

@@ -45,7 +45,7 @@ def hosts(tofu_output):
 
 @pytest.fixture(scope="session")
 def domain(tofu_output):
-    """The DNS suffix (auth./vault./ca. live under this)."""
+    """The DNS suffix (auth./warden./ca. live under this)."""
     return tofu_output["domain"]["value"]
 
 
