@@ -26,6 +26,7 @@ locals {
     enable_traefik_metrics    = var.enable_traefik_metrics
     enable_kube_metrics       = var.enable_kube_metrics
     enable_kube_state_metrics = var.enable_kube_state_metrics
+    enable_netdata            = var.enable_netdata
   }
 
   # Sorted list of active flags — exported as enabled_exporters and consumed by

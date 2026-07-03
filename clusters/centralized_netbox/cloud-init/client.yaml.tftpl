@@ -186,3 +186,9 @@ runcmd:
   # process-exporter — per-process metrics (:9256)
   - /usr/local/sbin/install-exporter.sh process-exporter https://github.com/ncabatoff/process-exporter/releases/download/v0.8.7/process-exporter-0.8.7.linux-{ARCH}.tar.gz process-exporter --config.path=/etc/process-exporter/all.yaml -threads=false -gather-smaps=false -remove-empty-groups
 %{ endif ~}
+%{ if enable_netdata ~}
+  # netdata — real-time agent (:19999, /api/v1/allmetrics?format=prometheus).
+  # Standalone/local-only: no --claim-token (no Netdata Cloud), telemetry disabled, updates pinned.
+  - mkdir -p /etc/netdata && touch /etc/netdata/.opt-out-from-anonymous-statistics
+  - curl -sSLf https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh && DO_NOT_TRACK=1 sh /tmp/netdata-kickstart.sh --non-interactive --stable-channel --disable-telemetry --no-updates --dont-wait || true
+%{ endif ~}

@@ -461,10 +461,10 @@ run "discovery_on_wires_everything" {
     error_message = "diode_ingest_client_id output must be diode-ingest"
   }
   # web_urls.all = 2 (UI/API) + 6 exporter /metrics (node/process/systemd × server+client, all
-  # default-on) + 1 Diode ingress URL (discovery on) = 9.
+  # default-on) + 1 Diode ingress URL (discovery on) + 2 Netdata dashboards (default-on) = 11.
   assert {
-    condition     = length(output.web_urls.all) == 9
-    error_message = "web_urls.all must be the 2 UI/API URLs + 6 exporter /metrics + the Diode ingress URL when discovery is on"
+    condition     = length(output.web_urls.all) == 11
+    error_message = "web_urls.all must be the 2 UI/API URLs + 6 exporter /metrics + the Diode ingress URL + 2 Netdata dashboards when discovery is on"
   }
 }
 
@@ -488,10 +488,11 @@ run "exporters_render_on_both_vms" {
     condition     = strcontains(local_file.server_ci.content, "--web.listen-address=:9558") && strcontains(local_file.server_ci.content, "--systemd.collector.unit-include=")
     error_message = "server must install systemd_exporter (:9558) with a curated unit-include"
   }
-  # web_urls.all folds the 6 enabled /metrics endpoints on top of the 2 UI/API URLs.
+  # web_urls.all folds the 6 enabled /metrics endpoints and 2 Netdata dashboards (default-on) on
+  # top of the 2 UI/API URLs.
   assert {
-    condition     = length(output.web_urls.all) == 8
-    error_message = "web_urls.all must add the 6 exporter /metrics endpoints to the 2 UI/API URLs"
+    condition     = length(output.web_urls.all) == 10
+    error_message = "web_urls.all must add the 6 exporter /metrics endpoints + 2 Netdata dashboards to the 2 UI/API URLs"
   }
   assert {
     condition     = contains(output.enabled_exporters, "enable_node_exporter") && contains(output.enabled_exporters, "enable_process_exporter") && contains(output.enabled_exporters, "enable_systemd_exporter")
@@ -511,5 +512,55 @@ run "exporters_off_omit_install" {
   assert {
     condition     = !strcontains(local_file.server_ci.content, "install-exporter.sh node_exporter") && !strcontains(local_file.server_ci.content, "systemd_exporter") && !strcontains(local_file.server_ci.content, "process-exporter")
     error_message = "disabling all exporter flags must omit their install blocks on the server"
+  }
+}
+
+# --- Netdata (real-time agent on both VMs, dashboard-only — no local Prometheus) -------
+
+run "netdata_renders_by_default" {
+  command = plan
+
+  # Installs on BOTH VMs, telemetry opted out, and surfaced in enabled_features.
+  assert {
+    condition = alltrue([for c in [
+      local_file.server_ci.content, local_file.client_ci.content,
+    ] : strcontains(c, "netdata-kickstart.sh")])
+    error_message = "netdata kickstart install block must render on both VMs by default"
+  }
+  assert {
+    condition = alltrue([for c in [
+      local_file.server_ci.content, local_file.client_ci.content,
+    ] : strcontains(c, ".opt-out-from-anonymous-statistics")])
+    error_message = "netdata install must drop the anonymous-statistics opt-out file on both VMs"
+  }
+  assert {
+    condition     = output.enabled_features.netdata == true
+    error_message = "enabled_features.netdata must be true by default"
+  }
+  # The gated install block must keep the cloud-init valid YAML.
+  assert {
+    condition = alltrue([for c in [
+      local_file.server_ci.content, local_file.client_ci.content,
+    ] : can(yamldecode(c))])
+    error_message = "rendered cloud-init must stay valid YAML with netdata enabled"
+  }
+}
+
+run "netdata_off_omits_install" {
+  command = plan
+
+  variables {
+    enable_netdata = false
+  }
+
+  assert {
+    condition = alltrue([for c in [
+      local_file.server_ci.content, local_file.client_ci.content,
+    ] : !strcontains(c, "netdata-kickstart.sh")])
+    error_message = "disabling netdata must omit the kickstart install block from both VMs"
+  }
+  assert {
+    condition     = output.enabled_features.netdata == false
+    error_message = "enabled_features.netdata must be false when disabled"
   }
 }

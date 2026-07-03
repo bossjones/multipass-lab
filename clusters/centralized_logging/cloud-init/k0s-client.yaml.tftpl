@@ -285,5 +285,11 @@ runcmd:
   # `just coroot-status` / `just verify` watch for readiness. UI on the NodePort (+ ingress).
   - /usr/local/sbin/coroot-install.sh
 %{ endif ~}
+%{ if enable_netdata ~}
+  # netdata — real-time agent (:19999, /api/v1/allmetrics?format=prometheus).
+  # Standalone/local-only: no --claim-token (no Netdata Cloud), telemetry disabled, updates pinned.
+  - mkdir -p /etc/netdata && touch /etc/netdata/.opt-out-from-anonymous-statistics
+  - curl -sSLf https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh && DO_NOT_TRACK=1 sh /tmp/netdata-kickstart.sh --non-interactive --stable-channel --disable-telemetry --no-updates --dont-wait || true
+%{ endif ~}
 
 final_message: "k0s client ready — k0s status; shipping logs to central; exporters on :9100/:9558/:9256/:8089 (+kube :10249/:10255/:8081)"

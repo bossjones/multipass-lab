@@ -118,6 +118,13 @@ runcmd:
   - systemctl enable docker
   - systemctl restart docker
   - docker compose -f /opt/stack/compose.yaml up -d
+%{ if enable_netdata ~}
+  # netdata — real-time agent (:19999, /api/v1/allmetrics?format=prometheus).
+  # Standalone/local-only: no --claim-token (no Netdata Cloud), telemetry disabled, updates pinned.
+  # Host-installed (not compose); Prometheus reaches it via host.docker.internal (see compose.yaml).
+  - mkdir -p /etc/netdata && touch /etc/netdata/.opt-out-from-anonymous-statistics
+  - curl -sSLf https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh && DO_NOT_TRACK=1 sh /tmp/netdata-kickstart.sh --non-interactive --stable-channel --disable-telemetry --no-updates --dont-wait || true
+%{ endif ~}
 %{ if enable_heimdall && enable_heimdall_seed ~}
   # --- auto-seed Heimdall tiles (best-effort; never fails the boot) ----------
   - curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh || true

@@ -89,16 +89,28 @@ locals {
     enable_discovery = var.enable_discovery
   })
 
-  # Exporter feature flags, merged into every templatefile() call so each cloud-init template
-  # renders its own %{ if enable_x ~}…%{ endif ~} blocks (mirrors the other clusters).
+  # Opt-in feature flags, merged into every templatefile() call so each cloud-init template
+  # renders its own %{ if enable_x ~}…%{ endif ~} blocks. Mirrors the centralized_logging /
+  # centralized_monitoring clusters.
   flags = {
+    enable_netdata          = var.enable_netdata
     enable_node_exporter    = var.enable_node_exporter
     enable_process_exporter = var.enable_process_exporter
     enable_systemd_exporter = var.enable_systemd_exporter
   }
 
-  # Sorted list of active flags — exported as enabled_exporters and consumed by tests/testinfra.
-  enabled_exporters = sort([for k, v in local.flags : k if v])
+  # tests/testinfra/conftest.py reads this so a disabled feature is skipped, not failed.
+  enabled_features = { netdata = var.enable_netdata }
+
+  # Sorted list of active exporter flags — exported as enabled_exporters and consumed by
+  # tests/testinfra. Kept disjoint from enabled_features so this doesn't also list netdata.
+  enabled_exporters = sort([
+    for k, v in {
+      enable_node_exporter    = var.enable_node_exporter
+      enable_process_exporter = var.enable_process_exporter
+      enable_systemd_exporter = var.enable_systemd_exporter
+    } : k if v
+  ])
 }
 
 # --- NetBox server VM (netbox-docker stack) ---------------------------------
