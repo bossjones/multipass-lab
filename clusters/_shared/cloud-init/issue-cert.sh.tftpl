@@ -10,6 +10,11 @@ CERT_DIR=${cert_dir}
 SECRETS=${secrets_dir}
 STEP_IMG=${step_img}
 mkdir -p "$CERT_DIR"
+# Pin ca.<domain> -> ca_ip in /etc/hosts so this HOST-level curl resolves the CA without depending
+# on the fleet DNS hub. `ca_ip` is injected for exactly this reason; the AdGuard rewrite for
+# ca.<domain> isn't registered until `just set-dns` runs (fleet step 6), which is AFTER this leaf
+# is issued at first boot — so relying on DNS here deadlocks the boot. Idempotent for renew re-runs.
+grep -q " ca.${domain}$" /etc/hosts || echo "${ca_ip} ca.${domain}" >> /etc/hosts
 # 1. Fetch the root (self-authenticating; -k is step-ca's documented TOFU bootstrap). Needed as the
 #    --root for the issuance call below; OS-wide trust is handled separately (Phase 1 internal_ca_cert).
 for i in $(seq 1 60); do
