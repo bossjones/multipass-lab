@@ -90,6 +90,12 @@ variable "internal_ca_cert" {
   default     = ""
 }
 
+variable "ntp_server" {
+  description = "IP (or host[:port]) of an internal NTP source. Non-empty -> every VM points systemd-timesyncd at it via /etc/systemd/timesyncd.conf.d/. Empty (default) = image default NTP pool. `just up-connected` (INTERNAL_NTP=1) wires it to the centralized_dns hub. See specs/shared-ntp.md."
+  type        = string
+  default     = ""
+}
+
 variable "openobserve_endpoint" {
   description = "host:port of centralized_monitoring's OpenObserve. Non-empty -> both VMs run an otelcol-contrib agent pushing host logs via OTLP/HTTP. Empty (default) = disabled."
   type        = string

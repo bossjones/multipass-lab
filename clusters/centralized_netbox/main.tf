@@ -26,6 +26,16 @@ locals {
     dns_ip = split(":", var.dns_server)[0]
   }) : ""
 
+  # --- Baseline time sync (unconditional; see specs/shared-ntp.md) -------------
+  # Single-sourced UTC + systemd-timesyncd block, injected at column 0 of every VM template.
+  ntp_timesync = templatefile("${path.module}/../_shared/cloud-init/ntp-timesync.yaml.tftpl", {})
+
+  # Opt-in internal NTP source — mirrors dns_server. Non-empty -> timesyncd points at ntp_ip (by IP).
+  use_ntp = var.ntp_server != ""
+  ntp_conf = local.use_ntp ? templatefile("${path.module}/../_shared/cloud-init/use-ntp.conf.tftpl", {
+    ntp_ip = split(":", var.ntp_server)[0]
+  }) : ""
+
   # --- discovery (opt-in Diode + orb-agent) --------------------------------
   # enable_discovery bumps NetBox to a 4.4.x pin (keeps pinnable v1 tokens AND satisfies Diode's
   # >= 4.2.3 requirement) and auto-bumps the server (netbox-docker + the ~9-container Diode stack
@@ -180,6 +190,9 @@ resource "local_file" "server_ci" {
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
     internal_ca_cert  = var.internal_ca_cert
+    ntp_timesync      = local.ntp_timesync
+    ntp_server        = var.ntp_server
+    ntp_conf          = local.ntp_conf
     # Docker operator TUIs (wharf/oxker/dive) — the server runs the netbox-docker stack.
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
@@ -213,6 +226,9 @@ resource "local_file" "client_ci" {
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
     internal_ca_cert  = var.internal_ca_cert
+    ntp_timesync      = local.ntp_timesync
+    ntp_server        = var.ntp_server
+    ntp_conf          = local.ntp_conf
   }))
 }
 
@@ -245,6 +261,9 @@ resource "local_file" "agent_ci" {
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
     internal_ca_cert  = var.internal_ca_cert
+    ntp_timesync      = local.ntp_timesync
+    ntp_server        = var.ntp_server
+    ntp_conf          = local.ntp_conf
     # Docker operator TUIs (wharf/oxker/dive) — the agent runs orb-agent via docker.
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
@@ -280,4 +299,24 @@ resource "local_file" "agent_resolved_conf" {
   count    = local.use_dns && var.enable_discovery ? 1 : 0
   filename = "${local.render_dir}/agent-resolved.conf"
   content  = local.dns_resolved_conf
+}
+
+# Internal NTP source drop-in, rendered standalone per-VM for scp onto a running VM by
+# `just refresh-cross-cluster` (mirrors the resolved.conf hot-push above). See specs/shared-ntp.md.
+resource "local_file" "server_ntp_conf" {
+  count    = local.use_ntp ? 1 : 0
+  filename = "${local.render_dir}/server-ntp.conf"
+  content  = local.ntp_conf
+}
+
+resource "local_file" "client_ntp_conf" {
+  count    = local.use_ntp ? 1 : 0
+  filename = "${local.render_dir}/client-ntp.conf"
+  content  = local.ntp_conf
+}
+
+resource "local_file" "agent_ntp_conf" {
+  count    = local.use_ntp && var.enable_discovery ? 1 : 0
+  filename = "${local.render_dir}/agent-ntp.conf"
+  content  = local.ntp_conf
 }

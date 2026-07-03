@@ -101,6 +101,16 @@ locals {
     dns_ip = split(":", var.dns_server)[0]
   }) : ""
 
+  # --- Baseline time sync (unconditional; see specs/shared-ntp.md) -------------
+  # Single-sourced UTC + systemd-timesyncd block, injected at column 0 of every VM template.
+  ntp_timesync = templatefile("${path.module}/../_shared/cloud-init/ntp-timesync.yaml.tftpl", {})
+
+  # Opt-in internal NTP source — mirrors dns_server. Non-empty -> timesyncd points at ntp_ip (by IP).
+  use_ntp = var.ntp_server != ""
+  ntp_conf = local.use_ntp ? templatefile("${path.module}/../_shared/cloud-init/use-ntp.conf.tftpl", {
+    ntp_ip = split(":", var.ntp_server)[0]
+  }) : ""
+
   # One OTLP agent config per VM — OpenObserve derives the destination stream from stream-name,
   # so the ca and services VMs land in distinct streams.
   otel_agent_conf_ca = local.push_otlp ? templatefile("${path.module}/../_shared/cloud-init/otel-agent-config.yaml.tftpl", {
@@ -132,6 +142,9 @@ resource "local_file" "ca_ci" {
     openobserve_endpoint = var.openobserve_endpoint
     syslog_client_conf   = local.syslog_client_conf
     otel_agent_conf      = local.otel_agent_conf_ca
+    ntp_timesync         = local.ntp_timesync
+    ntp_server           = var.ntp_server
+    ntp_conf             = local.ntp_conf
     dns_server           = var.dns_server
     dns_resolved_conf    = local.dns_resolved_conf
     # Fleet-wide trust of the internal root CA (specs/internal-ca.md).
@@ -181,6 +194,9 @@ resource "local_file" "services_ci" {
     openobserve_endpoint = var.openobserve_endpoint
     syslog_client_conf   = local.syslog_client_conf
     otel_agent_conf      = local.otel_agent_conf_services
+    ntp_timesync         = local.ntp_timesync
+    ntp_server           = var.ntp_server
+    ntp_conf             = local.ntp_conf
     dns_server           = var.dns_server
     dns_resolved_conf    = local.dns_resolved_conf
     # Fleet-wide trust of the internal root CA (specs/internal-ca.md).
@@ -213,6 +229,18 @@ resource "local_file" "services_resolved_conf" {
   count    = local.use_dns ? 1 : 0
   filename = "${local.render_dir}/services-resolved.conf"
   content  = local.dns_resolved_conf
+}
+
+resource "local_file" "ca_ntp_conf" {
+  count    = local.use_ntp ? 1 : 0
+  filename = "${local.render_dir}/ca-ntp.conf"
+  content  = local.ntp_conf
+}
+
+resource "local_file" "services_ntp_conf" {
+  count    = local.use_ntp ? 1 : 0
+  filename = "${local.render_dir}/services-ntp.conf"
+  content  = local.ntp_conf
 }
 
 resource "local_file" "ca_ship_conf" {

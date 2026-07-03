@@ -94,6 +94,12 @@ variable "internal_ca_cert" {
   default     = ""
 }
 
+variable "ntp_server" {
+  description = "IP (or host[:port]) of an internal NTP source. Non-empty -> every VM points systemd-timesyncd at it via /etc/systemd/timesyncd.conf.d/. Empty (default) = image default NTP pool. `just up-connected` (INTERNAL_NTP=1) wires it to the centralized_dns hub. See specs/shared-ntp.md."
+  type        = string
+  default     = ""
+}
+
 # --- Internal-CA TLS (opt-in; Phase 2, see specs/internal-ca.md) -------------
 variable "use_internal_tls" {
   description = "Front the stack with Traefik serving an internal-CA leaf on :443. On -> the server issues a leaf from centralized_pki's step-ca at first boot (SANs grafana./prometheus./… .domain) and routes those hostnames over HTTPS; the plain http://IP:port ports stay published (additive). Needs ca_ip + stepca_ca_password wired (by `just up-connected` when the CA is up). Off (default) keeps `just up` turnkey/isolated. See specs/internal-ca.md §Phase 2."

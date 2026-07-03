@@ -1,5 +1,11 @@
 # Spec: Cluster Time Sync (UTC + NTP)
 
+> **Superseded by [`specs/shared-ntp.md`](shared-ntp.md).** This spec introduced UTC +
+> `systemd-timesyncd` for the two original clusters. The successor promotes time sync to a
+> fleet-wide *shared* service (single-sourced snippet, live tests on all six clusters, opt-in
+> internal NTP hub). This file is retained as the canonical write-up of the Multipass
+> host-timezone-injection quirk (see "Multipass gotcha" below).
+
 ## Context
 
 Both lab clusters — `clusters/centralized_logging/` and `clusters/centralized_monitoring/` —

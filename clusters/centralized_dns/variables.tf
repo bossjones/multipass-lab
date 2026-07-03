@@ -121,6 +121,12 @@ variable "enable_systemd_exporter" {
   default     = true
 }
 
+variable "enable_ntp_server" {
+  description = "Run chrony on the DNS box as the fleet NTP server (allow the lab subnet). Default off -> the box is a plain systemd-timesyncd client. `just up-connected` (INTERNAL_NTP=1) turns this on and points every other VM's ntp_server at this box. Installing chrony disables systemd-timesyncd. See specs/shared-ntp.md."
+  type        = bool
+  default     = false
+}
+
 # --- Cross-cluster telemetry (opt-in; see specs/cross-cluster.md) ------------
 # Empty defaults keep `just up centralized_dns` turnkey and isolated. `just up-connected`
 # hot-pushes these once the logging/monitoring hubs exist (this cluster boots FIRST).
@@ -133,6 +139,12 @@ variable "dns_server" {
 
 variable "internal_ca_cert" {
   description = "PEM of the internal root CA to trust on every VM. Non-empty -> each VM drops it into /usr/local/share/ca-certificates and runs update-ca-certificates at first boot. Empty (default) = no fleet trust. `just up-connected` injects it from centralized_pki. See specs/internal-ca.md."
+  type        = string
+  default     = ""
+}
+
+variable "ntp_server" {
+  description = "IP (or host[:port]) of an internal NTP source. Non-empty -> every VM points systemd-timesyncd at it via /etc/systemd/timesyncd.conf.d/. Empty (default) = image default NTP pool. `just up-connected` (INTERNAL_NTP=1) wires it to the centralized_dns hub. See specs/shared-ntp.md."
   type        = string
   default     = ""
 }

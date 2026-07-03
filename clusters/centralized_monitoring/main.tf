@@ -94,6 +94,16 @@ locals {
   dns_resolved_conf = local.use_dns ? templatefile("${path.module}/../_shared/cloud-init/use-dns.conf.tftpl", {
     dns_ip = split(":", var.dns_server)[0]
   }) : ""
+
+  # --- Baseline time sync (unconditional; see specs/shared-ntp.md) -------------
+  # Single-sourced UTC + systemd-timesyncd block, injected at column 0 of every VM template.
+  ntp_timesync = templatefile("${path.module}/../_shared/cloud-init/ntp-timesync.yaml.tftpl", {})
+
+  # Opt-in internal NTP source — mirrors dns_server. Non-empty -> timesyncd points at ntp_ip (by IP).
+  use_ntp = var.ntp_server != ""
+  ntp_conf = local.use_ntp ? templatefile("${path.module}/../_shared/cloud-init/use-ntp.conf.tftpl", {
+    ntp_ip = split(":", var.ntp_server)[0]
+  }) : ""
 }
 
 # --- k0s-client (the monitored host) — created FIRST ------------------------
@@ -106,6 +116,9 @@ resource "local_file" "k0s_ci" {
     ssh_pubkey      = local.ssh_pubkey
     k0s_otel_config = local.k0s_otel_placeholder
     # Cross-cluster DNS — gated on a non-empty dns_server. See specs/cross-cluster.md.
+    ntp_timesync      = local.ntp_timesync
+    ntp_server        = var.ntp_server
+    ntp_conf          = local.ntp_conf
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
     internal_ca_cert  = var.internal_ca_cert
@@ -257,6 +270,9 @@ resource "local_file" "server_ci" {
     syslog_client_conf  = local.syslog_client_conf
     # Cross-cluster DNS — the shared systemd-resolved drop-in, gated on a non-empty dns_server so
     # the default `just up` keeps the image default resolver. See specs/cross-cluster.md.
+    ntp_timesync      = local.ntp_timesync
+    ntp_server        = var.ntp_server
+    ntp_conf          = local.ntp_conf
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
     internal_ca_cert  = var.internal_ca_cert
@@ -302,10 +318,22 @@ resource "local_file" "server_resolved_conf" {
   content  = local.dns_resolved_conf
 }
 
+resource "local_file" "server_ntp_conf" {
+  count    = local.use_ntp ? 1 : 0
+  filename = "${local.render_dir}/server-ntp.conf"
+  content  = local.ntp_conf
+}
+
 resource "local_file" "k0s_resolved_conf" {
   count    = local.use_dns ? 1 : 0
   filename = "${local.render_dir}/k0s-resolved.conf"
   content  = local.dns_resolved_conf
+}
+
+resource "local_file" "k0s_ntp_conf" {
+  count    = local.use_ntp ? 1 : 0
+  filename = "${local.render_dir}/k0s-ntp.conf"
+  content  = local.ntp_conf
 }
 
 resource "local_file" "server_ship_conf" {

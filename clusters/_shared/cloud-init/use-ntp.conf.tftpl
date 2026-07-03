@@ -1,0 +1,10 @@
+# Managed by OpenTofu — SHARED cross-cluster snippet (clusters/_shared/cloud-init).
+# Points this VM's systemd-timesyncd at the internal NTP source so the fleet disciplines its
+# clock against a lab-local server instead of the public pool. Dropped into
+# /etc/systemd/timesyncd.conf.d/; systemd-timesyncd merges *.conf drop-ins.
+#
+# NTP is addressed by IP, so time sync does not depend on resolving a hostname — it cannot lose
+# the first-boot DNS warm-up race that afflicts pool.ntp.org when dns_server routes the fleet
+# through the AdGuard hub. See specs/shared-ntp.md.
+[Time]
+NTP=${ntp_ip}

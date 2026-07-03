@@ -1,0 +1,11 @@
+# Managed by OpenTofu — SHARED cross-cluster snippet (clusters/_shared/cloud-init).
+# Baseline fleet time sync — injected at column 0 into every VM's cloud-config (before
+# `packages:`). Pins UTC and enables the stock systemd-timesyncd client via cloud-init's
+# native `ntp:` module. Unconditional (no toggle): a synchronized UTC clock is a baseline
+# requirement so log/metric/cert timestamps align fleet-wide. Companion runcmd
+# `timedatectl set-timezone Etc/UTC` stays inline in each template (Multipass injects the
+# host timezone at first boot; the runcmd re-affirms UTC last). See specs/shared-ntp.md.
+timezone: Etc/UTC
+ntp:
+  enabled: true
+  ntp_client: systemd-timesyncd

@@ -61,6 +61,18 @@ locals {
   dns_resolved_conf = local.use_dns ? templatefile("${path.module}/../_shared/cloud-init/use-dns.conf.tftpl", {
     dns_ip = split(":", var.dns_server)[0]
   }) : ""
+
+  # --- Baseline time sync (unconditional; see specs/shared-ntp.md) -------------
+  # Single-sourced UTC + systemd-timesyncd block, injected at column 0 of every VM template so
+  # all fleet renders are byte-identical and cannot drift.
+  ntp_timesync = templatefile("${path.module}/../_shared/cloud-init/ntp-timesync.yaml.tftpl", {})
+
+  # Opt-in internal NTP source — mirrors dns_server. Non-empty -> every VM points
+  # systemd-timesyncd at ntp_ip (by IP, so it never races DNS at boot). See specs/shared-ntp.md.
+  use_ntp = var.ntp_server != ""
+  ntp_conf = local.use_ntp ? templatefile("${path.module}/../_shared/cloud-init/use-ntp.conf.tftpl", {
+    ntp_ip = split(":", var.ntp_server)[0]
+  }) : ""
 }
 
 # --- DNS VM (AdGuard Home + Unbound + exporters) ----------------------------
@@ -76,6 +88,10 @@ resource "local_file" "server_ci" {
     adguard_exporter_ver = var.adguard_exporter_version
     unbound_conf         = local.unbound_conf
 
+    ntp_timesync         = local.ntp_timesync
+    ntp_server           = var.ntp_server
+    ntp_conf             = local.ntp_conf
+    enable_ntp_server    = var.enable_ntp_server
     dns_server           = var.dns_server
     dns_resolved_conf    = local.dns_resolved_conf
     internal_ca_cert     = var.internal_ca_cert
@@ -111,6 +127,14 @@ resource "local_file" "otel_conf" {
   count    = local.push_otlp ? 1 : 0
   filename = "${local.render_dir}/server-otel.yaml"
   content  = local.otel_agent_conf
+}
+
+# Internal NTP source drop-in, rendered standalone for scp onto the running VM by
+# `just refresh-cross-cluster` (mirrors ship_conf/otel_conf). count=0 keeps a plain `just up` clean.
+resource "local_file" "ntp_dropin" {
+  count    = local.use_ntp ? 1 : 0
+  filename = "${local.render_dir}/server-ntp.conf"
+  content  = local.ntp_conf
 }
 
 # The seeded AdGuard config, rendered standalone (mirrors the embedded copy in server.yaml's

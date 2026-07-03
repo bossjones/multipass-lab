@@ -18,6 +18,7 @@ variables {
   use_internal_tls   = false
   ca_ip              = ""
   stepca_ca_password = ""
+  ntp_server         = ""
 }
 
 run "defaults_sizing_names_and_render" {
@@ -471,6 +472,29 @@ run "ntp_timezone_render" {
       local_file.server_ci.content, local_file.k0s_ci.content,
     ] : can(yamldecode(c))])
     error_message = "rendered cloud-init must stay valid YAML after adding timezone/ntp"
+  }
+}
+
+run "ntp_server_off_by_default" {
+  command = plan
+  assert {
+    condition     = alltrue([for c in [local_file.server_ci.content, local_file.k0s_ci.content] : !strcontains(c, "99-centralized-ntp.conf")])
+    error_message = "the internal NTP drop-in must be absent by default (ntp_server empty)"
+  }
+}
+
+run "ntp_server_on_renders_dropin" {
+  command = plan
+  variables {
+    ntp_server = "10.0.0.9"
+  }
+  assert {
+    condition     = alltrue([for c in [local_file.server_ci.content, local_file.k0s_ci.content] : strcontains(c, "/etc/systemd/timesyncd.conf.d/99-centralized-ntp.conf")])
+    error_message = "ntp_server set must render the timesyncd drop-in on every VM"
+  }
+  assert {
+    condition     = alltrue([for c in [local_file.server_ci.content, local_file.k0s_ci.content] : strcontains(c, "NTP=10.0.0.9")])
+    error_message = "the drop-in must point at the injected NTP IP"
   }
 }
 

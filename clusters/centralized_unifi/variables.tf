@@ -41,6 +41,12 @@ variable "internal_ca_cert" {
   default     = ""
 }
 
+variable "ntp_server" {
+  description = "IP (or host[:port]) of an internal NTP source. Non-empty -> every VM points systemd-timesyncd at it via /etc/systemd/timesyncd.conf.d/. Empty (default) = image default NTP pool. `just up-connected` (INTERNAL_NTP=1) wires it to the centralized_dns hub. See specs/shared-ntp.md."
+  type        = string
+  default     = ""
+}
+
 variable "domain" {
   description = "DNS suffix for internal service hostnames registered into centralized_dns AdGuard (via `just set-dns`)."
   type        = string

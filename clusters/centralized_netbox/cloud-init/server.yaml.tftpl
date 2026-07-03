@@ -17,11 +17,7 @@
 # reset (common) simply retries instead of failing the boot.
 package_update: true
 
-# Time sync — pin every VM to UTC and keep the clock disciplined via systemd-timesyncd.
-timezone: Etc/UTC
-ntp:
-  enabled: true
-  ntp_client: systemd-timesyncd
+${ntp_timesync}
 
 packages:
   - docker.io
@@ -47,6 +43,14 @@ write_files:
     permissions: '0644'
     content: |
       ${indent(6, dns_resolved_conf)}
+%{ endif ~}
+%{ if ntp_server != "" ~}
+
+  # Internal NTP source — point systemd-timesyncd at the lab NTP server (shared snippet). See specs/shared-ntp.md.
+  - path: /etc/systemd/timesyncd.conf.d/99-centralized-ntp.conf
+    permissions: '0644'
+    content: |
+      ${indent(6, ntp_conf)}
 %{ endif ~}
 %{ if internal_ca_cert != "" ~}
 
@@ -422,6 +426,10 @@ runcmd:
   # Enforce UTC late — Multipass injects the host timezone during first boot and can beat the
   # declarative timezone key; runcmd runs after config modules, so it wins (see specs/ntp.md).
   - timedatectl set-timezone Etc/UTC
+%{ if ntp_server != "" ~}
+  # Internal NTP source — apply the timesyncd drop-in written above. See specs/shared-ntp.md.
+  - systemctl restart systemd-timesyncd
+%{ endif ~}
 %{ if dns_server != "" ~}
   # Cross-cluster DNS — point this VM's resolver at the centralized_dns AdGuard Home hub.
   - systemctl restart systemd-resolved
