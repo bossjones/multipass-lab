@@ -189,14 +189,30 @@ up-connected:
       fi
     fi
 
+    # Internal NTP (opt-in): with INTERNAL_NTP set, the DNS box runs chrony as the fleet NTP server
+    # (dns_ntp_json enables it at the box's first boot) and every other VM points systemd-timesyncd
+    # at that box by IP (ntp_json, set once dns_ip is known — by IP so time sync never races DNS at
+    # boot). Both empty {} when off, so a plain run is unchanged. See specs/shared-ntp.md.
+    dns_ntp_json='{}'
+    ntp_json='{}'
+    if [ -n "${INTERNAL_NTP:-}" ]; then
+      dns_ntp_json='{"enable_ntp_server": true}'
+      echo "internal NTP: DNS box will serve time via chrony; fleet disciplines against it"
+    fi
+
     # 0. DNS hub FIRST — pure :53 sink. No telemetry targets yet (the hubs don't exist), but it DOES
     #    get the CA trust anchor at first boot (static, so no ordering dependency on the PKI hub).
     echo "=== up-connected: dns hub ($dns) ==="
-    jq -n --arg ca "$ca_pem" '{internal_ca_cert: $ca}' \
+    jq -n --arg ca "$ca_pem" --argjson ntp "$dns_ntp_json" '{internal_ca_cert: $ca} + $ntp' \
       > {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json
     just up "$dns" || { echo "FAILED hub: $dns"; rc=1; }
     dns_ip="$(tofu -chdir={{cluster_root}}/$dns output -raw server_ipv4)"
     echo "    AdGuard Home resolver: $dns_ip:53"
+    # Now that the DNS/NTP hub IP is known, point the fleet's timesyncd at it (INTERNAL_NTP only).
+    if [ -n "${INTERNAL_NTP:-}" ]; then
+      ntp_json="$(jq -n --arg ip "$dns_ip" '{ntp_server: $ip}')"
+      echo "    chrony NTP server: $dns_ip:123"
+    fi
     # health-gate: do NOT wire anyone until AdGuard actually answers, else a dependent VM switches
     # its resolver at boot and cannot resolve archive.ubuntu.com. `dig` ships with macOS.
     echo "    waiting for AdGuard Home to answer DNS on $dns_ip:53 ..."
@@ -208,7 +224,7 @@ up-connected:
     # 1. logging hub — pure sink; now resolves via DNS + trusts the internal CA. enable_coroot brings
     #    up the eBPF observability stack on the k0s node (bulk bring-up always includes it).
     echo "=== up-connected: logging hub ($logging) ==="
-    jq -n --arg dns "$dns_ip" --arg ca "$ca_pem" '{dns_server: $dns, internal_ca_cert: $ca, enable_coroot: true}' \
+    jq -n --arg dns "$dns_ip" --arg ca "$ca_pem" --argjson ntp "$ntp_json" '{dns_server: $dns, internal_ca_cert: $ca, enable_coroot: true} + $ntp' \
       > {{cluster_root}}/$logging/.cross-cluster.auto.tfvars.json
     just up "$logging" || { echo "FAILED hub: $logging"; rc=1; }
     log_ip="$(tofu -chdir={{cluster_root}}/$logging output -raw central_ipv4)"
@@ -218,8 +234,8 @@ up-connected:
     echo "=== up-connected: monitoring hub ($monitoring) ==="
     # TLS (tls_json) must be set HERE — the VM is created by this `just up`, and use_internal_tls
     # gates the leaf-issuance cloud-init; the step-5 re-apply is content-only and won't recreate it.
-    jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg ca "$ca_pem" --argjson tls "$tls_json" \
-      '{dns_server: $dns, log_shipping_target: $log, internal_ca_cert: $ca} + $tls' \
+    jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg ca "$ca_pem" --argjson tls "$tls_json" --argjson ntp "$ntp_json" \
+      '{dns_server: $dns, log_shipping_target: $log, internal_ca_cert: $ca} + $tls + $ntp' \
       > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
     just up "$monitoring" || { echo "FAILED hub: $monitoring"; rc=1; }
     mon_ip="$(tofu -chdir={{cluster_root}}/$monitoring output -raw server_ipv4)"
@@ -236,8 +252,8 @@ up-connected:
       # netbox joins the fleet with discovery on (Diode + orb-agent), per the bulk bring-up spec.
       extra='{}'
       [ "$c" = "centralized_netbox" ] && extra='{"enable_discovery": true}'
-      jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg oo "$mon_ip:5080" --arg ca "$ca_pem" --argjson extra "$extra" \
-        '{dns_server: $dns, log_shipping_target: $log, openobserve_endpoint: $oo, internal_ca_cert: $ca} + $extra' \
+      jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg oo "$mon_ip:5080" --arg ca "$ca_pem" --argjson extra "$extra" --argjson ntp "$ntp_json" \
+        '{dns_server: $dns, log_shipping_target: $log, openobserve_endpoint: $oo, internal_ca_cert: $ca} + $extra + $ntp' \
         > "$dir/.cross-cluster.auto.tfvars.json"
       just up "$c" || { echo "FAILED consumer: $c"; rc=1; }
       # accumulate this consumer's VM IPs as Prometheus scrape targets (node_exporter :9100)
@@ -255,8 +271,8 @@ up-connected:
     #    the DNS VM booted before the hubs, so wire its log shipping now. A targeted re-apply
     #    (content-only change — never recreates the VM) materializes the rendered drop-ins for scp.
     echo "=== up-connected: wiring DNS hub self-telemetry ==="
-    jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg oo "$mon_ip:5080" --arg ca "$ca_pem" \
-      '{log_shipping_target: $log, openobserve_endpoint: $oo, internal_ca_cert: $ca}' \
+    jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg oo "$mon_ip:5080" --arg ca "$ca_pem" --argjson ntp "$dns_ntp_json" \
+      '{log_shipping_target: $log, openobserve_endpoint: $oo, internal_ca_cert: $ca} + $ntp' \
       > {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json
     tofu -chdir={{cluster_root}}/$dns apply -auto-approve   # re-renders .rendered/ drop-ins only
     just _hot-push-cross-cluster "$dns"
