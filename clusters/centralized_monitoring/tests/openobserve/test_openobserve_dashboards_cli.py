@@ -126,6 +126,26 @@ def test_import_creates_folder_and_posts(httpserver, tmp_path):
     assert ("POST", "/api/default/dashboards") in methods
 
 
+def test_import_skips_non_dashboard_json(httpserver, tmp_path):
+    """A top-level JSON array (e.g. the raw log-sample files under logs/) is swept by the
+    **/*.json glob but must be skipped, not crash the importer with .get() on a list."""
+    _write_dash(tmp_path / "board.json", "Log Overview")
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "samples.json").write_text(json.dumps([{"event": "x"}]))
+    httpserver.expect_request(
+        "/api/default/dashboards", method="GET"
+    ).respond_with_json({"dashboards": []})
+    httpserver.expect_request(
+        "/api/default/dashboards", method="POST"
+    ).respond_with_json({"dashboardId": "new"})
+    r = _run(httpserver.url_for(""), "--json", "dashboards", "import", str(tmp_path))
+    assert r.exit_code == 0, r.output
+    rows = json.loads(r.output)
+    actions = {row["file"]: row["action"] for row in rows}
+    assert actions["board.json"] == "created"
+    assert actions["samples.json"] == "skipped"
+
+
 def test_import_sends_basic_auth_on_post(httpserver, tmp_path):
     _write_dash(tmp_path / "board.json", "Log Overview")
     httpserver.expect_request(

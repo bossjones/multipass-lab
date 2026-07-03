@@ -157,6 +157,25 @@ locals {
     name    = f
     content = file("${local.grafana_dashboard_dir}/${f}")
   }]
+
+  # OpenObserve dashboards: same drop-a-file sweep as Grafana, but imported post-boot over the
+  # REST API by openobserve-provision.sh (OpenObserve has no file-provisioning; see the script +
+  # specs/openobserve-dashboards.md). Each subdir under openobserve/dashboards becomes an
+  # OpenObserve folder. The `title` filter skips non-dashboard JSON (e.g. the raw log samples under
+  # logs/, which are top-level arrays) so they never reach the importer. Adding a dashboard needs no
+  # edit here — drop a titled JSON under the right subdir.
+  openobserve_dashboard_dir   = "${path.module}/openobserve/dashboards"
+  openobserve_dashboard_files = fileset(local.openobserve_dashboard_dir, "**/*.json")
+  openobserve_dashboards = [
+    for f in local.openobserve_dashboard_files : {
+      name    = f
+      content = file("${local.openobserve_dashboard_dir}/${f}")
+    } if try(jsondecode(file("${local.openobserve_dashboard_dir}/${f}")).title, null) != null
+  ]
+
+  # Static seed+import script spliced verbatim (file(), no templating — it uses plain bash ${var});
+  # credentials are injected at call time via the runcmd env, not baked into the script.
+  openobserve_provision_sh = file("${path.module}/cloud-init/openobserve/provision.sh")
 }
 
 # --- server (the observability hub) — created SECOND ------------------------
@@ -175,6 +194,12 @@ resource "local_file" "server_ci" {
     grafana_dash_prov   = local.grafana_dash_prov
     grafana_dashboards  = local.grafana_dashboards
     ssh_exporter_conf   = local.ssh_exporter_conf
+    # OpenObserve dashboards (dropped as files, imported post-boot by the provision script) +
+    # the credentials/org the script needs to reach the local OpenObserve + OTel Collector.
+    openobserve_org          = local.openobserve_org
+    openobserve_password     = local.openobserve_password
+    openobserve_dashboards   = local.openobserve_dashboards
+    openobserve_provision_sh = local.openobserve_provision_sh
     # Heimdall auto-seed (cloud-init). enable_heimdall comes from local.flags; the
     # seed toggle + script body + flag list are passed explicitly so enabled_exporters
     # stays a pure service-flag list.

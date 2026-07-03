@@ -76,6 +76,23 @@ write_files:
     content: |
       ${indent(6, otel_config)}
 %{ endif ~}
+%{ if enable_openobserve ~}
+  # --- OpenObserve dashboards (drop-a-file; imported post-boot by the script below) ----
+  # One entry per titled *.json under openobserve/dashboards; the relative path is preserved so
+  # openobserve-provision.sh files each into its subdir's OpenObserve folder. gz+b64 keeps large
+  # JSON compact in the user-data.
+%{ for d in openobserve_dashboards ~}
+  - path: /opt/stack/openobserve/dashboards/${d.name}
+    permissions: '0644'
+    encoding: gz+b64
+    content: ${base64gzip(d.content)}
+%{ endfor ~}
+  # Seeds the otlp_logs logs+traces streams, then imports the dashboards above (idempotent).
+  - path: /usr/local/sbin/openobserve-provision.sh
+    permissions: '0755'
+    content: |
+      ${indent(6, openobserve_provision_sh)}
+%{ endif ~}
 %{ if enable_ssh_exporter ~}
   # --- ssh_exporter ---------------------------------------------------------
   - path: /opt/stack/ssh_exporter/ssh_exporter.yaml
@@ -126,6 +143,12 @@ runcmd:
   - systemctl enable docker
   - systemctl restart docker
   - docker compose -f /opt/stack/compose.yaml up -d
+%{ if enable_openobserve ~}
+  # Seed the app-OTLP streams (otlp_logs logs+traces) and import the OpenObserve dashboards, once
+  # the stack is up. Best-effort (|| true) so a slow/again-failing OpenObserve can't break the boot;
+  # the script waits for OpenObserve health itself and is idempotent. Credentials via env, not argv.
+  - OO_ORG='${openobserve_org}' OO_PASS='${openobserve_password}' /usr/local/sbin/openobserve-provision.sh || true
+%{ endif ~}
 %{ if enable_docker_tools ~}
   # Interactive docker operator TUIs (wharf/oxker/dive); best-effort so a download blip can't
   # break boot. Idempotent — re-run with `sudo /usr/local/sbin/install-docker-tools.sh`.

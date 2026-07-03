@@ -109,17 +109,24 @@ Every `Infrastructure/*.json` query was rewritten against these real, live-confi
 metric names — none of the source repo's OTel-semantic-convention names
 (`system_cpu_time`, `system_memory_usage`, etc.) are used.
 
-**Traces are the one open item.** The otel-collector's traces pipeline and its
+**Empty streams (the `otlp_logs` seed).** The otel-collector's traces pipeline and its
 app-log pipeline both target `stream-name: otlp_logs`, but OpenObserve keys streams
 by `(name, type)`, so traces live at `otlp_logs` with `stream_type=traces` — distinct
 from the `otlp_logs` **logs** stream the `LogAnalysis`/`Correlation` dashboards use.
-No app in this lab currently pushes OTLP traces, so the stream doesn't exist yet and
-its field names (`service_name`, `http_status_code`, `http_route`, `span_status`,
-`duration`) could not be confirmed live — they're taken directly from OpenObserve's
-own `Traces - Overall`/`Traces - By service` community dashboards, which were built
-against OpenObserve's native OTLP trace ingestion schema. Reconfirm with
-`GET /api/default/streams/otlp_logs/schema?type=traces` once real trace traffic
-flows, per the same "must be confirmed live" caveat as the original streams table.
+Nothing in this lab pushes app OTLP data, and OpenObserve creates streams **lazily on
+first ingest**, so both streams were absent and every panel querying them errored with
+`Search stream not found: otlp_logs`. `openobserve-provision.sh` fixes this at boot by
+pushing **one seed record each** (a log + a span) through the local collector
+(`localhost:4318/v1/{logs,traces}`), which creates both streams via the real pipeline.
+The seed uses a **boot-time timestamp** so it lands inside OpenObserve's 5-hour ingest
+window (`ZO_INGEST_ALLOWED_UPTO`, default 5h — an older fixed timestamp is silently
+rejected as "too old"). The seed is guarded on stream existence (skipped if already
+present) so real traffic is never diluted. The span carries `service.name` +
+`http.{method,route,status_code}`, so the resulting traces schema exposes exactly the
+fields the `Traces - Overall`/`Traces - By service` dashboards query (`service_name`,
+`duration`, `http_status_code`, `span_status`, …), confirmed live via
+`GET /api/default/streams/otlp_logs/schema?type=traces`. Once real trace traffic flows
+it simply accumulates alongside the seed row.
 
 Representative queries (log panels are SQL over `_search`; metric panels are PromQL):
 
@@ -154,12 +161,30 @@ node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes
 > (unpinned). Easiest authoring path: build one board in the UI, export its JSON, then
 > templatize.
 
-## Provisioning mechanics (CLI, on-demand)
+## Provisioning mechanics (cloud-init at boot + host CLI on-demand)
 
-There is no cloud-init hook for OpenObserve dashboards (unlike Grafana's drop-a-file sweep);
-they are pushed to the API post-boot. This reuses the existing host-run CLI conventions
-(`openobserve_cli.py`, `_obs_common`), mirroring how `just locust` / `just openobserve-check`
-work.
+Dashboards are provisioned **automatically at first boot from cloud-init**, the same drop-a-file
+model as Grafana — plus the host CLI remains as a manual/idempotent escape hatch. OpenObserve has
+no native file-provisioning, so "drop-a-file" here means: the titled `*.json` under
+`openobserve/dashboards/**` are swept in `main.tf` (`local.openobserve_dashboards`, filtered by
+`try(jsondecode(...).title, null) != null` so non-dashboard JSON like the raw arrays under `logs/`
+is excluded), written into the server VM under `/opt/stack/openobserve/dashboards/<folder>/…`
+(gz+b64), and a static script `cloud-init/openobserve/provision.sh`
+(`/usr/local/sbin/openobserve-provision.sh`) POSTs them to the REST API after the stack is up.
+All of this is gated on `enable_openobserve`; the runcmd is best-effort (`|| true`) and the script
+waits for OpenObserve health and is idempotent (upsert by title). Because it lives in cloud-init,
+changes need `just recreate centralized_monitoring` (not `just up`) to reach a running VM.
+
+The same script also **seeds the `otlp_logs` streams** (see "Empty streams" below).
+
+The host-run path is unchanged and still valid for re-importing without a recreate: `just
+openobserve-dashboards centralized_monitoring` → `openobserve_cli.py dashboards import`, reusing
+the existing CLI conventions (`_obs_common`), mirroring `just locust` / `just openobserve-check`.
+The importer skips non-dict JSON so the stray `logs/*.json` arrays can't crash it.
+
+> **macOS Sequoia caveat:** the host CLI runs under uv's Python, which macOS 15 Local Network
+> Privacy blocks from reaching the VM IPs (errno 65) until granted — the boot-time cloud-init path
+> avoids this entirely (it runs on the VM against localhost). See the repo memory note.
 
 New `openobserve_cli.py dashboards` sub-typer (all via the existing basic-auth `httpx` client,
 org default `default`, server resolved by `_obs_common.resolve_target`):

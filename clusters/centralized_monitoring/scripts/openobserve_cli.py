@@ -437,6 +437,14 @@ def dashboards_import(
                 spec = json.loads(f.read_text())
             except Exception as exc:  # noqa: BLE001 - surface a bad file clearly
                 _die(f"{f}: invalid JSON: {exc}")
+            # Only dashboard objects (dicts with a title) are importable; skip anything else that
+            # got swept up by the **/*.json glob (e.g. raw log-sample arrays under logs/), rather
+            # than crashing on spec.get(). Mirrors the cloud-init provision script's title filter.
+            if not isinstance(spec, dict) or not spec.get("title"):
+                rows.append(
+                    {"file": f.name, "folder": folder_name, "title": "", "action": "skipped"}
+                )
+                continue
             title = spec.get("title")
             try:
                 fid = _ensure_folder(client, c.org, folder_name)
