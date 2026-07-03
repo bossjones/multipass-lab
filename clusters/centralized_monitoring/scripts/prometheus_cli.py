@@ -36,6 +36,7 @@ FLAG_JOBS = {
     "enable_node_exporter": "node",
     "enable_cadvisor": "cadvisor",
     "enable_process_exporter": "process",
+    "enable_systemd_exporter": "systemd",
     "enable_netdata": "netdata",
     "enable_kube_state_metrics": "kube-state-metrics",
     "enable_kubelet_scrape": "kubelet",

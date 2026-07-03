@@ -305,3 +305,49 @@ run "web_urls_core_and_all" {
     error_message = "registered_vm_name must be the client VM name"
   }
 }
+
+run "exporters_render_on_both_vms" {
+  command = plan
+
+  # The generic install-exporter.sh helper is bootstrapped on both VMs (this cluster had none).
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "install-exporter.sh") && strcontains(local_file.client_ci.content, "install-exporter.sh")
+    error_message = "the exporter installer helper must render on both VMs"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "node_exporter-1.8.2") && strcontains(local_file.client_ci.content, "node_exporter-1.8.2")
+    error_message = "node_exporter must install on both VMs by default"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "process-exporter-0.8.7") && strcontains(local_file.server_ci.content, "-threads=false -gather-smaps=false -remove-empty-groups")
+    error_message = "server must install process-exporter v0.8.7 with the low-cardinality perf flags"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "--web.listen-address=:9558") && strcontains(local_file.server_ci.content, "--systemd.collector.unit-include=")
+    error_message = "server must install systemd_exporter (:9558) with a curated unit-include"
+  }
+  # web_urls.all folds the 6 enabled /metrics endpoints on top of the 2 UI/API URLs.
+  assert {
+    condition     = length(output.web_urls.all) == 8
+    error_message = "web_urls.all must add the 6 exporter /metrics endpoints to the 2 UI/API URLs"
+  }
+  assert {
+    condition     = contains(output.enabled_exporters, "enable_node_exporter") && contains(output.enabled_exporters, "enable_process_exporter") && contains(output.enabled_exporters, "enable_systemd_exporter")
+    error_message = "enabled_exporters must list the default-on exporter set"
+  }
+}
+
+run "exporters_off_omit_install" {
+  command = plan
+
+  variables {
+    enable_node_exporter    = false
+    enable_process_exporter = false
+    enable_systemd_exporter = false
+  }
+
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "install-exporter.sh node_exporter") && !strcontains(local_file.server_ci.content, "systemd_exporter") && !strcontains(local_file.server_ci.content, "process-exporter")
+    error_message = "disabling all exporter flags must omit their install blocks on the server"
+  }
+}

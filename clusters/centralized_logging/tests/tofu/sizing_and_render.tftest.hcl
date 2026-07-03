@@ -109,6 +109,18 @@ run "exporters_render_with_defaults" {
     error_message = "central must install systemd_exporter on :9558"
   }
   assert {
+    condition     = strcontains(local_file.central_ci.content, "--systemd.collector.unit-include=")
+    error_message = "central systemd_exporter must be scoped with a curated unit-include"
+  }
+  assert {
+    condition     = strcontains(local_file.central_ci.content, "process-exporter-0.8.7")
+    error_message = "central must install process-exporter v0.8.7"
+  }
+  assert {
+    condition     = strcontains(local_file.central_ci.content, "-threads=false -gather-smaps=false -remove-empty-groups")
+    error_message = "central process-exporter must run with the low-cardinality perf flags"
+  }
+  assert {
     condition     = strcontains(local_file.central_ci.content, "/var/log/remote/*/*.log")
     error_message = "central filestat must watch /var/log/remote"
   }

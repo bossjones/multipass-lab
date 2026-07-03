@@ -191,6 +191,37 @@ run "node_exporter_flag_toggles_install" {
     condition     = strcontains(local_file.ca_ci.content, "node_exporter-1.8.2") && strcontains(local_file.services_ci.content, "node_exporter-1.8.2")
     error_message = "node_exporter must install on both VMs by default"
   }
+  # process-exporter (:9256, v0.8.7 + perf flags) + systemd_exporter (:9558, curated) on both VMs.
+  assert {
+    condition     = strcontains(local_file.ca_ci.content, "process-exporter-0.8.7") && strcontains(local_file.services_ci.content, "process-exporter-0.8.7")
+    error_message = "process-exporter v0.8.7 must install on both VMs by default"
+  }
+  assert {
+    condition     = strcontains(local_file.ca_ci.content, "-threads=false -gather-smaps=false -remove-empty-groups") && strcontains(local_file.services_ci.content, "-threads=false -gather-smaps=false -remove-empty-groups")
+    error_message = "process-exporter must run with the low-cardinality perf flags on both VMs"
+  }
+  assert {
+    condition     = strcontains(local_file.ca_ci.content, "--web.listen-address=:9558") && strcontains(local_file.services_ci.content, "--systemd.collector.unit-include=")
+    error_message = "systemd_exporter (:9558, curated unit-include) must install on both VMs"
+  }
+}
+
+run "exporters_off_omit_install" {
+  command = plan
+
+  variables {
+    enable_process_exporter = false
+    enable_systemd_exporter = false
+  }
+
+  assert {
+    condition     = !strcontains(local_file.ca_ci.content, "process-exporter") && !strcontains(local_file.services_ci.content, "process-exporter")
+    error_message = "disabled process-exporter must not render on either VM"
+  }
+  assert {
+    condition     = !strcontains(local_file.ca_ci.content, "systemd_exporter") && !strcontains(local_file.services_ci.content, "systemd_exporter")
+    error_message = "disabled systemd_exporter must not render on either VM"
+  }
 }
 
 run "node_exporter_off_omits_install" {

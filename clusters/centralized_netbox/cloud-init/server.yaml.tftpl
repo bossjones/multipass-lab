@@ -244,6 +244,59 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 
+  # Generic exporter installer: download a GitHub release (tar.gz or raw binary), drop the
+  # binary in /usr/local/bin, install + enable a systemd unit. {ARCH} in the URL is replaced
+  # with the host's Debian arch (arm64/amd64). Mirrors the other clusters' install pattern.
+  - path: /usr/local/sbin/install-exporter.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      name="$1"; url="$2"; bin="$3"; shift 3; args="$*"
+      arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+      case "$arch" in aarch64) arch=arm64 ;; x86_64) arch=amd64 ;; esac
+      url="$${url//\{ARCH\}/$arch}"
+      tmp="$(mktemp -d)"
+      curl -sSLf "$url" -o "$tmp/dl"
+      if tar -tzf "$tmp/dl" >/dev/null 2>&1; then
+        tar -xzf "$tmp/dl" -C "$tmp"
+        found="$(find "$tmp" -type f -name "$bin" | head -n1)"
+      else
+        found="$tmp/dl"
+      fi
+      install -m0755 "$found" "/usr/local/bin/$name"
+      cat >/etc/systemd/system/$name.service <<UNIT
+      [Unit]
+      Description=$name
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      ExecStart=/usr/local/bin/$name $args
+      Restart=always
+      RestartSec=5
+      [Install]
+      WantedBy=multi-user.target
+      UNIT
+      systemctl daemon-reload
+      systemctl enable --now "$name"
+%{ if enable_process_exporter ~}
+  # process-exporter config: curated groups + a bounded {{.Comm}} catch-all (empty groups
+  # pruned at runtime via -remove-empty-groups). exe matches the argv[0] basename.
+  - path: /etc/process-exporter/all.yaml
+    permissions: '0644'
+    content: |
+      process_names:
+        - name: container-runtime
+          exe: [ dockerd, containerd, containerd-shim-runc-v2, runc ]
+        - name: database
+          exe: [ postgres, redis-server ]
+        - name: netbox
+          comm: [ gunicorn, python3 ]
+        - name: "{{.Comm}}"
+          cmdline:
+            - '.+'
+%{ endif ~}
+
 runcmd:
   # Enforce UTC late — Multipass injects the host timezone during first boot and can beat the
   # declarative timezone key; runcmd runs after config modules, so it wins (see specs/ntp.md).
@@ -253,3 +306,15 @@ runcmd:
   # Start the stack asynchronously so cloud-init completes inside the 300s launch window.
   - systemctl enable netbox-stack.service
   - systemctl start --no-block netbox-stack.service
+%{ if enable_node_exporter ~}
+  # node_exporter — OS host + systemd-unit metrics (:9100)
+  - /usr/local/sbin/install-exporter.sh node_exporter https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-{ARCH}.tar.gz node_exporter --collector.systemd
+%{ endif ~}
+%{ if enable_systemd_exporter ~}
+  # systemd_exporter — per-unit health/resource metrics (:9558)
+  - /usr/local/sbin/install-exporter.sh systemd_exporter https://github.com/prometheus-community/systemd_exporter/releases/download/v0.7.0/systemd_exporter-0.7.0.linux-{ARCH}.tar.gz systemd_exporter --web.listen-address=:9558 --systemd.collector.unit-include='(ssh|docker|containerd|netbox.*|node_exporter|systemd_exporter|process-exporter)[.]service' --systemd.collector.enable-restart-count
+%{ endif ~}
+%{ if enable_process_exporter ~}
+  # process-exporter — per-process metrics (:9256)
+  - /usr/local/sbin/install-exporter.sh process-exporter https://github.com/ncabatoff/process-exporter/releases/download/v0.8.7/process-exporter-0.8.7.linux-{ARCH}.tar.gz process-exporter --config.path=/etc/process-exporter/all.yaml -threads=false -gather-smaps=false -remove-empty-groups
+%{ endif ~}
