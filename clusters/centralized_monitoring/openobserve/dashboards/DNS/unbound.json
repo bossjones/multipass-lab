@@ -1,0 +1,261 @@
+{
+  "version": 5,
+  "dashboardId": "dns-unbound",
+  "title": "Unbound Resolver",
+  "description": "Recursive DNSSEC-validating upstream on the centralized_dns VM (127.0.0.1:5335, unbound_exporter :9167, Prometheus job centralized-dns-unbound). Populates once `just up-connected` wires the DNS exporters into this cluster's Prometheus / metrics stream. Unbound *_total series are counters (charted with rate()).",
+  "role": "",
+  "owner": "centralized_monitoring",
+  "variables": { "list": [], "showDynamicFilters": false },
+  "tabs": [
+    {
+      "tabId": "default",
+      "name": "Default",
+      "panels": [
+        {
+          "id": "panel_unbound_up",
+          "type": "metric",
+          "title": "Unbound up",
+          "description": "1 = unbound_exporter reached Unbound's control socket, 0 = down.",
+          "config": { "show_legends": false, "unit": null, "decimals": 0 },
+          "queryType": "promql",
+          "queries": [
+            {
+              "query": "max(unbound_up)",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": { "stream": "unbound_up", "stream_type": "metrics", "x": [], "y": [], "z": [], "breakdown": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] } },
+              "config": { "promql_legend": "", "layer_type": "scatter", "weight_fixed": 1 }
+            }
+          ],
+          "layout": { "x": 0, "y": 0, "w": 12, "h": 6, "i": 1 }
+        },
+        {
+          "id": "panel_unbound_total_queries",
+          "type": "metric",
+          "title": "Total queries",
+          "description": "Cumulative queries served since Unbound started.",
+          "config": { "show_legends": false, "unit": null, "decimals": 0 },
+          "queryType": "promql",
+          "queries": [
+            {
+              "query": "sum(unbound_queries_total)",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": { "stream": "unbound_queries_total", "stream_type": "metrics", "x": [], "y": [], "z": [], "breakdown": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] } },
+              "config": { "promql_legend": "", "layer_type": "scatter", "weight_fixed": 1 }
+            }
+          ],
+          "layout": { "x": 12, "y": 0, "w": 12, "h": 6, "i": 2 }
+        },
+        {
+          "id": "panel_unbound_cache_hit_ratio_stat",
+          "type": "metric",
+          "title": "Cache hit ratio",
+          "description": "Share of queries answered from cache over the last 5m.",
+          "config": { "show_legends": false, "unit": "percent", "decimals": 1 },
+          "queryType": "promql",
+          "queries": [
+            {
+              "query": "100 * sum(rate(unbound_cache_hits_total[5m])) / clamp_min(sum(rate(unbound_cache_hits_total[5m])) + sum(rate(unbound_cache_misses_total[5m])), 1)",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": { "stream": "unbound_cache_hits_total", "stream_type": "metrics", "x": [], "y": [], "z": [], "breakdown": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] } },
+              "config": { "promql_legend": "", "layer_type": "scatter", "weight_fixed": 1 }
+            }
+          ],
+          "layout": { "x": 24, "y": 0, "w": 12, "h": 6, "i": 3 }
+        },
+        {
+          "id": "panel_unbound_recursion_stat",
+          "type": "metric",
+          "title": "Avg recursion time",
+          "description": "Average time to recursively resolve a cache-miss (seconds).",
+          "config": { "show_legends": false, "unit": "seconds", "decimals": 3 },
+          "queryType": "promql",
+          "queries": [
+            {
+              "query": "avg(unbound_recursion_time_seconds_avg)",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": { "stream": "unbound_recursion_time_seconds_avg", "stream_type": "metrics", "x": [], "y": [], "z": [], "breakdown": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] } },
+              "config": { "promql_legend": "", "layer_type": "scatter", "weight_fixed": 1 }
+            }
+          ],
+          "layout": { "x": 36, "y": 0, "w": 12, "h": 6, "i": 4 }
+        },
+        {
+          "id": "panel_unbound_query_rate",
+          "type": "line",
+          "title": "Query rate",
+          "description": "Queries per second served by Unbound.",
+          "config": { "show_legends": true, "unit": null, "decimals": 1 },
+          "queryType": "promql",
+          "queries": [
+            {
+              "query": "sum(rate(unbound_queries_total[5m]))",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": { "stream": "unbound_queries_total", "stream_type": "metrics", "x": [], "y": [], "z": [], "breakdown": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] } },
+              "config": { "promql_legend": "queries/sec", "layer_type": "scatter", "weight_fixed": 1 }
+            }
+          ],
+          "layout": { "x": 0, "y": 6, "w": 24, "h": 9, "i": 5 }
+        },
+        {
+          "id": "panel_unbound_cache_hits_misses",
+          "type": "line",
+          "title": "Cache hits vs misses",
+          "description": "Cache hit and miss rates — a rising miss rate means more recursion upstream.",
+          "config": { "show_legends": true, "unit": null, "decimals": 1 },
+          "queryType": "promql",
+          "queries": [
+            {
+              "query": "sum(rate(unbound_cache_hits_total[5m]))",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": { "stream": "unbound_cache_hits_total", "stream_type": "metrics", "x": [], "y": [], "z": [], "breakdown": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] } },
+              "config": { "promql_legend": "hits/sec", "layer_type": "scatter", "weight_fixed": 1 }
+            },
+            {
+              "query": "sum(rate(unbound_cache_misses_total[5m]))",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": { "stream": "unbound_cache_misses_total", "stream_type": "metrics", "x": [], "y": [], "z": [], "breakdown": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] } },
+              "config": { "promql_legend": "misses/sec", "layer_type": "scatter", "weight_fixed": 1 }
+            }
+          ],
+          "layout": { "x": 24, "y": 6, "w": 24, "h": 9, "i": 6 }
+        },
+        {
+          "id": "panel_unbound_rcodes",
+          "type": "line",
+          "title": "Answer RCODEs",
+          "description": "Response codes per second (NOERROR / NXDOMAIN / SERVFAIL / …).",
+          "config": { "show_legends": true, "unit": null, "decimals": 1 },
+          "queryType": "promql",
+          "queries": [
+            {
+              "query": "sum by (rcode) (rate(unbound_answer_rcodes_total[5m]))",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": { "stream": "unbound_answer_rcodes_total", "stream_type": "metrics", "x": [], "y": [], "z": [], "breakdown": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] } },
+              "config": { "promql_legend": "{{rcode}}", "layer_type": "scatter", "weight_fixed": 1 }
+            }
+          ],
+          "layout": { "x": 0, "y": 15, "w": 24, "h": 9, "i": 7 }
+        },
+        {
+          "id": "panel_unbound_dnssec",
+          "type": "line",
+          "title": "DNSSEC validation",
+          "description": "Secure vs bogus answer rates — bogus > 0 means DNSSEC validation failures.",
+          "config": { "show_legends": true, "unit": null, "decimals": 2 },
+          "queryType": "promql",
+          "queries": [
+            {
+              "query": "sum(rate(unbound_answers_secure_total[5m]))",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": { "stream": "unbound_answers_secure_total", "stream_type": "metrics", "x": [], "y": [], "z": [], "breakdown": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] } },
+              "config": { "promql_legend": "secure/sec", "layer_type": "scatter", "weight_fixed": 1 }
+            },
+            {
+              "query": "sum(rate(unbound_answers_bogus_total[5m]))",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": { "stream": "unbound_answers_bogus_total", "stream_type": "metrics", "x": [], "y": [], "z": [], "breakdown": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] } },
+              "config": { "promql_legend": "bogus/sec", "layer_type": "scatter", "weight_fixed": 1 }
+            }
+          ],
+          "layout": { "x": 24, "y": 15, "w": 24, "h": 9, "i": 8 }
+        },
+        {
+          "id": "panel_unbound_query_types",
+          "type": "line",
+          "title": "Query types",
+          "description": "Query rate by DNS record type.",
+          "config": { "show_legends": true, "unit": null, "decimals": 1 },
+          "queryType": "promql",
+          "queries": [
+            {
+              "query": "sum by (type) (rate(unbound_query_types_total[5m]))",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": { "stream": "unbound_query_types_total", "stream_type": "metrics", "x": [], "y": [], "z": [], "breakdown": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] } },
+              "config": { "promql_legend": "{{type}}", "layer_type": "scatter", "weight_fixed": 1 }
+            }
+          ],
+          "layout": { "x": 0, "y": 24, "w": 24, "h": 9, "i": 9 }
+        },
+        {
+          "id": "panel_unbound_request_list",
+          "type": "line",
+          "title": "Request list",
+          "description": "In-flight recursion request list — climbing 'current' or any 'exceeded' means Unbound is saturated.",
+          "config": { "show_legends": true, "unit": null, "decimals": 0 },
+          "queryType": "promql",
+          "queries": [
+            {
+              "query": "sum(unbound_request_list_current_all)",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": { "stream": "unbound_request_list_current_all", "stream_type": "metrics", "x": [], "y": [], "z": [], "breakdown": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] } },
+              "config": { "promql_legend": "current (all)", "layer_type": "scatter", "weight_fixed": 1 }
+            },
+            {
+              "query": "sum(rate(unbound_request_list_exceeded_total[5m]))",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": { "stream": "unbound_request_list_exceeded_total", "stream_type": "metrics", "x": [], "y": [], "z": [], "breakdown": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] } },
+              "config": { "promql_legend": "exceeded/sec", "layer_type": "scatter", "weight_fixed": 1 }
+            }
+          ],
+          "layout": { "x": 24, "y": 24, "w": 24, "h": 9, "i": 10 }
+        },
+        {
+          "id": "panel_unbound_cache_memory",
+          "type": "line",
+          "title": "Cache memory",
+          "description": "Memory used by each Unbound cache (rrset / msg / …).",
+          "config": { "show_legends": true, "unit": "bytes", "decimals": 0 },
+          "queryType": "promql",
+          "queries": [
+            {
+              "query": "sum by (cache) (unbound_memory_caches_bytes)",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": { "stream": "unbound_memory_caches_bytes", "stream_type": "metrics", "x": [], "y": [], "z": [], "breakdown": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] } },
+              "config": { "promql_legend": "{{cache}}", "layer_type": "scatter", "weight_fixed": 1 }
+            }
+          ],
+          "layout": { "x": 0, "y": 33, "w": 24, "h": 9, "i": 11 }
+        },
+        {
+          "id": "panel_unbound_unwanted",
+          "type": "line",
+          "title": "Unwanted queries / replies",
+          "description": "Rate of unwanted queries and replies — a spike can indicate cache-poisoning attempts.",
+          "config": { "show_legends": true, "unit": null, "decimals": 2 },
+          "queryType": "promql",
+          "queries": [
+            {
+              "query": "sum(rate(unbound_unwanted_queries_total[5m]))",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": { "stream": "unbound_unwanted_queries_total", "stream_type": "metrics", "x": [], "y": [], "z": [], "breakdown": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] } },
+              "config": { "promql_legend": "unwanted queries/sec", "layer_type": "scatter", "weight_fixed": 1 }
+            },
+            {
+              "query": "sum(rate(unbound_unwanted_replies_total[5m]))",
+              "vrlFunctionQuery": "",
+              "customQuery": true,
+              "fields": { "stream": "unbound_unwanted_replies_total", "stream_type": "metrics", "x": [], "y": [], "z": [], "breakdown": [], "filter": { "filterType": "group", "logicalOperator": "AND", "conditions": [] } },
+              "config": { "promql_legend": "unwanted replies/sec", "layer_type": "scatter", "weight_fixed": 1 }
+            }
+          ],
+          "layout": { "x": 24, "y": 33, "w": 24, "h": 9, "i": 12 }
+        }
+      ]
+    }
+  ]
+}

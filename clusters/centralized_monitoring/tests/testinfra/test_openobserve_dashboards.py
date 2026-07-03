@@ -28,6 +28,8 @@ EXPECTED_TITLES = {
     "Traces By Service",
     "Host Metrics",
     "Container Metrics",
+    "AdGuard Home",
+    "Unbound Resolver",
 }
 
 
