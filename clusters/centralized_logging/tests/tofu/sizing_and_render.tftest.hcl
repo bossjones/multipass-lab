@@ -309,6 +309,10 @@ run "coroot_and_ingress_absent_by_default" {
     error_message = "the OpenEBS StorageClass must not render when enable_coroot is false"
   }
   assert {
+    condition     = !strcontains(local_file.k0s_ci.content, "delete daemonset  openebs-ndm")
+    error_message = "the OpenEBS NDM strip must not render when enable_coroot is false"
+  }
+  assert {
     condition     = !strcontains(local_file.k0s_ci.content, "ingress-nginx/controller")
     error_message = "ingress-nginx must not render when enable_ingress is false (default)"
   }
@@ -354,6 +358,21 @@ run "coroot_and_ingress_render_when_enabled" {
   assert {
     condition     = strcontains(local_file.k0s_ci.content, "openebs-operator-lite") && strcontains(local_file.k0s_ci.content, "is-default-class")
     error_message = "enable_coroot must install the OpenEBS default StorageClass"
+  }
+
+  # OpenEBS NDM (the ~4Gi besteffort leaker that caused global OOMs) must be stripped right after
+  # the manifest applies, while the hostpath provisioner + openebs-device SC delete both render.
+  # See specs/centralized-logging-k0s-perf.md.
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "delete daemonset  openebs-ndm") && strcontains(local_file.k0s_ci.content, "delete storageclass openebs-device")
+    error_message = "enable_coroot must strip OpenEBS NDM (daemonset + openebs-device SC) after installing the storage manifest"
+  }
+
+  # Memory-limit guardrails render on the Coroot server + node-agent + cluster-agent so a future
+  # leak is OOM-killed in its own cgroup instead of causing a global OOM.
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "limits:") && strcontains(local_file.k0s_ci.content, "nodeAgent:") && strcontains(local_file.k0s_ci.content, "clusterAgent:")
+    error_message = "coroot values must set memory limits on the server + node-agent + cluster-agent"
   }
 
   # The rendered values file must override the chart's laptop-hostile defaults.

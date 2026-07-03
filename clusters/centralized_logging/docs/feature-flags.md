@@ -110,7 +110,13 @@ Key differences from the exporter flags:
 - **Chart-default overrides.** The rendered
   [`coroot-values.yaml.tftpl`](../cloud-init/coroot/coroot-values.yaml.tftpl) trims the chart's
   laptop-hostile defaults: ClickHouse storage `100Gi → 10Gi` (would exceed the VM disk) and the
-  server memory request `4Gi → 2Gi`.
+  server memory request `4Gi → 2Gi`. It also sets **memory limits** on the server / node-agent /
+  cluster-agent (`coroot_server_memory_limit` `2Gi`, `coroot_nodeagent_memory` `512Mi`,
+  `coroot_clusteragent_memory` `256Mi`) so a runaway is OOM-killed in its own cgroup, not node-wide.
+- **OpenEBS NDM is stripped.** The `openebs-operator-lite` manifest bundles NDM (Node Disk Manager),
+  which this lab doesn't use (all PVCs bind hostpath) — it leaks to ~4Gi and OOM-kills the node, so
+  `coroot-install.sh` deletes it right after applying the storage manifest. Post-mortem:
+  [`specs/centralized-logging-k0s-perf.md`](../../../specs/centralized-logging-k0s-perf.md).
 - **UI exposure.** Always on a NodePort (`http://<k0s_ip>:30080`, browser-friendly); additionally
   via ingress (`curl -H 'Host: coroot.local' http://<k0s_ip>/`) when `enable_ingress`.
 
