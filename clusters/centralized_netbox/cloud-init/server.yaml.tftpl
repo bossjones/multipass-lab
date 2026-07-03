@@ -228,6 +228,18 @@ write_files:
         touch /var/lib/netbox-bootstrap/done
       }
 
+%{ if dns_server != "" ~}
+      # This oneshot starts async (--no-block) right after the runcmd flips the resolver to the
+      # AdGuard hub, so it can race the hub warming up. Wait until the resolver actually answers an
+      # external name before the git clone / docker pulls below — otherwise the 12 attempts below get
+      # burned on "Could not resolve host" and NetBox silently never comes up. Mirrors the resolver
+      # gate in centralized_logging/docker-client.yaml.tftpl (here it guards an async oneshot, not
+      # apply). Bounded (~60s) so a genuinely-down hub still falls through to the retry loop.
+      for _ in $(seq 1 30); do
+        getent hosts github.com >/dev/null 2>&1 && break
+        sleep 2
+      done
+%{ endif ~}
       # Retry the whole (idempotent) provisioning — transient registry/network errors just try again.
       for attempt in $(seq 1 12); do
         if provision; then
