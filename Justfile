@@ -324,7 +324,7 @@ openobserve-search CLUSTER SQL:
 # from `tofu output` (VMs must be up) or accepts --server-url. The `*-check` recipes exit nonzero
 # on failure (CI-friendly). --cluster precedes the subcommand (global options live on the callback).
 
-# run all PKI service checks + cert-chain checks for auth./vault.:  just verify-pki centralized_pki
+# run all PKI service checks + cert-chain checks for auth./warden.:  just verify-pki centralized_pki
 verify-pki CLUSTER:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -336,7 +336,7 @@ verify-pki CLUSTER:
     domain=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -raw domain 2>/dev/null || true)
     svc_ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -raw services_ipv4 2>/dev/null || true)
     if [ -n "$domain" ] && [ -n "$svc_ip" ]; then
-      for h in auth vault; do
+      for h in auth warden; do
         echo "=== tls check: $h.$domain ==="
         uv run {{cluster_root}}/{{CLUSTER}}/scripts/tls_cli.py --cluster {{CLUSTER}} check "$svc_ip" --sni "$h.$domain" || rc=1
       done
@@ -359,7 +359,7 @@ authelia-check CLUSTER:
 vaultwarden-check CLUSTER:
     uv run {{cluster_root}}/{{CLUSTER}}/scripts/vaultwarden_cli.py --cluster {{CLUSTER}} check
 
-# assert a Traefik-served host's cert (chains to step-ca root, or is LE staging):  just tls-check centralized_pki <services-ip> --sni vault.<domain>
+# assert a Traefik-served host's cert (chains to step-ca root, or is LE staging):  just tls-check centralized_pki <services-ip> --sni warden.<domain>
 tls-check CLUSTER HOST *ARGS:
     uv run {{cluster_root}}/{{CLUSTER}}/scripts/tls_cli.py --cluster {{CLUSTER}} check {{HOST}} {{ARGS}}
 

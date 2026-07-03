@@ -92,7 +92,7 @@ run "services_stack_renders" {
   }
   assert {
     condition     = strcontains(local_file.services_ci.content, "http://vaultwarden:80")
-    error_message = "Traefik must route vault.<domain> to the Vaultwarden container via the file provider"
+    error_message = "Traefik must route warden.<domain> to the Vaultwarden container via the file provider"
   }
   # The services VM fetches + trusts step-ca's root.
   assert {
@@ -240,10 +240,10 @@ run "node_exporter_off_omits_install" {
 run "web_urls_core_and_flag_aware" {
   command = plan
 
-  # core = auth + vault + traefik dashboard + step-ca health.
+  # core = auth + warden + traefik dashboard + step-ca health.
   assert {
     condition     = length(output.web_urls.core) == 4
-    error_message = "web_urls.core must list auth/vault/traefik/step-ca"
+    error_message = "web_urls.core must list auth/warden/traefik/step-ca"
   }
   assert {
     condition     = length(output.web_urls.all) > length(output.web_urls.core)

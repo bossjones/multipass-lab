@@ -43,7 +43,7 @@ services:
     container_name: vaultwarden
     restart: unless-stopped
     environment:
-      - DOMAIN=https://vault.${domain}
+      - DOMAIN=https://warden.${domain}
       - SIGNUPS_ALLOWED=false
 %{ if vaultwarden_admin_token != "" ~}
       - ADMIN_TOKEN=${vaultwarden_admin_token}

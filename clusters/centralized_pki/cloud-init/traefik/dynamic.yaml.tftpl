@@ -2,7 +2,7 @@
 # Authelia forward-auth middleware, and the TLS default certificate. No docker provider — Traefik
 # reaches the apps by container name over the compose network.
 #
-# Default mode: the default cert is the step-ca-issued leaf (SANs auth.<domain> + vault.<domain>),
+# Default mode: the default cert is the step-ca-issued leaf (SANs auth.<domain> + warden.<domain>),
 # renewed in place by a host timer. enable_letsencrypt_staging mode: Traefik auto-generates a
 # wildcard *.<domain> via the "stepca" ACME resolver (LE staging). Routers set tls: {} either way.
 http:
@@ -13,18 +13,18 @@ http:
         - websecure
       service: authelia
       tls: {}
-    vault:
-      rule: "Host(`vault.${domain}`)"
+    warden:
+      rule: "Host(`warden.${domain}`)"
       entryPoints:
         - websecure
-      service: vault
+      service: warden
       tls: {}
     # Higher-priority (longer rule) router for /admin, gated by Authelia forward-auth.
-    vaultadmin:
-      rule: "Host(`vault.${domain}`) && PathPrefix(`/admin`)"
+    wardenadmin:
+      rule: "Host(`warden.${domain}`) && PathPrefix(`/admin`)"
       entryPoints:
         - websecure
-      service: vault
+      service: warden
       middlewares:
         - authelia
       tls: {}
@@ -34,7 +34,7 @@ http:
       loadBalancer:
         servers:
           - url: "http://authelia:9091"
-    vault:
+    warden:
       loadBalancer:
         servers:
           - url: "http://vaultwarden:80"

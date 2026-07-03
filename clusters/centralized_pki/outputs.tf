@@ -18,7 +18,7 @@ output "hosts" {
 }
 
 output "domain" {
-  description = "DNS suffix for internal services (ca./auth./vault. live under this)."
+  description = "DNS suffix for internal services (ca./auth./warden. live under this)."
   value       = var.domain
 }
 
@@ -61,7 +61,7 @@ locals {
 
   web_urls_core = [
     "https://auth.${var.domain}",          # Authelia (forward-auth SSO)
-    "https://vault.${var.domain}",         # Vaultwarden
+    "https://warden.${var.domain}",        # Vaultwarden
     "http://${local._svc_ip}:8080",        # Traefik dashboard
     "https://${local._ca_ip}:9000/health", # step-ca health
   ]

@@ -23,7 +23,7 @@ just destroy centralized_pki
 ## Certs
 
 - **Default (no secrets):** Traefik serves a cert step-ca issues directly via its JWK
-  provisioner (SANs `auth.<domain>` + `vault.<domain>`); a 12h timer renews it. `test_certs`
+  provisioner (SANs `auth.<domain>` + `warden.<domain>`); a 12h timer renews it. `test_certs`
   proves the served leaf chains to the step-ca root.
 - **Opt-in LE staging:** set `enable_letsencrypt_staging = true` + `TF_VAR_godaddy_api_key`
   / `TF_VAR_godaddy_api_secret`, then `just recreate centralized_pki`. Traefik pulls an LE

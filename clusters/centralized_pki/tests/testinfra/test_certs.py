@@ -29,7 +29,7 @@ def _internal_only(enabled_flags):
 def _served_leaf_issuer(services, domain):
     res = services.run(
         "echo | openssl s_client -connect localhost:443 "
-        f"-servername vault.{domain} 2>/dev/null | openssl x509 -noout -issuer"
+        f"-servername warden.{domain}2>/dev/null | openssl x509 -noout -issuer"
     )
     return res.stdout.strip() if res.rc == 0 else ""
 
@@ -46,7 +46,7 @@ def test_served_leaf_chains_to_step_ca_root(_internal_only, services, domain):
     # root. `-verify_return_error` makes a bad chain a nonzero exit; "Verify return code: 0" confirms.
     verify = (
         "echo | openssl s_client -connect localhost:443 "
-        f"-servername vault.{domain} "
+        f"-servername warden.{domain}"
         "-CAfile /opt/stack/traefik/certs/root_ca.crt -verify_return_error 2>&1 "
         "| grep -q 'Verify return code: 0 (ok)'"
     )

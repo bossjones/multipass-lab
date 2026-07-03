@@ -162,10 +162,10 @@ def check(ctx: typer.Context):
         raise typer.Exit(report.exit_code)
 
     # 2. Forward-auth enforces end to end: an unauthenticated GET to a protected route
-    #    (vault.<domain>/admin) redirects to the Authelia portal. We exercise the REAL middleware
+    #    (warden.<domain>/admin) redirects to the Authelia portal. We exercise the REAL middleware
     #    chain rather than calling /api/authz/forward-auth directly — Traefik strips client-supplied
     #    X-Forwarded-* headers, so Authelia can't be driven that way from outside.
-    protected_host = f"vault.{c.domain}" if c.domain else None
+    protected_host = f"warden.{c.domain}" if c.domain else None
     try:
         with c.client() as client:
             headers = {"Host": protected_host} if protected_host else None

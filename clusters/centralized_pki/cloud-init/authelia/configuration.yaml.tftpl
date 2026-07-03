@@ -1,6 +1,6 @@
 # Authelia 4.38 config-as-code (file backend, single user). Secrets are rendered from tofu vars
 # into .rendered/ (gitignored) and mounted read-only at /config. access_control denies by default
-# and requires one_factor for vault.<domain> (the /admin route Traefik protects via forward-auth).
+# and requires one_factor for warden.<domain> (the /admin route Traefik protects via forward-auth).
 theme: light
 
 server:
@@ -20,7 +20,7 @@ authentication_backend:
 access_control:
   default_policy: deny
   rules:
-    - domain: 'vault.${domain}'
+    - domain: 'warden.${domain}'
       policy: one_factor
 
 session:

@@ -126,7 +126,7 @@ write_files:
       done
       cp "$CERT_DIR/root_ca.crt" /usr/local/share/ca-certificates/step-ca-root.crt
       update-ca-certificates || true
-      # 2. Issue the Traefik leaf (SANs auth./vault.<domain>). Retry until the CA is ready.
+      # 2. Issue the Traefik leaf (SANs auth./warden.<domain>). Retry until the CA is ready.
       for i in $(seq 1 30); do
         # --user 0:0: the step-cli image runs as uid 1000, but the mounted provisioner-password
         # file is root-owned 0600; run as root so it can read it (keeps the secret non-world-readable).
@@ -137,7 +137,7 @@ write_files:
              step ca certificate services /certs/services.crt /certs/services.key \
                --ca-url ${ca_url} --root /certs/root_ca.crt \
                --provisioner ${jwk_provisioner} --provisioner-password-file /secrets/provisioner_password \
-               --san "auth.${domain}" --san "vault.${domain}" --force; then
+               --san "auth.${domain}" --san "warden.${domain}" --force; then
           break
         fi
         echo "cert issuance retry ($i)"; sleep 5
@@ -260,4 +260,4 @@ runcmd:
   - /usr/local/sbin/install-exporter.sh process-exporter https://github.com/ncabatoff/process-exporter/releases/download/v0.8.7/process-exporter-0.8.7.linux-{ARCH}.tar.gz process-exporter --config.path=/etc/process-exporter/all.yaml -threads=false -gather-smaps=false -remove-empty-groups
 %{ endif ~}
 
-final_message: "services ready — Traefik on :80/:443/:8080; auth.${domain} (Authelia) + vault.${domain} (Vaultwarden)"
+final_message: "services ready — Traefik on :80/:443/:8080; auth.${domain} (Authelia) + warden.${domain} (Vaultwarden)"

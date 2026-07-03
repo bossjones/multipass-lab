@@ -38,7 +38,7 @@ just stepca-check centralized_pki
 just stepca-provisioners centralized_pki
 just authelia-check centralized_pki
 just vaultwarden-check centralized_pki
-just tls-check centralized_pki <services-ip> --sni vault.<domain>
+just tls-check centralized_pki <services-ip> --sni warden.<domain>
 
 # Or run a CLI directly for other subcommands:
 uv run clusters/centralized_pki/scripts/stepca_cli.py --cluster centralized_pki roots
@@ -52,8 +52,8 @@ staging certs); `tls_cli` does the real chain/issuer assertion.
 ## Browsing the services
 
 `just open centralized_pki` opens Authelia (`https://auth.<domain>`), Vaultwarden
-(`https://vault.<domain>`), the Traefik dashboard (`http://<services-ip>:8080`), and step-ca
-health. For the `auth.`/`vault.` hostnames to resolve on your machine, add them to
+(`https://warden.<domain>`), the Traefik dashboard (`http://<services-ip>:8080`), and step-ca
+health. For the `auth.`/`warden.` hostnames to resolve on your machine, add them to
 `/etc/hosts` pointing at the services VM IP (or an AdGuard/DNS rewrite) — the lab itself
 issues certs without needing public DNS.
 
@@ -63,5 +63,5 @@ issues certs without needing public DNS.
 export TF_VAR_godaddy_api_key=... TF_VAR_godaddy_api_secret=...
 # set enable_letsencrypt_staging = true in terraform.tfvars (or -var on the apply)
 just recreate centralized_pki
-just tls-check centralized_pki <services-ip> --sni vault.<domain>   # issuer should contain STAGING
+just tls-check centralized_pki <services-ip> --sni warden.<domain>   # issuer should contain STAGING
 ```

@@ -20,7 +20,7 @@ The mode is derived from the cluster's enabled_flags (`tofu output`) unless over
 --staging/--internal. In internal mode the root comes from --ca-cert, else it is fetched from
 the cluster's step-ca (/roots.pem). See specs/cli-tls.md.
 
-    uv run tls_cli.py inspect vault.lab.theblacktonystark.com
+    uv run tls_cli.py inspect warden.lab.theblacktonystark.com
     uv run tls_cli.py check auth.lab.theblacktonystark.com --cluster centralized_pki
 """
 

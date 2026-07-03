@@ -40,14 +40,14 @@ Design decisions (settled up front): Docker Compose on VMs (not k0s/cert-manager
   (its ipv4 is the       │ no ACME challenge/reachback│
   render-ordering edge)  │                            ▼
    ┌──────────────── centralized-pki-services ─────────────────────────┐
-   │ issue-cert.sh -> step ca certificate (SANs auth./vault.<domain>)   │
+   │ issue-cert.sh -> step ca certificate (SANs auth./warden.<domain>)   │
    │ Traefik :443 serves it as defaultCertificate (file provider watch) │
    │   Authelia :9091 (forwardAuth)   Vaultwarden :80 (/admin gated)    │
    └────────────────────────────────────────────────────────────────────┘
 ```
 
 **Why direct JWK issuance, not Traefik→step-ca ACME.** ACME (tls-alpn-01/http-01) requires
-the CA to connect *back* to `auth./vault.<domain>`, which resolves nowhere in a DNS-less lab,
+the CA to connect *back* to `auth./warden.<domain>`, which resolves nowhere in a DNS-less lab,
 and the CA/services VMs have a mutual-IP dependency that can't be met in one `tofu apply`.
 The JWK provisioner authenticates with the CA password and issues any SAN with **no
 challenge/reachback** — the correct DNS-free primitive. A 12-hour host timer re-issues and
@@ -98,7 +98,7 @@ clusters/centralized_pki/
   provisioners, Traefik/Authelia/Vaultwarden up + reachable through Traefik, and `test_certs`
   proves the served leaf **chains to the step-ca root**.
 - **Live API/TLS** (`just verify-pki centralized_pki`) — the host-side `*_cli.py` checks +
-  `tls-check` for `auth.`/`vault.<domain>`.
+  `tls-check` for `auth.`/`warden.<domain>`.
 
 ## Quickstart
 
@@ -125,7 +125,7 @@ so `just verify` would run against stale cloud-init.
 ```sh
 export TF_VAR_godaddy_api_key=... TF_VAR_godaddy_api_secret=...
 just recreate centralized_pki   # with -var enable_letsencrypt_staging=true (or set in terraform.tfvars)
-just tls-check centralized_pki <services-ip> --sni vault.<domain>   # asserts issuer contains STAGING
+just tls-check centralized_pki <services-ip> --sni warden.<domain>   # asserts issuer contains STAGING
 ```
 
 Promote to **production** by swapping the Traefik `caServer` to
@@ -147,7 +147,7 @@ Gotchas found and fixed along the way, worth knowing when bumping images:
   `DOCKER_API_VERSION`. The file provider needs no docker socket and reaches apps by container name.
 - **`package_upgrade: false`** — the full apt dist-upgrade pushed the heavier services VM past the
   multipass provider's launch timeout (an orphaned VM); the recent base image doesn't need it.
-- **Authelia enforcement** is verified by hitting the protected route (`vault.<domain>/admin`) and
+- **Authelia enforcement** is verified by hitting the protected route (`warden.<domain>/admin`) and
   asserting the 302 redirect to the portal — Traefik strips client-supplied `X-Forwarded-*`, so the
   authz endpoint can't be driven directly from outside.
 
