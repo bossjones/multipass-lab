@@ -6,6 +6,12 @@ mock_provider "multipass" {}
 variables {
   # Provide an inline key so the test never depends on a real ~/.ssh file.
   ssh_pubkey = "ssh-ed25519 AAAATESTKEY centralized-logging-tests"
+
+  # Pin these so the suite stays hermetic to whatever a developer has locally
+  # uncommented in terraform.tfvars — `tofu test` auto-loads that file just like
+  # plan/apply does. Runs that want them on override in their own variables {}.
+  enable_coroot  = false
+  enable_ingress = false
 }
 
 run "sizing_image_names_and_central_render" {
@@ -107,6 +113,18 @@ run "exporters_render_with_defaults" {
   assert {
     condition     = strcontains(local_file.central_ci.content, "--web.listen-address=:9558")
     error_message = "central must install systemd_exporter on :9558"
+  }
+  assert {
+    condition     = strcontains(local_file.central_ci.content, "--systemd.collector.unit-include=")
+    error_message = "central systemd_exporter must be scoped with a curated unit-include"
+  }
+  assert {
+    condition     = strcontains(local_file.central_ci.content, "process-exporter-0.8.7")
+    error_message = "central must install process-exporter v0.8.7"
+  }
+  assert {
+    condition     = strcontains(local_file.central_ci.content, "-threads=false -gather-smaps=false -remove-empty-groups")
+    error_message = "central process-exporter must run with the low-cardinality perf flags"
   }
   assert {
     condition     = strcontains(local_file.central_ci.content, "/var/log/remote/*/*.log")
@@ -343,6 +361,10 @@ run "coroot_and_ingress_absent_by_default" {
     error_message = "the OpenEBS StorageClass must not render when enable_coroot is false"
   }
   assert {
+    condition     = !strcontains(local_file.k0s_ci.content, "delete daemonset  openebs-ndm")
+    error_message = "the OpenEBS NDM strip must not render when enable_coroot is false"
+  }
+  assert {
     condition     = !strcontains(local_file.k0s_ci.content, "ingress-nginx/controller")
     error_message = "ingress-nginx must not render when enable_ingress is false (default)"
   }
@@ -388,6 +410,21 @@ run "coroot_and_ingress_render_when_enabled" {
   assert {
     condition     = strcontains(local_file.k0s_ci.content, "openebs-operator-lite") && strcontains(local_file.k0s_ci.content, "is-default-class")
     error_message = "enable_coroot must install the OpenEBS default StorageClass"
+  }
+
+  # OpenEBS NDM (the ~4Gi besteffort leaker that caused global OOMs) must be stripped right after
+  # the manifest applies, while the hostpath provisioner + openebs-device SC delete both render.
+  # See specs/centralized-logging-k0s-perf.md.
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "delete daemonset  openebs-ndm") && strcontains(local_file.k0s_ci.content, "delete storageclass openebs-device")
+    error_message = "enable_coroot must strip OpenEBS NDM (daemonset + openebs-device SC) after installing the storage manifest"
+  }
+
+  # Memory-limit guardrails render on the Coroot server + node-agent + cluster-agent so a future
+  # leak is OOM-killed in its own cgroup instead of causing a global OOM.
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "limits:") && strcontains(local_file.k0s_ci.content, "nodeAgent:") && strcontains(local_file.k0s_ci.content, "clusterAgent:")
+    error_message = "coroot values must set memory limits on the server + node-agent + cluster-agent"
   }
 
   # The rendered values file must override the chart's laptop-hostile defaults.

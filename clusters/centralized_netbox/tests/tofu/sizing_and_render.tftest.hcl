@@ -306,6 +306,215 @@ run "web_urls_core_and_all" {
   }
 }
 
+# --- discovery: OFF (default) leaves the cluster untouched --------------------
+
+run "discovery_off_no_wiring" {
+  command = plan
+
+  # No agent VM, no Diode/plugin strings, default server sizing + NetBox 4.1 pin.
+  assert {
+    condition     = length(multipass_instance.agent) == 0
+    error_message = "no agent VM when enable_discovery is false"
+  }
+  assert {
+    condition     = output.discovery_enabled == false
+    error_message = "discovery_enabled must be false by default"
+  }
+  assert {
+    condition     = multipass_instance.server.cpus == 2
+    error_message = "server stays at default 2 vCPU when discovery is off"
+  }
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "netbox_diode_plugin")
+    error_message = "server cloud-init must NOT wire the Diode plugin when discovery is off"
+  }
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "diode-ingester")
+    error_message = "server cloud-init must NOT deploy the Diode stack when discovery is off"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "netbox-community/netbox-docker.git")
+    error_message = "off-path still deploys netbox-docker unchanged"
+  }
+}
+
+# --- discovery: ON wires the plugin + Diode + agent --------------------------
+
+run "discovery_on_wires_everything" {
+  command = plan
+
+  variables {
+    enable_discovery = true
+  }
+
+  # Server bumped to the heavier discovery footprint.
+  assert {
+    condition     = multipass_instance.server.cpus == 6
+    error_message = "server must auto-bump to 6 vCPU when discovery is on"
+  }
+  assert {
+    condition     = multipass_instance.server.memory == "10G"
+    error_message = "server must auto-bump to 10G when discovery is on"
+  }
+  assert {
+    condition     = multipass_instance.server.disk == "50G"
+    error_message = "server must auto-bump to 50G when discovery is on"
+  }
+
+  # The agent VM exists and carries the cluster name.
+  assert {
+    condition     = length(multipass_instance.agent) == 1
+    error_message = "exactly one agent VM when enable_discovery is true"
+  }
+  assert {
+    condition     = multipass_instance.agent[0].name == "centralized-netbox-agent"
+    error_message = "agent VM must carry the name_prefix"
+  }
+
+  # NetBox side: the plugin is installed + configured and the custom image is built.
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "netbox_diode_plugin")
+    error_message = "server must install + configure the diode-netbox-plugin"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "PLUGINS")
+    error_message = "server must set PLUGINS/PLUGINS_CONFIG"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "Dockerfile-Plugins")
+    error_message = "netbox-stack must generate a plugin Dockerfile"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "uv pip install")
+    error_message = "plugin install must use uv (the netbox-docker image is uv-managed, no venv/bin/pip)"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "DOCKER_BUILDKIT=0 docker build")
+    error_message = "plugin image must build with the legacy builder (docker.io ships no buildx)"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "migrate netbox_diode_plugin")
+    error_message = "netbox-stack must run the plugin migrations"
+  }
+
+  # Diode server stack: services + pinned OAuth2 clients.
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "diode-ingester")
+    error_message = "Diode compose must include the ingester"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "diode-reconciler")
+    error_message = "Diode compose must include the reconciler"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "\"client_id\": \"diode-ingest\"")
+    error_message = "Diode credentials must include the diode-ingest client"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "\"client_id\": \"diode-to-netbox\"")
+    error_message = "Diode credentials must include the diode-to-netbox client"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "\"client_id\": \"netbox-to-diode\"")
+    error_message = "Diode credentials must include the netbox-to-diode client"
+  }
+
+  # Agent: orb-agent config targets Diode over gRPC and scans via network_discovery.
+  assert {
+    condition     = strcontains(local_file.agent_ci[0].content, "network_discovery")
+    error_message = "agent must run the network_discovery backend"
+  }
+  assert {
+    condition     = strcontains(local_file.agent_ci[0].content, ":8080/diode")
+    error_message = "agent must target the Diode gRPC ingress on :8080/diode"
+  }
+  assert {
+    condition     = strcontains(local_file.agent_ci[0].content, "diode-ingest")
+    error_message = "agent must authenticate as the diode-ingest OAuth2 client"
+  }
+  assert {
+    condition     = strcontains(local_file.agent_ci[0].content, "netboxlabs/orb-agent")
+    error_message = "agent must run the orb-agent image"
+  }
+  assert {
+    condition     = strcontains(local_file.agent_ci[0].content, "/var/lib/orb-agent/discovery-done")
+    error_message = "agent must drop a readiness marker for testinfra"
+  }
+
+  # Rendered cloud-init must stay valid YAML with all the spliced Diode config.
+  assert {
+    condition     = can(yamldecode(local_file.server_ci.content))
+    error_message = "discovery-on server cloud-init must be valid YAML"
+  }
+  assert {
+    condition     = can(yamldecode(local_file.agent_ci[0].content))
+    error_message = "agent cloud-init must be valid YAML"
+  }
+
+  # Outputs reflect discovery.
+  assert {
+    condition     = output.discovery_enabled == true
+    error_message = "discovery_enabled must be true"
+  }
+  assert {
+    condition     = output.diode_ingest_client_id == "diode-ingest"
+    error_message = "diode_ingest_client_id output must be diode-ingest"
+  }
+  # web_urls.all = 2 (UI/API) + 6 exporter /metrics (node/process/systemd × server+client, all
+  # default-on) + 1 Diode ingress URL (discovery on) + 2 Netdata dashboards (default-on) = 11.
+  assert {
+    condition     = length(output.web_urls.all) == 11
+    error_message = "web_urls.all must be the 2 UI/API URLs + 6 exporter /metrics + the Diode ingress URL + 2 Netdata dashboards when discovery is on"
+  }
+}
+
+run "exporters_render_on_both_vms" {
+  command = plan
+
+  # The generic install-exporter.sh helper is bootstrapped on both VMs (this cluster had none).
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "install-exporter.sh") && strcontains(local_file.client_ci.content, "install-exporter.sh")
+    error_message = "the exporter installer helper must render on both VMs"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "node_exporter-1.8.2") && strcontains(local_file.client_ci.content, "node_exporter-1.8.2")
+    error_message = "node_exporter must install on both VMs by default"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "process-exporter-0.8.7") && strcontains(local_file.server_ci.content, "-threads=false -gather-smaps=false -remove-empty-groups")
+    error_message = "server must install process-exporter v0.8.7 with the low-cardinality perf flags"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "--web.listen-address=:9558") && strcontains(local_file.server_ci.content, "--systemd.collector.unit-include=")
+    error_message = "server must install systemd_exporter (:9558) with a curated unit-include"
+  }
+  # web_urls.all folds the 6 enabled /metrics endpoints and 2 Netdata dashboards (default-on) on
+  # top of the 2 UI/API URLs.
+  assert {
+    condition     = length(output.web_urls.all) == 10
+    error_message = "web_urls.all must add the 6 exporter /metrics endpoints + 2 Netdata dashboards to the 2 UI/API URLs"
+  }
+  assert {
+    condition     = contains(output.enabled_exporters, "enable_node_exporter") && contains(output.enabled_exporters, "enable_process_exporter") && contains(output.enabled_exporters, "enable_systemd_exporter")
+    error_message = "enabled_exporters must list the default-on exporter set"
+  }
+}
+
+run "exporters_off_omit_install" {
+  command = plan
+
+  variables {
+    enable_node_exporter    = false
+    enable_process_exporter = false
+    enable_systemd_exporter = false
+  }
+
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "install-exporter.sh node_exporter") && !strcontains(local_file.server_ci.content, "systemd_exporter") && !strcontains(local_file.server_ci.content, "process-exporter")
+    error_message = "disabling all exporter flags must omit their install blocks on the server"
+  }
+}
+
 # --- Netdata (real-time agent on both VMs, dashboard-only — no local Prometheus) -------
 
 run "netdata_renders_by_default" {

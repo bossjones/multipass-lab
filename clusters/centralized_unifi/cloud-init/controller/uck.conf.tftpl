@@ -1,0 +1,125 @@
+@version: 3.27
+@include "scl.conf"
+#
+# UniFi Cloud Key Gen2 (UCKG2) syslog-ng persona — adapted from the real appliance config in
+# logs/from_unifi/controller/etc/syslog-ng/. This file is bind-mounted into the syslog-ng 3.28.1
+# (Debian bullseye) container as /etc/syslog-ng/syslog-ng.conf. Two adaptations vs. the appliance:
+#   1. a network() collector source (s_net) + file sink (d_remote) so this box ALSO receives the
+#      USG's forwarded logs — the appliance is local-only, this stand-in doubles as the collector.
+#   2. stats_level(1) so the legacy `syslog-ng-ctl stats` (read by syslog_ng_exporter) has
+#      per-source/destination counters. The appliance ships stats_freq(0) (periodic logging off);
+#      on-demand STATS still returns counters, so this is a small lab-only tweak.
+# The container has no journald/xconsole, so the appliance's console/xconsole destinations are
+# dropped (irrelevant to the collector role); everything else mirrors the appliance verbatim.
+
+options {
+    chain_hostnames(off);
+    flush_lines(0);
+    use_dns(no);
+    use_fqdn(no);
+    dns_cache(no);
+    keep_hostname(yes);
+    owner("root");
+    group("adm");
+    perm(-1);
+    stats_freq(0);
+    stats_level(1);
+    bad_hostname("^gconfd$");
+    ts_format(iso);
+};
+
+source s_src {
+    system();
+    internal();
+};
+
+# Collector: receive the USG's forwarded syslog (rsyslog `@host:port` = RFC3164 over UDP) and
+# partition it by sending host + program. TCP is also accepted for a reliable comparison path.
+source s_net {
+    network(
+        ip("0.0.0.0")
+        transport("udp")
+        port(${syslog_port})
+    );
+    network(
+        ip("0.0.0.0")
+        transport("tcp")
+        port(${syslog_port})
+    );
+};
+
+destination d_remote {
+    file(
+        "/var/log/remote/$${HOST}/$${PROGRAM}.log"
+        create-dirs(yes)
+        dir-perm(0755)
+        perm(0644)
+    );
+};
+
+log { source(s_net); destination(d_remote); };
+
+# --- Appliance level filters -------------------------------------------------
+filter f_dbg { level(debug); };
+filter f_info { level(info); };
+filter f_notice { level(notice); };
+filter f_warn { level(warn); };
+filter f_err { level(err); };
+filter f_crit { level(crit .. emerg); };
+
+# --- Appliance facility fan-out (conf.d/*.conf) ------------------------------
+filter f_debug { level(debug) and not facility(auth, authpriv, news, mail); };
+filter f_bash { match("^HISTORY:" value("MESSAGE")); };
+filter f_uled { program("uled-ctrl"); };
+
+destination d_auth { file("/var/log/auth.log"); };
+filter f_auth { facility(auth, authpriv) and not filter(f_debug); };
+log { source(s_src); filter(f_auth); destination(d_auth); };
+
+destination d_bash { file("/var/log/bash_history.log"); };
+log { source(s_src); filter(f_bash); destination(d_bash); };
+
+destination d_cron { file("/var/log/cron.log"); };
+filter f_cron { facility(cron) and not filter(f_debug); };
+log { source(s_src); filter(f_cron); destination(d_cron); };
+
+destination d_daemon { file("/var/log/daemon.log"); };
+filter f_daemon { facility(daemon) and not filter(f_debug); };
+log { source(s_src); filter(f_daemon); destination(d_daemon); };
+
+destination d_debug { file("/var/log/debug"); };
+log { source(s_src); filter(f_debug); destination(d_debug); };
+
+destination d_error { file("/var/log/error"); };
+filter f_error { level(err .. emerg); };
+log { source(s_src); filter(f_error); destination(d_error); };
+
+destination d_kern { file("/var/log/kern.log"); };
+filter f_kern { facility(kern) and not filter(f_debug); };
+log { source(s_src); filter(f_kern); destination(d_kern); };
+
+destination d_mail { file("/var/log/mail.log"); };
+filter f_mail { facility(mail) and not filter(f_debug); };
+log { source(s_src); filter(f_mail); destination(d_mail); };
+
+destination d_newscrit { file("/var/log/news/news.crit"); };
+destination d_newserr { file("/var/log/news/news.err"); };
+destination d_newsnotice { file("/var/log/news/news.notice"); };
+filter f_news { facility(news) and not filter(f_debug); };
+log { source(s_src); filter(f_news); filter(f_crit); destination(d_newscrit); };
+log { source(s_src); filter(f_news); filter(f_err); destination(d_newserr); };
+log { source(s_src); filter(f_news); filter(f_notice); destination(d_newsnotice); };
+
+# messages.conf with the not2msg macro inlined (excludes the facilities handled above, bash
+# history, uled control, and the Vyatta firewall markers [ALIEN BLOCK]/[TOR BLOCK]/[IGNORE LOGGING]).
+destination d_messages { file("/var/log/messages"); };
+filter f_messages {
+    level(info, notice, warn)
+    and not facility(auth, authpriv, cron, daemon, mail, news)
+    and not filter(f_bash)
+    and not message("\\[ALIEN BLOCK\\]")
+    and not message("\\[TOR BLOCK\\]")
+    and not message("\\[IGNORE LOGGING\\]")
+    and not filter(f_uled)
+};
+log { source(s_src); filter(f_messages); destination(d_messages); };

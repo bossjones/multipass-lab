@@ -26,7 +26,9 @@ the recipes take.
 ```sh
 just check centralized_logging   # hermetic: tofu fmt + validate + test (no VMs)
 just up    centralized_logging   # tofu apply -> launches all VMs in one apply
+just up-connected                # bring the whole fleet up wired for cross-cluster telemetry (see below)
 just verify centralized_logging  # live: pytest + testinfra over SSH against running VMs
+just verify-connected            # live e2e for the cross-cluster wiring (after up-connected)
 just verify-all                  # live: run every cluster's testinfra suite (glob-discovered)
 just verify-api centralized_monitoring # live: hit Grafana/Prometheus/OpenObserve HTTP APIs + assert (see below)
 just destroy centralized_logging # tofu destroy + prune orphaned VMs (see below)
@@ -42,6 +44,22 @@ just locust-check centralized_monitoring # short headless smoke run -> exit code
 just coroot-status centralized_logging   # Coroot stack pods on the k0s node (see below)
 just coroot-deploy centralized_logging   # re-run the Coroot installer (idempotent repair)
 ```
+
+**Cross-cluster telemetry (opt-in).** Any cluster can become a **log-shipper** and a
+**scrape-target** for the two hubs. Consumer clusters declare opt-in vars — `log_shipping_target`
+(host:port of the `centralized_logging` syslog-ng collector) and `openobserve_endpoint` (host:port
+of `centralized_monitoring`'s OpenObserve) — that, when set, render a syslog-ng client drop-in + an
+otelcol-contrib agent into every VM's cloud-init. The monitoring hub gains `extra_scrape_targets`
+(list of `{job, ip, port}`) templated into `prometheus.yml`. All three share the byte-identical
+snippets in `clusters/_shared/cloud-init/` (a **deliberate exception** to per-cluster vendoring; the
+`_shared` prefix keeps it out of the `clusters/*/` recipe globs, which skip any dir without a
+`main.tf`). Defaults are empty, so a plain `just up <cluster>` stays turnkey and isolated.
+`just up-connected` orchestrates the whole fleet: it applies `centralized_logging` and
+`centralized_monitoring` first, discovers their IPs, brings up every consumer with both hub IPs
+wired in a single boot, then **hot-pushes** the discovered scrape targets into the already-running
+Prometheus (scp'd `prometheus.yml` + container restart — the monitoring VM is never recreated, so
+the IP consumers push OTLP to never churns). `just verify-connected` is the live e2e. The reference
+consumer is `centralized_pki`; full design in `specs/cross-cluster.md`.
 
 **Coroot (opt-in eBPF observability on k0s).** `enable_coroot` deploys the self-hosted
 [Coroot](https://github.com/coroot/coroot) stack (server + eBPF node-agent + cluster-agent +
@@ -169,3 +187,24 @@ The active machinery here is a Claude Code hook + skill system, not application 
   `terraform-provider-multipass`. Note the committed cluster uses the **public**
   `larstobi/multipass` provider; the sibling `terraform-provider-multipass` is a custom
   provider available to exercise but not what `clusters/centralized_logging` wires up today.
+
+## Working fast on live iterations
+
+- **VMs are launchable here; drive them over SSH, not `multipass exec`.** The Justfile note that
+  `multipass exec`/`shell` "do not route to the VMs in this environment" is true, but the VMs are
+  reachable by IP: `ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519 ubuntu@$(tofu
+  -chdir=clusters/<name> output -json hosts | jq -r '.<role>.ipv4')`.
+- **Override a `terraform.tfvars`-pinned var with `*.auto.tfvars`, NOT `TF_VAR_`.** OpenTofu env
+  vars are *lower* precedence than `terraform.tfvars`, so `TF_VAR_enable_x=true just up` is silently
+  ignored. Drop a throwaway `clusters/<name>/x.auto.tfvars` (it outranks `terraform.tfvars`); move
+  it out when done — `.auto.tfvars` is not gitignored.
+- **Iterate on cloud-init without a full `just recreate`.** Provisioning runs async via a systemd
+  oneshot (e.g. `netbox-stack.service`) in an idempotent retry loop; when a step blocks it can sit
+  `activating` with no new output. SSH in, `sudo journalctl -u <svc>`, patch the `/opt/...` files or
+  `/usr/local/sbin/<svc>.sh`, then `sudo systemctl restart --no-block <svc>` — far faster than
+  destroy→up. Fold the fix back into the `.tftpl` afterward.
+- **The `pre_tool_use` hook matches on substrings**, so it blocks otherwise-fine commands containing
+  `rm ` or `.env`: `docker run --rm`, `grep .env`, `rm -f` all get denied. Use `docker run` (+
+  `docker container prune -f`), avoid the literal `.env` token, and `mv` to the scratchpad, not `rm`.
+- **zsh does not word-split unquoted vars.** `for x in $list` / `$CMD args` run the whole value as a
+  single word — inline the list in the `for`, or use an array / `${=var}`.

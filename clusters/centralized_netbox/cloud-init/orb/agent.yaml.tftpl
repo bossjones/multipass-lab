@@ -1,0 +1,26 @@
+# orb-agent policy — network_discovery (nmap) over the Multipass /24, ingested into Diode over gRPC.
+# The server IP + subnet are baked at OpenTofu render time (the agent VM references the server's
+# runtime IP, like the client). Credentials are the pinned LAB `diode-ingest` OAuth2 client (also
+# passed via env in the docker run). `scan_types: [connect]` keeps the scan working without raw
+# sockets. See specs/netbox-discovery.md.
+orb:
+  config_manager:
+    active: local
+  backends:
+    network_discovery:
+    common:
+      diode:
+        target: grpc://${netbox_ip}:${diode_port}/diode
+        client_id: diode-ingest
+        client_secret: ${diode_ingest_client_secret}
+        agent_name: centralized-netbox-agent
+  policies:
+    network_discovery:
+      multipass_subnet:
+        config:
+          schedule: "0 */2 * * *"
+          timeout: 5
+          scan_types: [connect]
+        scope:
+          targets:
+            - ${server_subnet}

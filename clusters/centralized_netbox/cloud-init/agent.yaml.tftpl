@@ -1,0 +1,83 @@
+#cloud-config
+# Discovery agent VM (opt-in) — runs netboxlabs/orb-agent to scan the Multipass /24 via
+# network_discovery (nmap) and ingest discovered IPs/hosts into Diode over gRPC. The NetBox server
+# IP + subnet are injected at render time from multipass_instance.server.ipv4 (same edge as the
+# client). orb-agent runs as a long-running systemd service (--net=host); it runs its policy on load
+# and then on the policy schedule, so `just netbox-discover` (restart the service) triggers an
+# on-demand scan. See specs/netbox-discovery.md.
+package_update: true
+package_upgrade: true
+
+timezone: Etc/UTC
+ntp:
+  enabled: true
+  ntp_client: systemd-timesyncd
+
+packages:
+  - docker.io
+  - curl
+  - jq
+
+ssh_authorized_keys:
+  - ${ssh_pubkey}
+
+write_files:
+  # orb-agent policy (network_discovery over the /24), rendered by OpenTofu.
+  - path: /opt/orb/agent.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, orb_config)}
+
+  # Long-running orb-agent runner. Waits for the Diode ingress to accept connections, then runs the
+  # agent (which executes its policy on load + on schedule). Writes a readiness marker once the
+  # container is up (asserted by testinfra).
+  - path: /usr/local/sbin/orb-agent-run.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -uo pipefail
+      NETBOX_IP="${netbox_ip}"
+      DIODE_PORT="${diode_port}"
+
+      # Wait for the Diode ingress port to be reachable (the server brings Diode up asynchronously).
+      for _ in $(seq 1 180); do
+        if timeout 2 bash -c "cat < /dev/null > /dev/tcp/$NETBOX_IP/$DIODE_PORT" 2>/dev/null; then break; fi
+        sleep 5
+      done
+
+      mkdir -p /var/lib/orb-agent
+      touch /var/lib/orb-agent/discovery-done
+
+      # Foreground run (systemd Type=simple keeps it alive; Restart=always covers transient failures).
+      exec docker run --rm --net=host \
+        -v /opt/orb:/opt/orb \
+        -e DIODE_CLIENT_ID=diode-ingest \
+        -e DIODE_CLIENT_SECRET='${diode_ingest_client_secret}' \
+        ${orb_agent_image} run -c /opt/orb/agent.yaml
+
+  - path: /etc/systemd/system/orb-agent.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=orb-agent network discovery -> Diode
+      After=network-online.target docker.service
+      Wants=network-online.target
+      Requires=docker.service
+      [Service]
+      Type=simple
+      ExecStartPre=-/usr/bin/docker pull ${orb_agent_image}
+      ExecStart=/usr/local/sbin/orb-agent-run.sh
+      Restart=always
+      RestartSec=15
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  # Enforce UTC late (Multipass injects the host timezone at first boot — see specs/ntp.md).
+  - timedatectl set-timezone Etc/UTC
+  - systemctl enable --now docker
+  - systemctl daemon-reload
+  # Start asynchronously so cloud-init completes inside Multipass's 300s launch window (the runner
+  # waits up to ~15 min for the server's Diode to come up).
+  - systemctl enable orb-agent.service
+  - systemctl start --no-block orb-agent.service

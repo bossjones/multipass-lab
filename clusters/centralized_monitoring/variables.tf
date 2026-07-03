@@ -56,6 +56,31 @@ variable "prometheus_scrape_interval" {
   default     = "15s"
 }
 
+# --- Cross-cluster scraping (opt-in; see specs/cross-cluster.md) -------------
+# VMs in OTHER clusters that Prometheus should scrape. Empty by default keeps this cluster
+# self-contained; `just up-connected` discovers peer clusters' VM IPs and writes this via a
+# gitignored .cross-cluster.auto.tfvars.json. Each entry becomes one static-config scrape job.
+variable "extra_scrape_targets" {
+  description = "Cross-cluster scrape targets: list of {job, ip, port=9100}. Rendered as extra Prometheus static_configs jobs."
+  type = list(object({
+    job  = string
+    ip   = string
+    port = optional(number, 9100)
+  }))
+  default = []
+}
+
+# --- Cross-cluster log shipping (opt-in; see specs/cross-cluster.md) ---------
+# host:port of the centralized_logging syslog-ng collector. Non-empty => the hub renders the
+# shared syslog-ng client drop-in and ships its OWN OS logs there (the monitoring hub as a
+# log-shipper, mirroring the consumer clusters). Empty by default keeps `just up` isolated.
+# `just up-connected` sets this via the gitignored .cross-cluster.auto.tfvars.json.
+variable "log_shipping_target" {
+  description = "host:port of the centralized_logging syslog-ng collector. Empty disables self-shipping."
+  type        = string
+  default     = ""
+}
+
 variable "grafana_admin_password" {
   description = "Grafana admin user password (provisioned via compose env)."
   type        = string
@@ -109,6 +134,12 @@ variable "enable_cadvisor" {
 
 variable "enable_process_exporter" {
   description = "process-exporter on the client + process job."
+  type        = bool
+  default     = true
+}
+
+variable "enable_systemd_exporter" {
+  description = "systemd_exporter (:9558) on the client + systemd job — per-unit health/resource metrics."
   type        = bool
   default     = true
 }

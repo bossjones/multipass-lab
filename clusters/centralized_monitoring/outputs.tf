@@ -66,6 +66,7 @@ locals {
     # k0s client exporters
     { url = "http://${local._k0s_ip}:9100/metrics", on = var.enable_node_exporter },
     { url = "http://${local._k0s_ip}:9256/metrics", on = var.enable_process_exporter },
+    { url = "http://${local._k0s_ip}:9558/metrics", on = var.enable_systemd_exporter },
     { url = "http://${local._k0s_ip}:8089/metrics", on = var.enable_cadvisor },
     { url = "http://${local._k0s_ip}:19999/api/v1/allmetrics?format=prometheus", on = var.enable_netdata },
     { url = "http://${local._k0s_ip}:8081/metrics", on = var.enable_kube_state_metrics },

@@ -26,7 +26,9 @@ help:
     @echo "Typical loop:"
     @echo "  just check  CLUSTER        hermetic: fmt + validate + tofu test (no VMs)"
     @echo "  just up     CLUSTER        tofu apply -> launch all VMs (waits for cloud-init)"
+    @echo "  just up-connected          bring the whole fleet up wired for cross-cluster telemetry"
     @echo "  just verify CLUSTER        live: pytest + testinfra over SSH"
+    @echo "  just verify-connected      live e2e for the cross-cluster wiring (after up-connected)"
     @echo "  just verify-all            run the live testinfra suite for every cluster"
     @echo "  just open   CLUSTER [--full]  open dashboards (core; --full adds /metrics endpoints)"
     @echo "  just ssh    CLUSTER ROLE   shell onto the <name>-<role> VM"
@@ -61,6 +63,95 @@ up CLUSTER: (init CLUSTER)
 destroy CLUSTER:
     tofu -chdir={{cluster_root}}/{{CLUSTER}} destroy -auto-approve
     @just prune {{CLUSTER}}
+
+# tofu apply -> launch every cluster's VMs (glob-discovered):  just up-all
+up-all:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=0
+    for dir in {{cluster_root}}/*/; do
+      cluster="$(basename "$dir")"
+      [ -f "$dir/main.tf" ] || continue   # skip non-cluster dirs like _shared/
+      echo "=== up: $cluster ==="
+      just up "$cluster" || rc=1
+    done
+    exit "$rc"
+
+# tofu destroy + prune every cluster (glob-discovered):  just destroy-all
+destroy-all:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=0
+    for dir in {{cluster_root}}/*/; do
+      cluster="$(basename "$dir")"
+      [ -f "$dir/main.tf" ] || continue   # skip non-cluster dirs like _shared/
+      echo "=== destroy: $cluster ==="
+      just destroy "$cluster" || rc=1
+    done
+    exit "$rc"
+
+# Bring the whole fleet up ALREADY WIRED for cross-cluster telemetry (specs/cross-cluster.md):
+# every consumer cluster ships logs to centralized_logging + pushes host logs to
+# centralized_monitoring's OpenObserve, and Prometheus scrapes every consumer VM.  just up-connected
+#
+# Ordering resolves the logging<->monitoring cycle: logging (pure sink) and monitoring (OTLP/
+# OpenObserve sink) come up FIRST so consumers learn both hub IPs and wire all three signals in a
+# single boot (stable IPs, no recreate). Consumer scrape targets are then HOT-PUSHED into the
+# already-running Prometheus (scp the re-rendered prometheus.yml + restart the container) so the
+# monitoring VM is never recreated — which would churn the IP consumers push OTLP to.
+up-connected:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    logging=centralized_logging
+    monitoring=centralized_monitoring
+
+    # 1. logging hub first — pure sink, depends on nobody.
+    echo "=== up-connected: logging hub ($logging) ==="
+    just up "$logging"
+    log_ip="$(tofu -chdir={{cluster_root}}/$logging output -raw central_ipv4)"
+    echo "    syslog-ng collector: $log_ip:514"
+
+    # 2. monitoring hub next — brings up OpenObserve/OTLP + Prometheus so consumers can push. The
+    #    logging hub is already up, so the monitoring hub ALSO ships its OWN OS logs there at first
+    #    boot (log_shipping_target). No extra_scrape_targets yet — consumer IPs aren't known until
+    #    step 3, and they're hot-pushed in step 4 without recreating this VM.
+    echo "=== up-connected: monitoring hub ($monitoring) ==="
+    jq -n --arg log "$log_ip:514" '{log_shipping_target: $log}' \
+      > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
+    just up "$monitoring"
+    mon_ip="$(tofu -chdir={{cluster_root}}/$monitoring output -raw server_ipv4)"
+    echo "    OpenObserve/OTLP sink: $mon_ip:5080"
+
+    # 3. consumers — everything except the two hubs and non-cluster dirs. Single boot with BOTH
+    #    hub IPs known: syslog shipping + OTLP push + node_exporter all wired at first boot.
+    targets='[]'
+    for dir in {{cluster_root}}/*/; do
+      c="$(basename "$dir")"
+      [ -f "$dir/main.tf" ] || continue
+      case "$c" in "$logging"|"$monitoring") continue ;; esac
+      echo "=== up-connected: consumer $c ==="
+      jq -n --arg log "$log_ip:514" --arg oo "$mon_ip:5080" \
+        '{log_shipping_target: $log, openobserve_endpoint: $oo}' \
+        > "$dir/.cross-cluster.auto.tfvars.json"
+      just up "$c"
+      # accumulate this consumer's VM IPs as Prometheus scrape targets (node_exporter :9100)
+      targets="$(tofu -chdir={{cluster_root}}/$c output -json hosts 2>/dev/null \
+        | jq --argjson acc "$targets" \
+            '$acc + [to_entries[] | {job: .value.name, ip: .value.ipv4, port: 9100}]')"
+    done
+
+    # 4. hot-push the discovered scrape targets into the RUNNING monitoring server (no recreate).
+    #    Keep log_shipping_target so the re-apply preserves the hub's self-shipping wiring in state.
+    echo "=== up-connected: wiring Prometheus scrape targets ==="
+    echo "$targets" | jq -c --arg log "$log_ip:514" '{log_shipping_target: $log, extra_scrape_targets: .}' \
+      > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
+    tofu -chdir={{cluster_root}}/$monitoring apply -auto-approve   # re-renders .rendered/prometheus.yml only
+    scp {{ssh_opts}} -i {{ssh_key}} \
+      {{cluster_root}}/$monitoring/.rendered/prometheus.yml \
+      ubuntu@"$mon_ip":/tmp/prometheus.yml
+    ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$mon_ip" \
+      'sudo cp /tmp/prometheus.yml /opt/stack/prometheus/prometheus.yml && sudo docker compose -f /opt/stack/compose.yaml restart prometheus'
+    echo "up-connected complete — $(echo "$targets" | jq 'length') cross-cluster scrape targets wired."
 
 # delete + purge Multipass VMs for this cluster that OpenTofu no longer tracks.
 # A failed `up` (e.g. a launch timeout) leaves a VM behind that `tofu destroy` can't
@@ -104,6 +195,29 @@ verify-all:
       echo "=== verify: $cluster ==="
       just verify "$cluster" || rc=1
     done
+    exit "$rc"
+
+# live e2e for the cross-cluster wiring (after `just up-connected`):  just verify-connected
+# 1) a centralized_pki VM's log line reaches the logging hub; 2) Prometheus scrapes the pki VMs.
+verify-connected:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=0
+    log_ip="$(tofu -chdir={{cluster_root}}/centralized_logging output -raw central_ipv4)"
+    pki_ip="$(tofu -chdir={{cluster_root}}/centralized_pki output -json hosts | jq -r '.services.ipv4')"
+    token="xcheck-$(tofu -chdir={{cluster_root}}/centralized_pki output -raw services_ipv4 | tr -d '.')"
+
+    echo "=== verify-connected: log shipping (pki -> logging hub) ==="
+    ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$pki_ip" "logger -t xcheck $token" || rc=1
+    ok=1
+    for i in $(seq 1 12); do
+      if ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$log_ip" "sudo grep -rqs $token /var/log/remote/"; then ok=0; break; fi
+      sleep 5
+    done
+    if [ "$ok" -eq 0 ]; then echo "PASS: pki log line reached the logging hub"; else echo "FAIL: token not found on the hub"; rc=1; fi
+
+    echo "=== verify-connected: metrics scrape (Prometheus -> pki VMs) ==="
+    just prometheus-query centralized_monitoring 'up{job=~"centralized-pki.*"}' || rc=1
     exit "$rc"
 
 # reconcile Heimdall tiles (generate -> sync --prune):  just heimdall-sync centralized_monitoring
@@ -249,6 +363,17 @@ netbox-vms CLUSTER:
 # list virtualization clusters:  just netbox-clusters centralized_netbox
 netbox-clusters CLUSTER:
     uv run {{cluster_root}}/{{CLUSTER}}/scripts/netbox_cli.py --cluster {{CLUSTER}} clusters
+
+# Diode plugin status + discovered IPs (opt-in discovery):  just netbox-discovery centralized_netbox
+netbox-discovery CLUSTER:
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/netbox_cli.py --cluster {{CLUSTER}} discovery
+
+# trigger an on-demand orb-agent scan (opt-in; needs enable_discovery):  just netbox-discover centralized_netbox
+netbox-discover CLUSTER:
+    @ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.agent.ipv4 // ""'); \
+     if [ -z "$ip" ]; then echo "no agent VM — set enable_discovery=true and 'just recreate {{CLUSTER}}'"; exit 1; fi; \
+     ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" 'sudo systemctl restart orb-agent.service'; \
+     echo "orb-agent restarted on $ip — a scan will run; re-check with: just netbox-check {{CLUSTER}}"
 
 # import the OpenObserve log dashboards (idempotent; see specs/openobserve-dashboards.md):  just openobserve-dashboards centralized_monitoring
 # afterwards `... check --require-dashboards` asserts they resolve (not in verify-api since import is on-demand).

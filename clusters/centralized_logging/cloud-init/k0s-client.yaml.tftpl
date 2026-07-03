@@ -93,10 +93,21 @@ write_files:
       WantedBy=timers.target
 %{ endif ~}
 %{ if enable_process_exporter ~}
+  # process-exporter config: curated groups so multi-process apps aggregate; a final
+  # {{.Comm}} catch-all keeps the long tail as one bounded group per command (empty
+  # groups pruned at runtime via -remove-empty-groups). exe matches the argv[0] basename.
   - path: /etc/process-exporter/all.yaml
     permissions: '0644'
     content: |
       process_names:
+        - name: syslog-ng
+          exe: [ syslog-ng ]
+        - name: container-runtime
+          exe: [ dockerd, containerd, containerd-shim-runc-v2, runc ]
+        - name: kubernetes
+          exe: [ k0s, kubelet, kube-router, etcd ]
+        - name: observability
+          exe: [ prometheus, grafana, grafana-server, alertmanager, traefik ]
         - name: "{{.Comm}}"
           cmdline:
             - '.+'
@@ -192,6 +203,17 @@ write_files:
       $k apply -f https://openebs.github.io/charts/openebs-operator-lite.yaml
       $k apply -f https://openebs.github.io/charts/openebs-lite-sc.yaml
       $k patch storageclass openebs-hostpath -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+      # Strip OpenEBS NDM (Node Disk Manager). openebs-operator-lite bundles it, but NDM only
+      # backs the LocalPV-*device* engine (the openebs-device SC) which this lab never uses — every
+      # Coroot PVC binds to openebs-hostpath, served by the localpv-provisioner (left intact below).
+      # NDM leaks to ~4Gi, runs besteffort (no mem limit), and triggers a *global* OOM that thrashes
+      # the whole VM (load 15+, kube-apiserver TLS timeouts). Delete it (apply-then-delete keeps this
+      # idempotent — a re-run re-applies the manifest then re-strips NDM in the same pass).
+      # See specs/centralized-logging-k0s-perf.md.
+      $k -n openebs delete daemonset  openebs-ndm openebs-ndm-node-exporter         --ignore-not-found
+      $k -n openebs delete deployment openebs-ndm-operator openebs-ndm-cluster-exporter --ignore-not-found
+      $k -n openebs delete configmap  openebs-ndm-config                            --ignore-not-found
+      $k delete storageclass openebs-device                                         --ignore-not-found
       # Coroot: operator first (installs the Coroot CRD), then coroot-ce (creates a Coroot CR the
       # operator reconciles into server + node-agent + cluster-agent + Prometheus + ClickHouse).
       helm repo add --force-update coroot https://coroot.github.io/helm-charts
@@ -232,7 +254,7 @@ runcmd:
 %{ endif ~}
 %{ if enable_systemd_exporter ~}
   # systemd_exporter — per-unit health/resource metrics (:9558)
-  - /usr/local/sbin/install-exporter.sh systemd_exporter https://github.com/prometheus-community/systemd_exporter/releases/download/v0.7.0/systemd_exporter-0.7.0.linux-{ARCH}.tar.gz systemd_exporter --web.listen-address=:9558
+  - /usr/local/sbin/install-exporter.sh systemd_exporter https://github.com/prometheus-community/systemd_exporter/releases/download/v0.7.0/systemd_exporter-0.7.0.linux-{ARCH}.tar.gz systemd_exporter --web.listen-address=:9558 --systemd.collector.unit-include='(ssh|syslog-ng|docker|containerd|k0s.*|kube.*|.*[-_]exporter|cadvisor|prometheus|grafana|alertmanager|traefik|heimdall)[.]service' --systemd.collector.enable-restart-count
 %{ endif ~}
 %{ if enable_journald_exporter ~}
   # journald-exporter (:12345) — x86-64-only upstream binary; best-effort (amd64 only).
@@ -241,7 +263,7 @@ runcmd:
 %{ endif ~}
 %{ if enable_process_exporter ~}
   # process-exporter — per-process metrics (:9256)
-  - /usr/local/sbin/install-exporter.sh process-exporter https://github.com/ncabatoff/process-exporter/releases/download/v0.8.4/process-exporter-0.8.4.linux-{ARCH}.tar.gz process-exporter --config.path=/etc/process-exporter/all.yaml
+  - /usr/local/sbin/install-exporter.sh process-exporter https://github.com/ncabatoff/process-exporter/releases/download/v0.8.7/process-exporter-0.8.7.linux-{ARCH}.tar.gz process-exporter --config.path=/etc/process-exporter/all.yaml -threads=false -gather-smaps=false -remove-empty-groups
 %{ endif ~}
 %{ if enable_cadvisor ~}
   # cAdvisor — container metrics (:8089; :8080 is taken by k0s kube-router on this host)

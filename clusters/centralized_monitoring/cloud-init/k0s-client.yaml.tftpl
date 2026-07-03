@@ -66,11 +66,17 @@ write_files:
       systemctl daemon-reload
       systemctl enable --now "$name"
 %{ if enable_process_exporter ~}
-  # process-exporter config: a catch-all group keyed on the process basename.
+  # process-exporter config: curated groups so multi-process apps aggregate; a final
+  # {{.Comm}} catch-all keeps the long tail as one bounded group per command (empty
+  # groups pruned at runtime via -remove-empty-groups). exe matches the argv[0] basename.
   - path: /etc/process-exporter/all.yaml
     permissions: '0644'
     content: |
       process_names:
+        - name: container-runtime
+          exe: [ dockerd, containerd, containerd-shim-runc-v2, runc ]
+        - name: kubernetes
+          exe: [ k0s, kubelet, kube-router, etcd ]
         - name: "{{.Comm}}"
           cmdline:
             - '.+'
@@ -159,9 +165,13 @@ runcmd:
   # node_exporter — OS host + systemd-unit metrics (:9100)
   - /usr/local/sbin/install-exporter.sh node_exporter https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-{ARCH}.tar.gz node_exporter --collector.systemd
 %{ endif ~}
+%{ if enable_systemd_exporter ~}
+  # systemd_exporter — per-unit health/resource metrics (:9558); host binary (needs D-Bus + /proc)
+  - /usr/local/sbin/install-exporter.sh systemd_exporter https://github.com/prometheus-community/systemd_exporter/releases/download/v0.7.0/systemd_exporter-0.7.0.linux-{ARCH}.tar.gz systemd_exporter --web.listen-address=:9558 --systemd.collector.unit-include='(ssh|docker|containerd|k0s.*|kube.*|.*[-_]exporter|cadvisor|netdata)[.]service' --systemd.collector.enable-restart-count
+%{ endif ~}
 %{ if enable_process_exporter ~}
   # process-exporter — per-process metrics (:9256)
-  - /usr/local/sbin/install-exporter.sh process-exporter https://github.com/ncabatoff/process-exporter/releases/download/v0.8.4/process-exporter-0.8.4.linux-{ARCH}.tar.gz process-exporter --config.path=/etc/process-exporter/all.yaml
+  - /usr/local/sbin/install-exporter.sh process-exporter https://github.com/ncabatoff/process-exporter/releases/download/v0.8.7/process-exporter-0.8.7.linux-{ARCH}.tar.gz process-exporter --config.path=/etc/process-exporter/all.yaml -threads=false -gather-smaps=false -remove-empty-groups
 %{ endif ~}
 %{ if enable_cadvisor ~}
   # cAdvisor — container metrics (:8089; :8080 is taken by k0s kube-router on this host)

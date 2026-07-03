@@ -1,0 +1,8 @@
+# /etc/rsyslog.d/vyatta-log.conf — the USG's Vyatta log fan-out, adapted from the real appliance
+# (logs/from_unifi/usg/etc/rsyslog.d/vyatta-log.conf). The ONLY change vs. the appliance is the
+# forward target: the appliance's hardcoded LAN collector IP is replaced by the collector VM's
+# runtime IP, injected by OpenTofu (the templatefile -> controller.ipv4 reference is the edge).
+#
+# Single `@` = UDP (RFC3164), exactly as the appliance forwards. `-` = async local write.
+*.debug;local7.debug	@${controller_ip}:${syslog_port}
+*.debug;local7.debug	-/var/log/messages

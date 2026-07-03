@@ -97,6 +97,15 @@ write_files:
     content: |
       ${indent(6, heimdall_cli_py)}
 %{ endif ~}
+%{ if log_shipping_target != "" ~}
+
+  # Cross-cluster log shipping — syslog-ng client drop-in (shared snippet) shipping journald +
+  # syslog-ng internal() to the centralized_logging collector. See specs/cross-cluster.md.
+  - path: /etc/syslog-ng/conf.d/10-ship.conf
+    permissions: '0644'
+    content: |
+      ${indent(6, syslog_client_conf)}
+%{ endif ~}
 
 runcmd:
   # Enforce UTC late: Multipass injects the host timezone during first boot and can beat the
@@ -131,6 +140,14 @@ runcmd:
       --server-ip "$IP" \
       --enabled "${heimdall_seed_flags}" \
       --prune || true
+%{ endif ~}
+%{ if log_shipping_target != "" ~}
+  # Cross-cluster syslog-ng shipper — install, ensure the drop-in is @included, restart.
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y syslog-ng
+  - mkdir -p /var/lib/syslog-ng
+  - grep -q 'conf.d/\*.conf' /etc/syslog-ng/syslog-ng.conf || echo '@include "/etc/syslog-ng/conf.d/*.conf"' >> /etc/syslog-ng/syslog-ng.conf
+  - systemctl enable syslog-ng
+  - systemctl restart syslog-ng
 %{ endif ~}
 
 final_message: "monitoring server ready — prometheus :9090 / grafana :3000 / openobserve :5080"

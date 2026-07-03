@@ -65,7 +65,8 @@ server at `${k0s_ip}:<port>`.
 | kubelet (read-only) | `10255` | `/metrics/cadvisor` | k0s `--kubelet-extra-args` | `enable_kubelet_scrape` ✅ |
 | node_exporter | `9100` | `/metrics` | binary `v1.8.2` | `enable_node_exporter` ✅ |
 | cAdvisor | `8089` | `/metrics` | binary `v0.49.1` (‡) | `enable_cadvisor` ✅ |
-| process-exporter | `9256` | `/metrics` | binary `v0.8.4` | `enable_process_exporter` ✅ |
+| process-exporter | `9256` | `/metrics` | binary `v0.8.7` | `enable_process_exporter` ✅ |
+| systemd_exporter | `9558` | `/metrics` | binary `v0.7.0` | `enable_systemd_exporter` ✅ |
 | netdata | `19999` | `/api/v1/allmetrics?format=prometheus` | kickstart (latest) | `enable_netdata` ✅ |
 | kube-state-metrics | `8081` | `/metrics` | `:v2.13.0` (hostNetwork Deployment) | `enable_kube_state_metrics` ✅ |
 | filestat_exporter | `9943` | `/metrics` | binary `v0.4.5` | `enable_filestat_exporter` ✅ |
@@ -92,6 +93,7 @@ Global `scrape_interval` defaults to `15s` (`prometheus_scrape_interval`). Servi
 | `node` | `enable_node_exporter` ✅ | `node_exporter:9100`, `${k0s_ip}:9100` | `/metrics` |
 | `cadvisor` | `enable_cadvisor` ✅ | `cadvisor:8080`, `${k0s_ip}:8089` | `/metrics` |
 | `process` | `enable_process_exporter` ✅ | `${k0s_ip}:9256` | `/metrics` |
+| `systemd` | `enable_systemd_exporter` ✅ | `${k0s_ip}:9558` | `/metrics` |
 | `netdata` | `enable_netdata` ✅ | `${k0s_ip}:19999` | `/api/v1/allmetrics?format=prometheus` |
 | `kube-state-metrics` | `enable_kube_state_metrics` ✅ | `${k0s_ip}:8081` | `/metrics` |
 | `kubelet` | `enable_kubelet_scrape` ✅ | `${k0s_ip}:10255` | `/metrics/cadvisor` |
@@ -109,7 +111,7 @@ Global `scrape_interval` defaults to `15s` (`prometheus_scrape_interval`). Servi
 | `ffmpeg` | `enable_ffmpeg_exporter` ⬜ | `${k0s_ip}:9618` | `/metrics` |
 | `script` | `enable_script_exporter` ⬜ | `${k0s_ip}:9469` | `/probe` |
 
-**Default scrape jobs (13):** `prometheus`, `node`, `cadvisor`, `process`, `netdata`,
+**Default scrape jobs (14):** `prometheus`, `node`, `cadvisor`, `process`, `systemd`, `netdata`,
 `kube-state-metrics`, `kubelet`, `filestat`, `statsd`, `ssh`, `traefik`, `blackbox`, `selfmetrics`.
 
 ### Blackbox probe targets & modules

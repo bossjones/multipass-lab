@@ -40,9 +40,9 @@ which avoids a dependency cycle and any need for peer-IP injection in this layer
 |------|:-------:|-------|------|------|
 | `enable_node_exporter` | ✅ | all VMs | `9100` | host metrics; also serves the syslog-ng textfile `.prom` |
 | `enable_syslogng_metrics` | ✅ | all VMs | via `9100` | syslog-ng native stats via textfile collector (requires `enable_node_exporter`) |
-| `enable_systemd_exporter` | ✅ | all VMs | `9558` | per-unit health (e.g. `syslog-ng.service`) |
+| `enable_systemd_exporter` | ✅ | all VMs | `9558` | per-unit health (e.g. `syslog-ng.service`); scoped with a curated `--systemd.collector.unit-include` + `--enable-restart-count` to bound cardinality |
 | `enable_journald_exporter` | ⬜ | all VMs | `12345` | off by default: upstream ships an x86-64-only prebuilt binary, which doesn't run on the lab's arm64 VMs (works on amd64 Proxmox) |
-| `enable_process_exporter` | ✅ | all VMs | `9256` | per-process CPU/mem (syslog-ng, dockerd, k0s) |
+| `enable_process_exporter` | ✅ | all VMs | `9256` | v0.8.7; curated process groups + a bounded `{{.Comm}}` catch-all; runs `-threads=false -gather-smaps=false -remove-empty-groups` to cut cardinality/CPU |
 | `enable_filestat_exporter` | ✅ | central only | `9943` | size/mtime of `/var/log/remote/*` — detect a client that stopped shipping |
 | `enable_cadvisor` | ✅ | docker + k0s | `8089` | container metrics (`:8080` is taken by Traefik / kube-router) |
 | `enable_traefik_metrics` | ✅ | docker only | `8082` | Traefik's Prometheus metrics endpoint |
@@ -121,7 +121,13 @@ Key differences from the exporter flags:
 - **Chart-default overrides.** The rendered
   [`coroot-values.yaml.tftpl`](../cloud-init/coroot/coroot-values.yaml.tftpl) trims the chart's
   laptop-hostile defaults: ClickHouse storage `100Gi → 10Gi` (would exceed the VM disk) and the
-  server memory request `4Gi → 2Gi`.
+  server memory request `4Gi → 2Gi`. It also sets **memory limits** on the server / node-agent /
+  cluster-agent (`coroot_server_memory_limit` `2Gi`, `coroot_nodeagent_memory` `512Mi`,
+  `coroot_clusteragent_memory` `256Mi`) so a runaway is OOM-killed in its own cgroup, not node-wide.
+- **OpenEBS NDM is stripped.** The `openebs-operator-lite` manifest bundles NDM (Node Disk Manager),
+  which this lab doesn't use (all PVCs bind hostpath) — it leaks to ~4Gi and OOM-kills the node, so
+  `coroot-install.sh` deletes it right after applying the storage manifest. Post-mortem:
+  [`specs/centralized-logging-k0s-perf.md`](../../../specs/centralized-logging-k0s-perf.md).
 - **UI exposure.** Always on a NodePort (`http://<k0s_ip>:30080`, browser-friendly); additionally
   via ingress (`curl -H 'Host: coroot.local' http://<k0s_ip>/`) when `enable_ingress`.
 

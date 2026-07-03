@@ -231,10 +231,17 @@ boot, so the cloud-init `runcmd` re-enforces `timedatectl set-timezone Etc/UTC`.
   this NetBox so every cluster registers into the shared source of truth. NetBox binds `0.0.0.0`
   and VMs share the Multipass subnet, so this already works over IP — it needs a small register
   hook in the other clusters' cloud-init plus a per-cluster NetBox cluster object.
-- **NetBox plugins**: install a plugin (e.g. `netbox-topology-views`) via a custom netbox-docker
-  image (`Dockerfile-Plugins` + `PLUGINS`/`PLUGINS_CONFIG` in configuration) — deferred because it
+- **NetBox plugins**: install a plugin via a custom netbox-docker image (`Dockerfile-Plugins` +
+  `PLUGINS`/`PLUGINS_CONFIG` in configuration) — the general plugin build was deferred because it
   requires building an image rather than pulling the published one
-  (see <https://netboxlabs.com/docs/netbox/plugins/installation/>).
+  (see <https://netboxlabs.com/docs/netbox/plugins/installation/>). **Now done, opt-in:** the
+  [`enable_discovery`](netbox-discovery.md) flag builds a custom image with the **diode-netbox-plugin**
+  as part of the NetBox Labs Discovery footprint (below).
+- **Discovery (opt-in, built)**: `enable_discovery` bumps NetBox to a 4.4.x pin, builds the
+  diode-netbox-plugin image, deploys the self-hosted **Diode** ingestion stack, and adds an
+  **orb-agent** VM that scans the Multipass `/24` and auto-populates NetBox IPAM — the *pull* half of
+  a source of truth, complementing the client's *push* self-registration. Default off (the cluster is
+  unchanged when off). Full design + the NetBox-token-version analysis: [`specs/netbox-discovery.md`](netbox-discovery.md).
 - **Import real hardware** from the community
   [devicetype-library](https://github.com/netbox-community/devicetype-library) so the host Device
   (and future Proxmox nodes) use faithful device-type templates instead of the placeholder model.

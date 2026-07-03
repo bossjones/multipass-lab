@@ -83,6 +83,32 @@ def test_coroot_operator_running(require_coroot, k0s):
     _wait_for_running(k0s, "coroot", "coroot-operator")
 
 
+def test_openebs_ndm_removed(require_coroot, k0s):
+    """OpenEBS NDM must be stripped by coroot-install.sh — it's the LocalPV-*device* scanner
+    (unused here; all PVCs use openebs-hostpath) that leaked ~4Gi besteffort and OOM-killed the
+    whole node. The hostpath localpv-provisioner must survive. See specs/centralized-logging-k0s-perf.md.
+    """
+    ds = k0s.run(f"{KUBECTL} -n openebs get daemonset openebs-ndm --ignore-not-found")
+    assert "openebs-ndm" not in ds.stdout, (
+        f"openebs-ndm DaemonSet must not exist (it leaks memory + OOM-kills the node). Got:\n{ds.stdout}"
+    )
+    # The provisioner that actually backs Coroot's PVCs must remain.
+    prov = k0s.run(f"{KUBECTL} -n openebs get deploy openebs-localpv-provisioner --ignore-not-found")
+    assert "openebs-localpv-provisioner" in prov.stdout, (
+        "openebs-localpv-provisioner (hostpath) must survive the NDM strip — Coroot's PVCs need it"
+    )
+
+
+def test_node_memory_headroom(require_coroot, k0s):
+    """Regression guard for the NDM OOM: the node must keep real memory headroom. With NDM gone
+    the k0s VM sits at ~4Gi used of 8Gi; before the fix it was pinned at ~78Mi available."""
+    res = k0s.run("free -m | awk '/^Mem:/ {print $7}'")  # 7th col = available MiB
+    available = int(res.stdout.strip() or "0")
+    assert available > 1000, (
+        f"node available memory {available}MiB is dangerously low (<1000MiB) — possible OOM regression"
+    )
+
+
 def test_coroot_ui_reachable_via_nodeport(require_coroot, k0s, coroot_info):
     """The Coroot server serves its UI on the NodePort — proves the server pod is up + wired.
 

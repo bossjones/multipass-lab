@@ -6,6 +6,11 @@ locals {
 
   render_dir = "${path.module}/.rendered"
 
+  # multipass exec/transfer don't route to VMs in this environment (see CLAUDE.md); every
+  # post-apply VM touch goes over SSH instead, using the same key injected via cloud-init.
+  ssh_private_key = trimsuffix(pathexpand(var.ssh_pubkey_path), ".pub")
+  ssh_opts        = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 -i ${local.ssh_private_key}"
+
   server_name = "${var.name_prefix}-server"
   k0s_name    = "${var.name_prefix}-k0s"
 
@@ -38,6 +43,7 @@ locals {
     enable_node_exporter    = var.enable_node_exporter
     enable_cadvisor         = var.enable_cadvisor
     enable_process_exporter = var.enable_process_exporter
+    enable_systemd_exporter = var.enable_systemd_exporter
     enable_netdata          = var.enable_netdata
     # Reach
     enable_kube_state_metrics = var.enable_kube_state_metrics
@@ -62,6 +68,18 @@ locals {
   # Sorted list of the active flags — exported as enabled_exporters and consumed by
   # tests/testinfra/conftest.py so the live suite asserts only what is on.
   enabled_exporters = sort([for k, v in local.flags : k if v])
+
+  # --- Cross-cluster log shipping (opt-in; see specs/cross-cluster.md) -------
+  # The monitoring hub is applied AFTER the logging hub in `just up-connected`, so the collector
+  # IP is known at first boot — the server can render the SHARED syslog-ng client drop-in and ship
+  # its own OS logs. Empty target => empty string so the cloud-init %{ if ... != "" } guard drops
+  # the block. host:port is split; the port defaults if the target omits it.
+  ship_logs = var.log_shipping_target != ""
+
+  syslog_client_conf = local.ship_logs ? templatefile("${path.module}/../_shared/cloud-init/syslog-client.conf.tftpl", {
+    central_ip  = split(":", var.log_shipping_target)[0]
+    syslog_port = try(split(":", var.log_shipping_target)[1], "514")
+  }) : ""
 }
 
 # --- k0s-client (the monitored host) — created FIRST ------------------------
@@ -96,6 +114,9 @@ locals {
     scrape_interval      = var.prometheus_scrape_interval
     openobserve_org      = local.openobserve_org
     openobserve_password = local.openobserve_password
+    # Cross-cluster scrape targets (VMs in OTHER clusters). Populated by `just up-connected`
+    # via .cross-cluster.auto.tfvars.json; empty by default. See specs/cross-cluster.md.
+    extra_scrape_targets = var.extra_scrape_targets
   }))
 
   compose_conf = templatefile("${path.module}/cloud-init/docker/compose.yaml.tftpl", merge(local.flags, {
@@ -155,6 +176,10 @@ resource "local_file" "server_ci" {
     enable_heimdall_seed = var.enable_heimdall_seed
     heimdall_cli_py      = file("${path.module}/scripts/heimdall_cli.py")
     heimdall_seed_flags  = join(",", local.enabled_exporters)
+    # Cross-cluster self log-shipping — the shared syslog-ng client drop-in, gated on a non-empty
+    # log_shipping_target so the default `just up` stays isolated. See specs/cross-cluster.md.
+    log_shipping_target = var.log_shipping_target
+    syslog_client_conf  = local.syslog_client_conf
   }))
 }
 
@@ -165,6 +190,17 @@ resource "multipass_instance" "server" {
   memory         = var.server.memory
   disk           = var.server.disk
   cloudinit_file = local_file.server_ci.filename
+}
+
+# Standalone copy of the rendered prometheus.yml. `just up-connected` discovers other clusters'
+# VM IPs AFTER the server is already up, sets extra_scrape_targets, re-applies (which re-renders
+# this file but does NOT recreate the VM — a cloud-init content change never recreates a
+# multipass_instance), then scp's this file onto the running server and restarts the Prometheus
+# container. That hot-push is what lets the monitoring hub pick up cross-cluster targets without
+# a recreate (which would churn the server IP that consumers push OTLP to). See specs/cross-cluster.md.
+resource "local_file" "prometheus_yml" {
+  filename = "${local.render_dir}/prometheus.yml"
+  content  = local.prometheus_yml
 }
 
 # --- k0s log shipping: post-apply endpoint injection ------------------------
@@ -200,13 +236,14 @@ resource "terraform_data" "k0s_log_shipper" {
 
   # Wait for the k0s VM's cloud-init to finish (the otelcol-contrib unit is installed there)
   # before pushing config + restarting; a slow k0s boot would otherwise fail the restart. The
-  # `|| systemctl start` fallback covers the case where the unit isn't active yet.
+  # `|| systemctl start` fallback covers the case where the unit isn't active yet. Uses SSH/SCP,
+  # not `multipass exec`/`transfer` — those don't route to VMs in this environment (see CLAUDE.md).
   provisioner "local-exec" {
     command = <<-EOT
-      multipass exec ${local.k0s_name} -- cloud-init status --wait || true
-      multipass transfer ${local_file.k0s_otel_config[0].filename} ${local.k0s_name}:/tmp/otelcol-config.yaml
-      multipass exec ${local.k0s_name} -- sudo cp /tmp/otelcol-config.yaml /etc/otelcol/collector-config.yaml
-      multipass exec ${local.k0s_name} -- sudo systemctl restart otelcol-contrib || multipass exec ${local.k0s_name} -- sudo systemctl start otelcol-contrib
+      ssh -n ${local.ssh_opts} ubuntu@${multipass_instance.k0s.ipv4} 'cloud-init status --wait || true'
+      scp ${local.ssh_opts} ${local_file.k0s_otel_config[0].filename} ubuntu@${multipass_instance.k0s.ipv4}:/tmp/otelcol-config.yaml
+      ssh -n ${local.ssh_opts} ubuntu@${multipass_instance.k0s.ipv4} 'sudo cp /tmp/otelcol-config.yaml /etc/otelcol/collector-config.yaml'
+      ssh -n ${local.ssh_opts} ubuntu@${multipass_instance.k0s.ipv4} 'sudo systemctl restart otelcol-contrib || sudo systemctl start otelcol-contrib'
     EOT
   }
 }

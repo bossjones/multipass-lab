@@ -1,0 +1,21 @@
+# USG stack: the exact rsyslog 5.8.11 (Debian wheezy) forwarder. network_mode host so it forwards
+# to the collector over the VM network exactly as the appliance does. platform is linux/amd64 —
+# wheezy has no arm64 build, so on Apple Silicon this runs under qemu emulation (installed on the
+# VM host via qemu-user-static/binfmt). Configs + scripts are bind-mounted from /opt/unifi.
+services:
+  rsyslog:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: unifi-rsyslog:5.8.11
+    platform: ${usg_platform}
+    container_name: unifi-rsyslog
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - ENABLE_TRAFFIC=${enable_unifi_traffic ? "1" : "0"}
+    volumes:
+      - /opt/unifi/rsyslog.conf:/etc/rsyslog.conf:ro
+      - /opt/unifi/vyatta-log.conf:/etc/rsyslog.d/vyatta-log.conf:ro
+      - /opt/unifi/unifi-gen.sh:/usr/local/bin/unifi-gen.sh:ro
+      - /opt/unifi/usg-entrypoint.sh:/usr/local/bin/usg-entrypoint.sh:ro

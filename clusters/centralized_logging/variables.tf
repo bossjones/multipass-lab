@@ -149,6 +149,24 @@ variable "coroot_server_memory" {
   default     = "2Gi"
 }
 
+variable "coroot_server_memory_limit" {
+  description = "Memory *limit* for the Coroot server pod. Guardrail so a runaway is OOM-killed in its own cgroup instead of causing a global OOM that thrashes the node. Must be >= coroot_server_memory."
+  type        = string
+  default     = "2Gi"
+}
+
+variable "coroot_nodeagent_memory" {
+  description = "Memory limit for the Coroot eBPF node-agent DaemonSet (chart default limit is 1Gi). Trimmed as a guardrail on the memory-tight lab VM."
+  type        = string
+  default     = "512Mi"
+}
+
+variable "coroot_clusteragent_memory" {
+  description = "Memory limit for the Coroot cluster-agent. Guardrail on the memory-tight lab VM."
+  type        = string
+  default     = "256Mi"
+}
+
 variable "coroot_prometheus_storage" {
   description = "PVC size for Coroot's bundled Prometheus. Chart default is 10Gi."
   type        = string

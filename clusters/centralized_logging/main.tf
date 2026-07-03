@@ -51,12 +51,15 @@ locals {
   # written to the VM + used when enable_coroot. Overrides the chart's laptop-hostile defaults
   # (ClickHouse storage 100Gi, server memory request 4Gi). See cloud-init/coroot/.
   coroot_values = templatefile("${path.module}/cloud-init/coroot/coroot-values.yaml.tftpl", {
-    enable_ingress            = var.enable_ingress
-    coroot_host               = var.coroot_host
-    coroot_nodeport           = var.coroot_nodeport
-    coroot_server_memory      = var.coroot_server_memory
-    coroot_prometheus_storage = var.coroot_prometheus_storage
-    coroot_clickhouse_storage = var.coroot_clickhouse_storage
+    enable_ingress             = var.enable_ingress
+    coroot_host                = var.coroot_host
+    coroot_nodeport            = var.coroot_nodeport
+    coroot_server_memory       = var.coroot_server_memory
+    coroot_server_memory_limit = var.coroot_server_memory_limit
+    coroot_nodeagent_memory    = var.coroot_nodeagent_memory
+    coroot_clusteragent_memory = var.coroot_clusteragent_memory
+    coroot_prometheus_storage  = var.coroot_prometheus_storage
+    coroot_clickhouse_storage  = var.coroot_clickhouse_storage
   })
 
   # Pre-computed `helm --version` flags (empty when the version var is "" = unpinned/latest), so

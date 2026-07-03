@@ -62,7 +62,8 @@ Legend: **Default** ✅ on / ⬜ off · **Host** = where it runs.
 | `enable_blackbox` | ✅ | server | 9115 | HTTP/TCP/ICMP endpoint probes |
 | `enable_node_exporter` | ✅ | both | 9100 | OS host + systemd-unit metrics |
 | `enable_cadvisor` | ✅ | both | 8080 (server) / 8089 (k0s) | container metrics |
-| `enable_process_exporter` | ✅ | k0s | 9256 | per-process metrics |
+| `enable_process_exporter` | ✅ | k0s | 9256 | per-process metrics (v0.8.7; curated groups, `-threads=false -gather-smaps=false -remove-empty-groups`) |
+| `enable_systemd_exporter` | ✅ | k0s | 9558 | per-unit health/resource metrics (curated `--unit-include` + `--enable-restart-count`) |
 | `enable_netdata` | ✅ | both | 19999 | real-time agent (per-second host/container metrics + built-in dashboard; Prometheus export at `/api/v1/allmetrics?format=prometheus`). Server agent is host-installed and reached by Prometheus via `host.docker.internal`; k0s over its DHCP IP |
 
 ### Reach (default ON)
@@ -119,3 +120,13 @@ tofu -chdir=clusters/centralized_monitoring apply \
 > re-renders `.rendered/*.yaml` but does **not** recreate a running VM. To apply, recreate the
 > cluster: `just destroy centralized_monitoring && just up centralized_monitoring`. See
 > [operations.md](operations.md#applying-config-changes).
+
+## Cross-cluster scraping — `extra_scrape_targets`
+
+Not an `enable_*` flag: a `list(object({ job=string, ip=string, port=optional(number,9100) }))`
+(default `[]`) that adds one static-config Prometheus job per entry so this hub can scrape VMs in
+**other** clusters. It is normally populated by `just up-connected` via a gitignored
+`.cross-cluster.auto.tfvars.json`, not by hand. Because the running server isn't recreated on a
+cloud-init content change, `up-connected` re-renders `prometheus.yml`, scp's it onto the server, and
+restarts the Prometheus container to pick up new targets. See
+[`specs/cross-cluster.md`](../../../specs/cross-cluster.md).

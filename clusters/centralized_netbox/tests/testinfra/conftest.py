@@ -54,6 +54,12 @@ def enabled_features(tofu_output):
 
 
 @pytest.fixture(scope="session")
+def enabled_exporters(tofu_output):
+    """Sorted list of enabled exporter flags; test_metrics parametrizes over it."""
+    return tofu_output["enabled_exporters"]["value"]
+
+
+@pytest.fixture(scope="session")
 def netbox(tofu_output):
     """NetBox API coordinates for host-side cross-checks.
 
@@ -131,4 +137,28 @@ def client(hosts, ssh_config_file):
     host = _connect(hosts["client"]["ipv4"], ssh_config_file)
     # netbox-register.service self-registers this VM once the server's NetBox is up.
     _wait_for_marker(host, "/var/lib/netbox-register/done")
+    return host
+
+
+@pytest.fixture(scope="session")
+def discovery(tofu_output):
+    """Discovery (opt-in Diode + orb-agent) coordinates. {enabled, diode_url}.
+
+    The real netboxlabs/diode release publishes only the nginx ingress port (gRPC + HTTP mux); it
+    does not publish per-service Prometheus /metrics ports, so there is no metrics URL to expose.
+    """
+    return {
+        "enabled": tofu_output["discovery_enabled"]["value"],
+        "diode_url": tofu_output["diode_url"]["value"],
+    }
+
+
+@pytest.fixture(scope="session")
+def agent(hosts, ssh_config_file, discovery):
+    """The discovery agent VM — only exists when enable_discovery; skip cleanly otherwise."""
+    if not discovery["enabled"]:
+        pytest.skip("discovery disabled (enable_discovery=false)")
+    host = _connect(hosts["agent"]["ipv4"], ssh_config_file)
+    # orb-agent.service starts + writes the marker once the Diode ingress is reachable.
+    _wait_for_marker(host, "/var/lib/orb-agent/discovery-done")
     return host
