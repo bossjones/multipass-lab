@@ -58,10 +58,33 @@ see which step is blocking; patch the `/opt/...` file or `/usr/local/sbin/<svc>.
 
 **Example 4 — DNS boot-time races**
 Symptom: early-boot steps fail to resolve names / `no route to host` right after launch, then
-recover. Cause: a cross-cluster consumer points its resolver at the `centralized_dns` AdGuard hub,
-but a boot-ordering race lets a step run before DNS is ready (the class of race commit `bcd66f7`
-addressed). Distinguish a genuine misconfig from a transient race: if later log lines show the
-step succeeding on retry, it's the race, not a broken resolver.
+recover. Signatures: `curl: (6) Could not resolve host: <host>` (e.g. `get.k0s.sh`,
+`docs.k0sproject.io`, `registry-1.docker.io`), or a `SERVFAIL`. Cause: a cross-cluster consumer
+points its resolver at the `centralized_dns` AdGuard hub, but a boot-ordering race lets a step run
+before AdGuard/Unbound is warm (the class commits `bcd66f7` / `d18943d` addressed with a
+`until getent hosts <host>; do sleep 2; done` gate after the `systemctl restart systemd-resolved`).
+Distinguish a genuine misconfig from a transient race: re-run the resolution by hand (`getent hosts
+<host>` a few times, and `dig @<dns_ip> <host>`) — if it now answers reliably, it was the warm-up
+race, and the fix is a resolver-ready gate (or retry) before that step, **not** a broken resolver.
+
+**Example 4b — a network install that lost the race leaves a SILENT infinite wait loop**
+Symptom: a VM sits at `cloud-init status: running` for many minutes with **no `--failed` unit** and
+the sweep looks "clean" — but nothing finishes. This is the nastiest variant: a one-shot installer
+(e.g. `curl https://get.k0s.sh | sh`) lost the DNS race and failed *without aborting* the runcmd
+(cloud-init runcmd is `/bin/sh`, no `set -e`), so a **later** `until <cmd>; do sleep 5; done` wait
+(e.g. `until k0s kubectl get --raw=/readyz`) loops forever because the thing it waits for was never
+installed. Because the loop is silent, `journalctl`/`cloud-init-output.log` stop advancing and
+`system_debug` reports no signature. Investigation recipe (this is the "which logs to look at"):
+  1. `cloud-init status --long` → `running` + `extended_status: degraded` = an earlier non-fatal error.
+  2. `ps -o pid,ppid,args -ax | grep -E 'runcmd|sleep'` → if `/bin/sh …/scripts/runcmd` is alive
+     with a child `sleep`, the **main runcmd** is stuck in a wait loop (not a background oneshot).
+  3. Read `/var/lib/cloud/instance/scripts/runcmd` and find the `until … sleep` line — that names
+     what it's waiting for (e.g. `/usr/local/bin/k0s …`).
+  4. Grep `/var/log/cloud-init-output.log` for the *earlier* step that produces it (`grep -nE
+     'k0s|get\.k0s|Could not resolve|not found'`) — the real failure (e.g. line 421 `curl: (6)
+     Could not resolve host: get.k0s.sh` → `runcmd: 6: /usr/local/bin/k0s: not found`).
+Fix: add the resolver-ready gate + a retry loop around the installer; live-repair by running the
+missed install by hand so the wait loop's condition finally becomes true and cloud-init completes.
 
 **Example 5 — container image pull failures**
 Input: `manifest unknown` / `error pulling` / `pull access denied`

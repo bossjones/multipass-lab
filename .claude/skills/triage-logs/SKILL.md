@@ -98,6 +98,20 @@ the DNS hub still coming up). Lean on the `triage-patterns` skill and the worked
 DNS races, image-pull failures). If nothing is conclusive, say so and point at the sweeper's
 `↳ dig deeper` hint rather than inventing a cause.
 
+**Special case — a role stuck `cloud-init: running` with NO failed units and NO signature hits.**
+The sweeper will call it un-healthy (cloud-init not `done`) but surface nothing, and researchers
+can't ssh to dig. This is almost always the **silent wait-loop** pattern (`triage-patterns`
+Example 4b): the main runcmd lost a DNS race on an early one-shot install and is now spinning in a
+later `until … sleep` loop forever. Confirm it yourself over ssh (`just ssh <cluster> <role>`):
+  1. `cloud-init status --long` → `running` + `extended_status: degraded`.
+  2. `ps -o pid,ppid,args -ax | grep -E 'runcmd|sleep'` → the `/bin/sh …/scripts/runcmd` process is
+     alive with a child `sleep` (the main runcmd is looping, not a background oneshot).
+  3. `sudo sed -n '/until/p' /var/lib/cloud/instance/scripts/runcmd` → what it waits for.
+  4. `sudo grep -nE 'Could not resolve|not found|<installer>' /var/log/cloud-init-output.log` → the
+     earlier step that actually failed (the loop's condition depends on it).
+Fix = a resolver-ready gate (`until getent hosts <host>; do sleep 2; done`) + retry around that
+installer; live-repair by running the missed install so the loop's condition finally holds.
+
 ## Phase 4 — Remediate (plan mode, opus)
 
 Author fixes as the opus main agent, and **enter plan mode / use AskUserQuestion before changing

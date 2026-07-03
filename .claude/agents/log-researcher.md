@@ -58,7 +58,15 @@ You have the `triage-patterns` skill preloaded — apply it. Condensed reminder 
   by cloud-init. otelcol `/var/log/syslog: permission denied` → collector user not in `adm`.
   Unit stuck `activating` → its `ExecStart` blocking in a retry loop (slow pull / peer not up).
   `manifest unknown`/`pull access denied` → bad image ref or no registry egress. Early
-  `no route to host` that then recovers → a DNS boot race, not a broken resolver.
+  `no route to host` / `Could not resolve host: <host>` that then recovers → a DNS boot race, not a
+  broken resolver.
+- **`cloud_init_status` = `running` with NO signature hits and NO failed units is NOT healthy** —
+  it usually means the main runcmd is stuck in a silent `until … sleep` wait loop because an
+  earlier one-shot install (e.g. `curl https://get.k0s.sh | sh`) lost the DNS race and failed
+  without aborting. You can't ssh from here to confirm; report it as **"stuck cloud-init: likely a
+  silent wait loop — the caller should read `/var/lib/cloud/instance/scripts/runcmd` for the
+  `until` line and grep `/var/log/cloud-init-output.log` for the earlier failed step"** rather than
+  calling it healthy or inventing a signature.
 - **Noise (do NOT flag):** benign warnings that don't match a signature and block nothing; a
   transient failure immediately followed by a successful retry (read a few lines past the hit);
   a unit that's briefly `activating` but still emitting new output.

@@ -245,6 +245,21 @@ The active machinery here is a Claude Code hook + skill system, not application 
   (`[[macos-local-network-blocks-uv-cli]]`). Pure parsing/policy lives in `tools/_system_debug_core.py`
   (stdlib-only, hermetically tested in `tools/tests/`); the manual fallback is
   `just ssh <cluster> <role>` → `sudo journalctl -u <svc> -b -p err`.
+- **A VM stuck `cloud-init: running` for minutes with no `--failed` unit is a SILENT WAIT LOOP, not
+  slowness.** `multipass launch` (and so `tofu apply`) blocks until cloud-init is `done`, so tofu
+  prints `Still creating [Nm]` for a VM that's already `Running`. `system_debug`/`journalctl -p err`
+  show nothing because the loop is silent. The cause is almost always: an early one-shot network
+  install lost the **DNS warm-up race** (`curl: (6) Could not resolve host: get.k0s.sh` /
+  `registry-1.docker.io`) and failed *without aborting* (runcmd is `/bin/sh`, no `set -e`), so a
+  later `until <cmd>; do sleep 5; done` (e.g. `until k0s ... /readyz`) loops forever. **Which logs
+  to read:** `cloud-init status --long` (→ `degraded running`); `ps -o pid,ppid,args -ax | grep -E
+  'runcmd|sleep'` (the `/bin/sh …/instance/scripts/runcmd` proc alive with a child `sleep` = main
+  runcmd looping); read `/var/lib/cloud/instance/scripts/runcmd` for the `until` line; then `grep
+  -nE 'Could not resolve|not found' /var/log/cloud-init-output.log` for the real earlier failure.
+  Fix = a resolver-ready gate (`until getent hosts <host>; do sleep 2; done` after the
+  `systemctl restart systemd-resolved`) + a retry around the installer — the pattern in
+  `centralized_logging/docker-client.yaml.tftpl` and `centralized_monitoring/*.tftpl`. Full
+  signature map + recipe: `triage-patterns` skill (Example 4b) / `triage-logs` skill.
 - **The `pre_tool_use` hook matches on substrings**, so it blocks otherwise-fine commands containing
   `rm ` or `.env`: `docker run --rm`, `grep .env`, `rm -f` all get denied. Use `docker run` (+
   `docker container prune -f`), avoid the literal `.env` token, and `mv` to the scratchpad, not `rm`.
