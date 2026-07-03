@@ -174,10 +174,17 @@ runcmd:
       docker exec step-ca test -f /home/step/certs/root_ca.crt && break
       echo "waiting for step-ca init ($i)"; sleep 2
     done
+    # The `step` user inside smallstep/step-ca is uid 1000, and `docker cp` preserves the SOURCE
+    # numeric owner. /opt/pki/pinned/* are root-owned (write_files), so chown them to 1000 on the
+    # host FIRST — otherwise the copied intermediate_ca_key lands root-owned and step-ca (non-root)
+    # crash-loops with `permission denied` reading it. A post-cp `docker exec chown` can't be relied
+    # on: it defaults to the non-root step user (can't chown root's file), and can't attach at all
+    # once the container is already restarting. See specs/pki-and-dns.md.
+    chown 1000:1000 /opt/pki/pinned/root_ca.crt /opt/pki/pinned/intermediate_ca.crt /opt/pki/pinned/intermediate_ca_key
     docker cp /opt/pki/pinned/root_ca.crt         step-ca:/home/step/certs/root_ca.crt
     docker cp /opt/pki/pinned/intermediate_ca.crt step-ca:/home/step/certs/intermediate_ca.crt
     docker cp /opt/pki/pinned/intermediate_ca_key step-ca:/home/step/secrets/intermediate_ca_key
-    docker exec step-ca chown -R step:step /home/step/certs /home/step/secrets || true
+    docker exec -u 0 step-ca chown -R step:step /home/step/certs /home/step/secrets || true
     docker restart step-ca
 %{ endif ~}
 %{ if enable_docker_tools ~}
