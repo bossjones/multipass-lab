@@ -1,0 +1,17 @@
+# rsyslog 5.8.11 — the EXACT Debian wheezy package the UniFi Security Gateway runs (5.8.11-3+deb7u2).
+# wheezy is EOL and has no arm64 port, so on Apple Silicon this runs emulated as ${usg_platform}.
+#
+# NOTE: we do NOT `apt-get install` here. Debian wheezy's apt `http` transport SEGFAULTS under
+# qemu-user emulation ("Sub-process http received a segmentation fault") regardless of qemu version,
+# so the package is fetched natively on the arm64 VM host (curl, no emulation) and extracted with
+# `dpkg-deb -x` into ./rsyslog-root by cloud-init; we just overlay that tree onto the wheezy base.
+# rsyslog 5.8.11's only real runtime deps are libc6 + zlib1g, both present in the base image
+# (lsb-base/initscripts are only used by the sysvinit script, which we don't run — the entrypoint
+# execs rsyslogd -n directly). See specs/centralized_unifi.md.
+FROM --platform=${usg_platform} ${usg_base_image}
+
+# The exact 5.8.11-3+deb7u2 files (rsyslogd + /usr/lib/rsyslog modules), pre-extracted on the host.
+COPY rsyslog-root/ /
+
+# Config + generator + entrypoint are bind-mounted by compose (see compose.yaml).
+ENTRYPOINT ["/usr/local/bin/usg-entrypoint.sh"]
