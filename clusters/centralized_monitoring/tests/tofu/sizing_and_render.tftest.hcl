@@ -171,6 +171,28 @@ run "defaults_sizing_names_and_render" {
     error_message = "k0s cloud-init must install ccze/k9s/stern and drop the ubuntu kubeconfig"
   }
 
+  # --- netdata: installs on BOTH VMs, telemetry opted out, server scraped via host gateway ---
+  assert {
+    condition = alltrue([for c in [local_file.server_ci.content, local_file.k0s_ci.content] :
+    strcontains(c, "netdata-kickstart.sh")])
+    error_message = "netdata kickstart install block must render on both the server and k0s VMs by default"
+  }
+  assert {
+    condition = alltrue([for c in [local_file.server_ci.content, local_file.k0s_ci.content] :
+    strcontains(c, ".opt-out-from-anonymous-statistics")])
+    error_message = "netdata install must drop the anonymous-statistics opt-out file on both VMs"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "host.docker.internal:19999")
+    error_message = "netdata scrape job must reach the host-installed server agent via host.docker.internal"
+  }
+  # Friendly `instance` labels so the Netdata dashboards' $instance picker reads a hostname.
+  assert {
+    condition = alltrue([for l in ["monitoring-server", "monitoring-k0s"] :
+    strcontains(local_file.server_ci.content, l)])
+    error_message = "netdata scrape targets must carry friendly instance labels (monitoring-server / monitoring-k0s)"
+  }
+
   # --- k0s log shipping: otelcol-contrib agent installs (endpoint injected post-apply) ---
   assert {
     condition = alltrue([for marker in [
@@ -285,6 +307,30 @@ run "nut_toggle_on_renders_install_and_job" {
   assert {
     condition     = strcontains(local_file.server_ci.content, "job_name: nut")
     error_message = "enabling nut must render its scrape job"
+  }
+}
+
+run "netdata_off_omits_install_and_job" {
+  command = plan
+
+  variables {
+    ssh_pubkey     = "ssh-ed25519 AAAATESTKEY centralized-monitoring-tests"
+    enable_netdata = false
+  }
+
+  # No install block on either VM, no scrape job, no host-gateway mapping in compose.
+  assert {
+    condition = alltrue([for c in [local_file.server_ci.content, local_file.k0s_ci.content] :
+    !strcontains(c, "netdata-kickstart.sh")])
+    error_message = "disabling netdata must omit the kickstart install block from both VMs"
+  }
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "job_name: netdata")
+    error_message = "disabling netdata must omit the netdata scrape job"
+  }
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "host.docker.internal:host-gateway")
+    error_message = "disabling netdata must omit the prometheus host-gateway mapping"
   }
 }
 
@@ -468,6 +514,9 @@ run "grafana_dashboards_render" {
       "/opt/stack/grafana/dashboards/Infrastructure/node-exporter-full.json",
       "/opt/stack/grafana/dashboards/Platform/alertmanager.json",
       "/opt/stack/grafana/dashboards/Kubernetes/kubernetes.json",
+      "/opt/stack/grafana/dashboards/Netdata/netdata-fleet.json",
+      "/opt/stack/grafana/dashboards/Netdata/netdata-instance.json",
+      "/opt/stack/grafana/dashboards/Netdata/netdata-containers.json",
     ] : strcontains(local_file.server_ci.content, p)])
     error_message = "every dashboard JSON must be spliced into the server cloud-init under its folder subdir"
   }

@@ -167,5 +167,11 @@ runcmd:
   # filestat_exporter — size/mtime/stat metrics over /var/log/remote (:9943)
   - /usr/local/sbin/install-exporter.sh filestat_exporter https://github.com/michael-doubez/filestat_exporter/releases/download/v0.4.5/filestat_exporter-v0.4.5.linux-{ARCH}.tar.gz filestat_exporter --config.file=/etc/filestat_exporter/filestat.yaml
 %{ endif ~}
+%{ if enable_netdata ~}
+  # netdata — real-time agent (:19999, /api/v1/allmetrics?format=prometheus).
+  # Standalone/local-only: no --claim-token (no Netdata Cloud), telemetry disabled, updates pinned.
+  - mkdir -p /etc/netdata && touch /etc/netdata/.opt-out-from-anonymous-statistics
+  - curl -sSLf https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh && DO_NOT_TRACK=1 sh /tmp/netdata-kickstart.sh --non-interactive --stable-channel --disable-telemetry --no-updates --dont-wait || true
+%{ endif ~}
 
 final_message: "central logging VM ready — collecting under /var/log/remote/; exporters on :9100/:9558/:9256/:9943"

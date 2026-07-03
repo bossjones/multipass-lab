@@ -71,6 +71,13 @@ output "netbox_prefix" {
   value       = try("${join(".", slice(split(".", multipass_instance.server.ipv4), 0, 3))}.0/24", "")
 }
 
+# Opt-in feature flags. tests/testinfra/conftest.py reads this so the live Netdata suite is
+# *skipped* (not failed) when the feature is off — mirrors the other clusters' pattern.
+output "enabled_features" {
+  description = "Opt-in feature flags: { netdata }."
+  value       = local.enabled_features
+}
+
 # Discovery (opt-in Diode + orb-agent). These resolve to sane values whether or not discovery is
 # enabled so `tofu output` / the CLI never error; consumers gate on discovery_enabled.
 output "discovery_enabled" {
@@ -103,8 +110,9 @@ output "docker_tools_enabled" {
 }
 
 # Browser URLs for `just open centralized_netbox [--full]`. core = the NetBox UI; all folds in
-# the API root plus every enabled exporter /metrics endpoint (server + client) and, when discovery
-# is on, the Diode ingress URL (the only host-published Diode port).
+# the API root plus every enabled exporter /metrics endpoint (server + client), each VM's Netdata
+# dashboard when enabled, and, when discovery is on, the Diode ingress URL (the only
+# host-published Diode port).
 locals {
   _web_urls_metrics_candidates = [
     { url = "http://${multipass_instance.server.ipv4}:9100/metrics", on = var.enable_node_exporter },
@@ -118,7 +126,7 @@ locals {
 }
 
 output "web_urls" {
-  description = "Browser URLs. core = NetBox UI; all = core + the REST API root + enabled /metrics endpoints (+ the Diode ingress URL when enable_discovery). Consumed by `just open <cluster> [--full]`."
+  description = "Browser URLs. core = NetBox UI; all = core + the REST API root + enabled /metrics endpoints + enabled Netdata dashboards (+ the Diode ingress URL when enable_discovery). Consumed by `just open <cluster> [--full]`."
   value = {
     core = ["http://${multipass_instance.server.ipv4}:${var.netbox_port}/"]
     all = concat(
@@ -128,6 +136,10 @@ output "web_urls" {
       ],
       local._web_urls_metrics,
       var.enable_discovery ? ["http://${multipass_instance.server.ipv4}:${var.diode_port}"] : [],
+      var.enable_netdata ? [
+        "http://${multipass_instance.server.ipv4}:19999",
+        "http://${multipass_instance.client.ipv4}:19999",
+      ] : [],
     )
   }
 }

@@ -175,6 +175,20 @@ run "exporters_render_with_defaults" {
     condition     = !strcontains(local_file.k0s_ci.content, "filestat_exporter") && !strcontains(local_file.docker_ci.content, "filestat_exporter")
     error_message = "filestat_exporter must only render on central"
   }
+
+  # netdata: installs on ALL three VMs by default, telemetry opted out.
+  assert {
+    condition = alltrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : strcontains(c, "netdata-kickstart.sh")])
+    error_message = "netdata kickstart install block must render on all three VMs by default"
+  }
+  assert {
+    condition = alltrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : strcontains(c, ".opt-out-from-anonymous-statistics")])
+    error_message = "netdata install must drop the anonymous-statistics opt-out file on every VM"
+  }
 }
 
 run "disabled_flags_omit_install_blocks" {
@@ -197,6 +211,26 @@ run "disabled_flags_omit_install_blocks" {
   assert {
     condition     = !strcontains(local_file.docker_ci.content, "--entrypoints.metrics.address=:8082")
     error_message = "disabled traefik metrics must not render in the compose stack"
+  }
+}
+
+run "netdata_off_omits_install_and_job" {
+  command = plan
+
+  variables {
+    enable_netdata = false
+  }
+
+  # No install block on any VM and no scrape job in the docker VM's inline Prometheus.
+  assert {
+    condition = alltrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : !strcontains(c, "netdata-kickstart.sh")])
+    error_message = "disabling netdata must omit the kickstart install block from every VM"
+  }
+  assert {
+    condition     = !strcontains(local_file.docker_ci.content, "job_name: logging-netdata")
+    error_message = "disabling netdata must omit the logging-netdata scrape job"
   }
 }
 
@@ -280,7 +314,7 @@ run "docker_prometheus_scrape_and_grafana_render" {
   # Default-on scrape jobs render, and the self-scrape placeholder is present for the
   # boot-time sed. central/k0s targets come from the injected runtime IPs.
   assert {
-    condition = alltrue([for j in ["logging-node", "logging-systemd", "logging-process", "logging-cadvisor", "logging-filestat", "logging-kube-state"] :
+    condition = alltrue([for j in ["logging-node", "logging-systemd", "logging-process", "logging-cadvisor", "logging-filestat", "logging-kube-state", "logging-netdata"] :
     strcontains(local_file.docker_ci.content, "job_name: ${j}")])
     error_message = "docker Prometheus must render the default-on logging-* scrape jobs"
   }
@@ -306,8 +340,17 @@ run "docker_prometheus_scrape_and_grafana_render" {
     condition = alltrue([for p in [
       "/opt/stack/grafana/dashboards/Instances/instance-overview.json",
       "/opt/stack/grafana/dashboards/Logging/logging-pipeline.json",
+      "/opt/stack/grafana/dashboards/Netdata/netdata-fleet.json",
+      "/opt/stack/grafana/dashboards/Netdata/netdata-instance.json",
+      "/opt/stack/grafana/dashboards/Netdata/netdata-containers.json",
     ] : strcontains(local_file.docker_ci.content, p)])
-    error_message = "docker Grafana must splice the provisioned dashboards (overview + logging pipeline)"
+    error_message = "docker Grafana must splice the provisioned dashboards (overview + logging pipeline + netdata)"
+  }
+  # Friendly `instance` labels so the Netdata dashboards' $instance picker reads a hostname.
+  assert {
+    condition = alltrue([for l in ["logging-central", "logging-docker", "logging-k0s"] :
+    strcontains(local_file.docker_ci.content, l)])
+    error_message = "logging-netdata scrape targets must carry friendly instance labels"
   }
   assert {
     condition     = strcontains(local_file.docker_ci.content, "encoding: gz+b64")

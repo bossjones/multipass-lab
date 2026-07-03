@@ -48,6 +48,12 @@ def hosts(tofu_output):
 
 
 @pytest.fixture(scope="session")
+def enabled_features(tofu_output):
+    """Opt-in feature flags ({netdata: bool}) — drives skip-not-fail in the live suite."""
+    return tofu_output["enabled_features"]["value"]
+
+
+@pytest.fixture(scope="session")
 def enabled_exporters(tofu_output):
     """Sorted list of enabled exporter flags; test_metrics parametrizes over it."""
     return tofu_output["enabled_exporters"]["value"]

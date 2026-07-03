@@ -12,6 +12,7 @@
 # Ports map (see specs/centralized_logging_metrics.md §5):
 #   node 9100 · systemd 9558 · journald 12345 · process 9256 · filestat 9943
 #   cadvisor 8089 · traefik 8082 · kube-proxy 10249 · kubelet ro 10255 · kube-state 8081
+#   netdata 19999 (/api/v1/allmetrics?format=prometheus)
 
 - job_name: logging-node        # host metrics + syslog-ng textfile metrics
   static_configs:
@@ -49,3 +50,17 @@
   metrics_path: /metrics/cadvisor
   static_configs:
     - targets: ["<k0s_ip>:10255"]
+
+- job_name: logging-netdata     # real-time agent on all 3 VMs (Prometheus export)
+  metrics_path: /api/v1/allmetrics
+  params:
+    format: ["prometheus"]
+  honor_labels: true
+  static_configs:
+    # Friendly `instance` labels for the Netdata dashboards' $instance picker.
+    - targets: ["<central_ip>:19999"]
+      labels: { instance: "logging-central" }
+    - targets: ["<docker_ip>:19999"]
+      labels: { instance: "logging-docker" }
+    - targets: ["<k0s_ip>:19999"]
+      labels: { instance: "logging-k0s" }

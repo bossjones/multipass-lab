@@ -1,0 +1,132 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": ["netdata", "containers", "cgroups"],
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "label": "Instance",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(netdata_cgroup_cpu_percentage_average, instance)",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(netdata_cgroup_cpu_percentage_average, instance)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2, "sort": 1, "includeAll": false, "multi": false, "current": {}, "options": []
+      },
+      {
+        "name": "container",
+        "label": "Container",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(netdata_cgroup_cpu_percentage_average{instance=~\"$instance\"}, cgroup_name)",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(netdata_cgroup_cpu_percentage_average{instance=~\"$instance\"}, cgroup_name)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2, "sort": 1, "includeAll": true, "multi": true, "allValue": ".*", "current": {}, "options": []
+      }
+    ]
+  },
+  "time": { "from": "now-15m", "to": "now" },
+  "title": "Netdata — Containers",
+  "uid": "netdata-containers",
+  "version": 1,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "Containers on this instance (name → image)",
+      "description": "Identity is netdata's resolved cgroup_name and image labels — never a container id.",
+      "type": "table",
+      "fieldConfig": { "defaults": { "custom": { "align": "auto" } }, "overrides": [] },
+      "options": { "showHeader": true },
+      "targets": [
+        { "expr": "netdata_cgroup_cpu_percentage_average{instance=~\"$instance\", cgroup_name=~\"$container\", dimension=\"user\"}", "format": "table", "instant": true, "refId": "A" }
+      ],
+      "transformations": [
+        { "id": "organize", "options": { "excludeByName": { "Time": true, "Value": true, "__name__": true, "job": true, "chart": true, "dimension": true, "family": true }, "renameByName": { "cgroup_name": "Container", "image": "Image", "instance": "Instance" } } }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
+      "id": 2,
+      "title": "CPU by container",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "percent", "custom": { "fillOpacity": 15 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        { "expr": "sum by (cgroup_name) (netdata_cgroup_cpu_percentage_average{instance=~\"$instance\", cgroup_name=~\"$container\"})", "legendFormat": "{{cgroup_name}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
+      "id": 3,
+      "title": "Memory (RAM) by container",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "mbytes", "custom": { "fillOpacity": 15 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        { "expr": "netdata_cgroup_mem_usage_MiB_average{instance=~\"$instance\", cgroup_name=~\"$container\", dimension=\"ram\"}", "legendFormat": "{{cgroup_name}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "id": 4,
+      "title": "Network received by container",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "Kbits" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        { "expr": "sum by (cgroup_name) (netdata_cgroup_net_net_kilobits_persec_average{instance=~\"$instance\", cgroup_name=~\"$container\", dimension=\"received\"})", "legendFormat": "{{cgroup_name}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "id": 5,
+      "title": "Network sent by container",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "Kbits" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        { "expr": "sum by (cgroup_name) (netdata_cgroup_net_net_kilobits_persec_average{instance=~\"$instance\", cgroup_name=~\"$container\", dimension=\"sent\"})", "legendFormat": "{{cgroup_name}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 },
+      "id": 6,
+      "title": "Processes (PIDs) by container",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "max"] } },
+      "targets": [
+        { "expr": "netdata_cgroup_pids_current_pids_average{instance=~\"$instance\", cgroup_name=~\"$container\"}", "legendFormat": "{{cgroup_name}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
+      "id": 7,
+      "title": "CPU throttled % by container",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        { "expr": "netdata_cgroup_throttled_percentage_average{instance=~\"$instance\", cgroup_name=~\"$container\"}", "legendFormat": "{{cgroup_name}}", "refId": "A" }
+      ]
+    }
+  ]
+}

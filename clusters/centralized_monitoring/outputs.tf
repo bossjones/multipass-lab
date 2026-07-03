@@ -69,6 +69,7 @@ locals {
     { url = "http://${local._server_ip}:9102/metrics", on = var.enable_statsd_exporter },
     { url = "http://${local._server_ip}:9312/metrics", on = var.enable_ssh_exporter },
     { url = "http://${local._server_ip}:8686", on = var.enable_vector },
+    { url = "http://${local._server_ip}:19999/api/v1/allmetrics?format=prometheus", on = var.enable_netdata },
     # k0s client exporters
     { url = "http://${local._k0s_ip}:9100/metrics", on = var.enable_node_exporter },
     { url = "http://${local._k0s_ip}:9256/metrics", on = var.enable_process_exporter },

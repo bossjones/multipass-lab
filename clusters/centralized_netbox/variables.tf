@@ -341,3 +341,10 @@ variable "enable_systemd_exporter" {
   type        = bool
   default     = true
 }
+
+# --- Opt-in observability ----------------------------------------------------
+variable "enable_netdata" {
+  description = "Netdata real-time agent (:19999, /api/v1/allmetrics?format=prometheus) on both VMs — per-second host/container metrics + built-in dashboards. Standalone (no Netdata Cloud), telemetry off. No local Prometheus here, so dashboard-only."
+  type        = bool
+  default     = true
+}

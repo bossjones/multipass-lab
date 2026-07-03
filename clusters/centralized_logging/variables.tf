@@ -117,6 +117,12 @@ variable "enable_docker_tools" {
   default     = true
 }
 
+variable "enable_netdata" {
+  description = "Netdata real-time agent (:19999, /api/v1/allmetrics?format=prometheus) on all VMs — per-second host/container/systemd metrics + built-in dashboards. Standalone (no Netdata Cloud), telemetry off."
+  type        = bool
+  default     = true
+}
+
 # --- Coroot (self-hosted eBPF observability) + ingress ----------------------
 # Coroot is deployed declaratively onto the single-node k0s cluster (operator + coroot-ce
 # Helm charts) in the k0s cloud-init — no cloud account, no secrets. Heavy (bundles
