@@ -212,3 +212,14 @@ The active machinery here is a Claude Code hook + skill system, not application 
   `docker container prune -f`), avoid the literal `.env` token, and `mv` to the scratchpad, not `rm`.
 - **zsh does not word-split unquoted vars.** `for x in $list` / `$CMD args` run the whole value as a
   single word — inline the list in the `for`, or use an array / `${=var}`.
+- **`tofu test` / `just check` auto-loads `*.auto.tfvars.json`.** A leftover
+  `.cross-cluster.auto.tfvars.json` (written by `up-connected`) silently flips the hermetic
+  "off by default" assertions to fail — the *hermetic* suite is not actually isolated from live
+  state. If `just check` fails only on `*_off_by_default` runs, check for that file (it's
+  gitignored, so `git status` won't show it) and move it aside before trusting the result.
+- **A newly-added tofu `output` isn't in state until you apply.** `tofu output -json <new>` errors
+  `Output "<new>" not found` until a `tofu apply` runs; that apply is outputs-only
+  (`0 added, 0 changed, 0 destroyed` — no VM recreated), so it's safe on a live cluster. Recipes
+  that consume `tofu output` (e.g. `set-dns-all`) must tolerate this (treat the error as empty).
+- **`ruff`/`ty` aren't on PATH** (the rtk shim can't spawn them): use `uvx ruff check <file>`.
+- **`jq --argjson` needs valid JSON** (quoted keys: `{"enable_x": true}`), not jq object syntax.
