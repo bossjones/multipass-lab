@@ -382,11 +382,15 @@ run "discovery_on_wires_everything" {
   }
   assert {
     condition     = strcontains(local_file.server_ci.content, "Dockerfile-Plugins")
-    error_message = "override must build the custom plugin image"
+    error_message = "netbox-stack must generate a plugin Dockerfile"
   }
   assert {
-    condition     = strcontains(local_file.server_ci.content, "docker compose build")
-    error_message = "netbox-stack must build the plugin image when discovery is on"
+    condition     = strcontains(local_file.server_ci.content, "uv pip install")
+    error_message = "plugin install must use uv (the netbox-docker image is uv-managed, no venv/bin/pip)"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "DOCKER_BUILDKIT=0 docker build")
+    error_message = "plugin image must build with the legacy builder (docker.io ships no buildx)"
   }
   assert {
     condition     = strcontains(local_file.server_ci.content, "migrate netbox_diode_plugin")

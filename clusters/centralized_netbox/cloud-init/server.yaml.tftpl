@@ -114,12 +114,20 @@ write_files:
 %{ if enable_discovery ~}
         # Stage the diode-netbox-plugin into the cloned repo and build the custom image. The runtime
         # server IP is substituted into plugins.py's diode_target_override (Diode is reached over the
-        # host IP). Dockerfile-Plugins ships with netbox-docker; configuration/plugins.py is mounted.
+        # host IP). netbox-docker ships only `Dockerfile`, so we generate a `Dockerfile-Plugins` that
+        # layers the plugin onto the pinned base image (tag resolved from the compose's default
+        # VERSION, so it tracks netbox_docker_ref_discovery); configuration/plugins.py is mounted.
+        # The image is uv-managed (no venv/bin/pip) — install via `uv pip` into the image's VIRTUAL_ENV.
+        # We build with the legacy builder (DOCKER_BUILDKIT=0) because the docker.io package ships no
+        # buildx, so `docker compose build` (which wants BuildKit/Bake) hangs. The override points
+        # netbox/worker/housekeeping at the pre-built image (pull_policy: never), so `up` reuses it.
         SRV_IP="$(ip -4 route get 1.1.1.1 | awk '{print $7; exit}')"
         cp /opt/netbox-seed/plugin_requirements.txt /opt/netbox-docker/plugin_requirements.txt
         mkdir -p /opt/netbox-docker/configuration
         sed "s/__DIODE_HOST__/$SRV_IP/g" /opt/netbox-seed/plugins.py > /opt/netbox-docker/configuration/plugins.py
-        docker compose build
+        NB_TAG="$(grep -oE 'netboxcommunity/netbox:[^}]+' /opt/netbox-docker/docker-compose.yml | head -1 | sed -E 's/.*VERSION-//')"
+        printf 'FROM netboxcommunity/netbox:%s\nCOPY ./plugin_requirements.txt /opt/netbox/\nRUN /usr/local/bin/uv pip install -r /opt/netbox/plugin_requirements.txt\n' "$NB_TAG" > /opt/netbox-docker/Dockerfile-Plugins
+        DOCKER_BUILDKIT=0 docker build -t netbox:latest-plugins -f /opt/netbox-docker/Dockerfile-Plugins /opt/netbox-docker
         docker compose up -d
 %{ else ~}
         docker compose pull

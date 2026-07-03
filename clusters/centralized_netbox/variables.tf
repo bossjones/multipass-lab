@@ -162,9 +162,14 @@ variable "netbox_docker_ref_discovery" {
 }
 
 variable "diode_plugin_version" {
-  description = "Pinned netboxlabs-diode-netbox-plugin version (paired with the 4.4.x NetBox pin; 1.7.0 per the compat table). Confirm in Phase 0."
+  description = <<-EOT
+    Pinned netboxlabs-diode-netbox-plugin version, paired with the NetBox the discovery image ships.
+    netbox-docker 3.4.1 ships NetBox 4.4.5, and plugin 1.7.0 requires NetBox >= 4.4.10 (it silently
+    refuses to load otherwise) — so 4.4.5 pairs with plugin 1.4.1 (compat table: NetBox 4.4.0 ->
+    1.4.0/1.4.1). Bump BOTH together if you move netbox_docker_ref_discovery to a >= 4.4.10 image.
+  EOT
   type        = string
-  default     = "1.7.0"
+  default     = "1.4.1"
 }
 
 variable "diode_tag" {

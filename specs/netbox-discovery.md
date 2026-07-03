@@ -531,6 +531,33 @@ Execute these to validate the task is complete:
 - Regression: flip `enable_discovery=false`, `just recreate`, and confirm every original test still
   passes.
 
+## Live validation findings (2026-07-02)
+
+A live `enable_discovery=true` bring-up on the Apple-Silicon host surfaced (and this plan/impl now
+fix) four concrete plugin-build bugs that the hermetic layer can't catch, and confirmed one gap:
+
+1. **netbox-docker ships no `Dockerfile-Plugins`.** Only `Dockerfile` exists — the plugin Dockerfile
+   is an example you author. Fixed: `netbox-stack.sh` now *generates* one, deriving the base image
+   tag from the compose's default `VERSION` (so it tracks `netbox_docker_ref_discovery`).
+2. **The `docker.io` apt package has no buildx/BuildKit.** `docker compose build` wants Bake/BuildKit
+   and silently hangs. Fixed: build the plugin image with the legacy builder
+   (`DOCKER_BUILDKIT=0 docker build -t netbox:latest-plugins`), and the override just references the
+   pre-built image (`pull_policy: never`, no `build:` stanza).
+3. **The netbox image is `uv`-managed** — there is no `/opt/netbox/venv/bin/pip`. Fixed: install with
+   `/usr/local/bin/uv pip install` (the image sets `VIRTUAL_ENV=/opt/netbox/venv`).
+4. **Plugin↔NetBox patch pairing matters.** `netboxcommunity/netbox:v4.4-3.4.1` ships NetBox **4.4.5**,
+   and plugin **1.7.0 requires ≥ 4.4.10** — it *silently refuses to load* (`plugins: {}`,
+   `/api/plugins/diode/` → 404). Fixed: pin `diode_plugin_version = 1.4.1` (compat table: 4.4.0 →
+   1.4.x). **Verified live:** with 1.4.1 the plugin loads (`/api/status/` → `netbox_diode_plugin:
+   1.4.1`, `/api/plugins/diode/` → 200).
+
+**Confirmed working live:** the custom plugin image builds and NetBox serves the Diode plugin API.
+**Still a gap (representative config):** the self-hosted **Diode server stack** did not converge — the
+stock `postgres:16-alpine` ignores `POSTGRES_MULTIPLE_DATABASES` (no `hydra` DB), Hydra's `DSN`
+isn't wired, and `bootstrap-clients.sh` is a hand-rolled approximation. Bringing Diode fully up
+needs the **actual diode-server release's** `docker-compose.yaml` + `.env` (reconciled against the
+pinned-secret model), which is a tracked follow-up — not a quick patch.
+
 ## Notes
 
 - **The version conflict is smaller than it first looked.** Diode needs NetBox ≥ 4.2.3, and
