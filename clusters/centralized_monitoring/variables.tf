@@ -70,6 +70,17 @@ variable "extra_scrape_targets" {
   default = []
 }
 
+# --- Cross-cluster log shipping (opt-in; see specs/cross-cluster.md) ---------
+# host:port of the centralized_logging syslog-ng collector. Non-empty => the hub renders the
+# shared syslog-ng client drop-in and ships its OWN OS logs there (the monitoring hub as a
+# log-shipper, mirroring the consumer clusters). Empty by default keeps `just up` isolated.
+# `just up-connected` sets this via the gitignored .cross-cluster.auto.tfvars.json.
+variable "log_shipping_target" {
+  description = "host:port of the centralized_logging syslog-ng collector. Empty disables self-shipping."
+  type        = string
+  default     = ""
+}
+
 variable "grafana_admin_password" {
   description = "Grafana admin user password (provisioned via compose env)."
   type        = string

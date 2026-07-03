@@ -67,6 +67,18 @@ locals {
   # Sorted list of the active flags — exported as enabled_exporters and consumed by
   # tests/testinfra/conftest.py so the live suite asserts only what is on.
   enabled_exporters = sort([for k, v in local.flags : k if v])
+
+  # --- Cross-cluster log shipping (opt-in; see specs/cross-cluster.md) -------
+  # The monitoring hub is applied AFTER the logging hub in `just up-connected`, so the collector
+  # IP is known at first boot — the server can render the SHARED syslog-ng client drop-in and ship
+  # its own OS logs. Empty target => empty string so the cloud-init %{ if ... != "" } guard drops
+  # the block. host:port is split; the port defaults if the target omits it.
+  ship_logs = var.log_shipping_target != ""
+
+  syslog_client_conf = local.ship_logs ? templatefile("${path.module}/../_shared/cloud-init/syslog-client.conf.tftpl", {
+    central_ip  = split(":", var.log_shipping_target)[0]
+    syslog_port = try(split(":", var.log_shipping_target)[1], "514")
+  }) : ""
 }
 
 # --- k0s-client (the monitored host) — created FIRST ------------------------
@@ -163,6 +175,10 @@ resource "local_file" "server_ci" {
     enable_heimdall_seed = var.enable_heimdall_seed
     heimdall_cli_py      = file("${path.module}/scripts/heimdall_cli.py")
     heimdall_seed_flags  = join(",", local.enabled_exporters)
+    # Cross-cluster self log-shipping — the shared syslog-ng client drop-in, gated on a non-empty
+    # log_shipping_target so the default `just up` stays isolated. See specs/cross-cluster.md.
+    log_shipping_target = var.log_shipping_target
+    syslog_client_conf  = local.syslog_client_conf
   }))
 }
 

@@ -111,9 +111,13 @@ up-connected:
     log_ip="$(tofu -chdir={{cluster_root}}/$logging output -raw central_ipv4)"
     echo "    syslog-ng collector: $log_ip:514"
 
-    # 2. monitoring hub next — brings up OpenObserve/OTLP + Prometheus so consumers can push.
+    # 2. monitoring hub next — brings up OpenObserve/OTLP + Prometheus so consumers can push. The
+    #    logging hub is already up, so the monitoring hub ALSO ships its OWN OS logs there at first
+    #    boot (log_shipping_target). No extra_scrape_targets yet — consumer IPs aren't known until
+    #    step 3, and they're hot-pushed in step 4 without recreating this VM.
     echo "=== up-connected: monitoring hub ($monitoring) ==="
-    rm -f {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json   # start with no extra targets
+    jq -n --arg log "$log_ip:514" '{log_shipping_target: $log}' \
+      > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
     just up "$monitoring"
     mon_ip="$(tofu -chdir={{cluster_root}}/$monitoring output -raw server_ipv4)"
     echo "    OpenObserve/OTLP sink: $mon_ip:5080"
@@ -137,8 +141,9 @@ up-connected:
     done
 
     # 4. hot-push the discovered scrape targets into the RUNNING monitoring server (no recreate).
+    #    Keep log_shipping_target so the re-apply preserves the hub's self-shipping wiring in state.
     echo "=== up-connected: wiring Prometheus scrape targets ==="
-    echo "$targets" | jq -c '{extra_scrape_targets: .}' \
+    echo "$targets" | jq -c --arg log "$log_ip:514" '{log_shipping_target: $log, extra_scrape_targets: .}' \
       > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
     tofu -chdir={{cluster_root}}/$monitoring apply -auto-approve   # re-renders .rendered/prometheus.yml only
     scp {{ssh_opts}} -i {{ssh_key}} \

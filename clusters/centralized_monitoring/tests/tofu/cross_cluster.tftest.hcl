@@ -1,5 +1,7 @@
-# Layer 0/1 hermetic test — cross-cluster scraping (specs/cross-cluster.md).
-# Asserts that extra_scrape_targets render into prometheus.yml as static-config jobs.
+# Layer 0/1 hermetic test — cross-cluster telemetry (specs/cross-cluster.md).
+# Asserts that extra_scrape_targets render into prometheus.yml as static-config jobs (PULL),
+# and that the hub self-ships its own OS logs to centralized_logging when log_shipping_target
+# is set (PUSH — the monitoring hub as a log-shipper, mirroring the consumer clusters).
 
 mock_provider "multipass" {
   mock_resource "multipass_instance" {
@@ -45,5 +47,45 @@ run "extra_targets_render_jobs" {
   assert {
     condition     = strcontains(local_file.server_ci.content, "\"10.20.0.6:9256\"")
     error_message = "cross-cluster target must honor an explicit port"
+  }
+}
+
+# --- default: hub does NOT ship its own logs --------------------------------
+run "no_log_shipping_by_default" {
+  command = plan
+
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "d_central")
+    error_message = "with log_shipping_target unset, server cloud-init must NOT render the syslog client destination"
+  }
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "/etc/syslog-ng/conf.d/10-ship.conf")
+    error_message = "with log_shipping_target unset, server cloud-init must NOT drop the syslog shipper config"
+  }
+}
+
+# --- log shipping on: hub renders the syslog client drop-in to the collector -
+run "hub_ships_its_own_logs" {
+  command = plan
+
+  variables {
+    log_shipping_target = "10.9.9.5:5514"
+  }
+
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "d_central")
+    error_message = "server cloud-init must render the syslog-ng d_central destination when shipping"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "\"10.9.9.5\"")
+    error_message = "server syslog client must point at the injected collector IP"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "port(5514)")
+    error_message = "server syslog client must use the injected collector port"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/etc/syslog-ng/conf.d/10-ship.conf")
+    error_message = "server cloud-init must drop the syslog shipper config when shipping"
   }
 }

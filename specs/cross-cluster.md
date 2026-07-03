@@ -1,6 +1,7 @@
 # Cross-cluster telemetry
 
-Status: **proposed** · Reference implementation: `centralized_pki`
+Status: **implemented** · Reference consumer: `centralized_pki` · Hubs: `centralized_logging`
+(collector), `centralized_monitoring` (scraper + self-shipper)
 
 ## Problem
 
@@ -31,15 +32,28 @@ The three signal paths flow in **two opposite directions**, which dictates the a
 | Logs/traces → OpenObserve/OTLP | **PUSH** | consumer needs the *monitoring hub* IP | none (OpenObserve `:5080`, OTel `:4318`) |
 | Metrics ← Prometheus | **PULL** | the *monitoring hub* needs every consumer IP | new `extra_scrape_targets` var |
 
-Because metrics are pull-based, the monitoring hub must be applied **last**, after every consumer's IP is
-known. Logging is a pure sink applied **first** (it needs nobody's IP). Consumers sit in the middle. This
-also resolves the apparent logging↔monitoring cycle: monitoring applied last can still push its *own*
-logs to the already-up logging hub.
+The two **PUSH** paths make both hubs pure *sinks* — they receive on a fixed port and need nobody's IP
+to come up. Only the **PULL** path (Prometheus scraping consumers) needs consumer IPs, and that need is
+met **without** re-ordering the hub: the discovered targets are **hot-pushed** into the already-running
+Prometheus (scp the re-rendered `prometheus.yml` + restart the container), never recreating the
+monitoring VM. So the implemented apply order brings **both hubs up first**, then every consumer boots
+already knowing both hub IPs and wires all three signals in a single boot (stable IPs, no recreate). This
+also resolves the apparent logging↔monitoring cycle: logging comes up first, so the monitoring hub can
+ship its *own* OS logs there at its own first boot (`log_shipping_target`).
 
 ```
-apply order:  centralized_logging  →  consumer clusters  →  centralized_monitoring
-              (pure sink, first)      (get hub IPs)          (gets everyone's IPs, last)
+apply order:  centralized_logging  →  centralized_monitoring  →  consumer clusters  →  hot-push scrape targets
+              (pure sink, first)      (OTLP/OpenObserve sink;      (get BOTH hub IPs      (scp prometheus.yml +
+                                       ships its own logs)          at first boot)         restart; no recreate)
 ```
+
+> **Note (design divergence from the first draft).** An earlier version of this spec applied the
+> monitoring hub **last** (`logging → consumers → monitoring`) and required an OpenObserve *second pass*
+> that rewrote each consumer's `openobserve_endpoint` and `just recreate`d it once the hub IP was known.
+> The shipped implementation instead brings the monitoring hub up **second** — because it's a sink, it
+> needs no consumer IP to boot — so consumers learn both hub IPs at first boot and the second pass is
+> gone. Scrape targets are hot-pushed post-apply (§ Orchestration). The sections below describe the
+> **implemented** design.
 
 ## Discovery mechanism: `.cross-cluster.auto.tfvars.json`
 
@@ -57,7 +71,9 @@ Example written for `centralized_pki`:
 }
 ```
 
-Example written for `centralized_monitoring` (applied last):
+The `centralized_monitoring` file is written **twice**: first with just `log_shipping_target` (before the
+hub boots, so it self-ships its OS logs), then rewritten to *add* `extra_scrape_targets` once consumer
+IPs are known (the hot-push re-apply — see § Orchestration):
 
 ```json
 {
@@ -73,14 +89,17 @@ Peer IPs come from the hubs' existing outputs — `centralized_logging.central_i
 `centralized_monitoring.server_ipv4` — and consumer IPs from each cluster's `hosts` output
 (`role → {name, ipv4}`).
 
-### The OpenObserve two-pass wrinkle
+### No second pass: hub-second boot + hot-pushed scrape targets
 
-OpenObserve lives in the monitoring hub, which is applied **last**, so a consumer can't know its IP on
-the first apply. `up-connected` therefore does a **second pass**: after monitoring is up it rewrites each
-consumer's `.auto.tfvars.json` with `openobserve_endpoint=<server_ip>:5080` and runs `just recreate
-<consumer>` (a cloud-init change needs `recreate`, not `up` — the repo-wide Multipass gotcha). Log
-shipping (syslog) and Prometheus scraping are fully wired after the first pass; only OTLP push needs the
-second.
+Because both hubs are sinks, `up-connected` brings the monitoring hub up **second** (right after
+logging), so every consumer boots already knowing `openobserve_endpoint=<server_ip>:5080` and wires all
+three signals — syslog shipping, OTLP push, and `node_exporter` scrape exposure — in a **single boot**.
+No consumer is ever recreated. The one remaining edge (Prometheus needs the consumer IPs it can't know
+until they boot) is closed **without** touching the monitoring VM: after all consumers are up,
+`up-connected` sets `extra_scrape_targets`, re-applies the monitoring root to re-render `prometheus.yml`
+(a cloud-init content change never recreates a `multipass_instance`), then scp's that file onto the
+running server and restarts only the Prometheus container. Keeping the monitoring VM stable is what lets
+consumers push OTLP to an IP that never churns.
 
 ## Standard variable contract
 
@@ -95,11 +114,14 @@ isolated — empty string = feature off):
 | `openobserve_password` | string (sensitive) | dev default | OpenObserve root password for the OTLP `Basic` auth header. |
 | `enable_node_exporter` | bool | `true` | Exposes `:9100` so the monitoring hub can scrape (already present in most clusters). |
 
-The monitoring hub additionally declares:
+The monitoring hub additionally declares `extra_scrape_targets`, and — because it too is just another VM
+on the flat subnet — also opts into `log_shipping_target` to ship its **own** OS logs to the logging hub
+(it renders the same shared syslog-ng client drop-in as any consumer):
 
 | Variable | Type | Default | Effect |
 |---|---|---|---|
 | `extra_scrape_targets` | `list(object({ job=string, ip=string, port=optional(number,9100) }))` | `[]` | Each entry becomes one static-config Prometheus job scraping a cross-cluster VM. |
+| `log_shipping_target` | string | `""` | `host:port` of the syslog-ng collector. Non-empty → the server VM ships its own OS logs there (hub-as-log-shipper; logging is applied first so the IP is known). |
 
 ## Shared snippets: `clusters/_shared/cloud-init/`
 
@@ -118,7 +140,7 @@ as a non-cluster directory; Justfile recipes that iterate `clusters/*/` (`up-all
 ## Orchestration
 
 ```sh
-just up-connected      # logging → consumers → monitoring, wired; second pass sets OpenObserve endpoint
+just up-connected      # logging → monitoring → consumers, all wired at first boot; scrape targets hot-pushed
 just verify-connected  # live e2e: pki log line reaches the hub; Prometheus scrapes pki targets
 ```
 
@@ -133,8 +155,9 @@ Two-layer split, mirroring the rest of the repo:
 
 - **Hermetic** (`just check <cluster>`) — `mock_provider "multipass"` + `command = plan`. With
   `log_shipping_target` set, assert the rendered cloud-init contains `d_central` and the IP; with `""`,
-  assert it does not. Mirror for `openobserve_endpoint`, and for the monitoring hub assert
-  `extra_scrape_targets` render into `prometheus.yml`.
+  assert it does not. Mirror for `openobserve_endpoint`, and for the monitoring hub assert both that
+  `extra_scrape_targets` render into `prometheus.yml` **and** that a non-empty `log_shipping_target`
+  renders the server VM's own syslog-ng drop-in (hub self-shipping).
 - **Live** (`just verify-connected`) — end-to-end log delivery + scrape confirmation against running VMs.
 
 ## Rollout
