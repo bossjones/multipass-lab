@@ -5,6 +5,14 @@ mock_provider "multipass" {}
 
 variables {
   ssh_pubkey = "ssh-ed25519 AAAATESTKEY centralized-dns-tests"
+  # Pin opt-in vars OFF so the *_off_by_default runs stay hermetic to whatever *.auto.tfvars
+  # OpenTofu auto-loads from the cluster dir (a leftover .cross-cluster.auto.tfvars.json from a
+  # prior `just up-connected`, or ca-material.auto.tfvars). On-runs override at the run level.
+  # See specs/internal-ca.md.
+  dns_server           = ""
+  internal_ca_cert     = ""
+  log_shipping_target  = ""
+  openobserve_endpoint = ""
 }
 
 # --- default: cross-cluster off -> no shipping/OTLP wiring rendered ----------

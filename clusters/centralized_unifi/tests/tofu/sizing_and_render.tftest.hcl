@@ -6,6 +6,10 @@ mock_provider "multipass" {}
 variables {
   # Provide an inline key so the test never depends on a real ~/.ssh file.
   ssh_pubkey = "ssh-ed25519 AAAATESTKEY centralized-unifi-tests"
+  # Pin cross-cluster opt-in vars OFF so *_off_by_default runs are hermetic to auto-loaded
+  # *.auto.tfvars (e.g. a leftover .cross-cluster.auto.tfvars.json). On-runs override. See specs/internal-ca.md.
+  dns_server       = ""
+  internal_ca_cert = ""
 }
 
 run "sizing_image_and_names" {

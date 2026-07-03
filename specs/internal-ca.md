@@ -133,6 +133,14 @@ Reuse the PKI cluster's proven "get a leaf" recipe (`issue-cert.sh` + JWK `admin
   three files and skips self-init; `root_ca_pem` output non-empty.
 - **Hermetic CLI:** `tests/macos_trust/` with `CliRunner` + a fake `security`/`certutil` on PATH
   (no real keychain writes), like the existing `tests/tls/` suite.
+- **Test hermeticity vs. auto-loaded tfvars:** because `scripts/init_ca.py` writes a *persistent*
+  `ca-material.auto.tfvars` (and `just up-connected` writes `.cross-cluster.auto.tfvars.json`), and
+  `tofu test` auto-loads both, every `*.tftest.hcl` with `*_off_by_default` runs pins the opt-in
+  vars (`internal_ca_cert`, `root_ca_cert`, `intermediate_ca_cert`, `intermediate_ca_key`,
+  `dns_server`, `log_shipping_target`, `openobserve_endpoint`, `extra_scrape_targets`) to their OFF
+  value in the **file-level `variables {}` block** (which outranks auto-loaded tfvars; on-runs
+  override at the run level). This keeps `just check` green regardless of which `*.auto.tfvars` are
+  present on disk.
 
 ## Verification (end-to-end)
 

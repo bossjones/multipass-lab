@@ -12,6 +12,11 @@ variables {
   # plan/apply does. Runs that want them on override in their own variables {}.
   enable_coroot  = false
   enable_ingress = false
+
+  # Pin cross-cluster opt-in vars OFF so *_off_by_default runs are hermetic to auto-loaded
+  # *.auto.tfvars (e.g. a leftover .cross-cluster.auto.tfvars.json). On-runs override. See specs/internal-ca.md.
+  dns_server       = ""
+  internal_ca_cert = ""
 }
 
 run "sizing_image_names_and_central_render" {

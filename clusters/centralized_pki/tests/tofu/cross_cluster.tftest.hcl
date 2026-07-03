@@ -3,8 +3,21 @@
 
 mock_provider "multipass" {}
 
+# File-level defaults pin every opt-in var to its OFF value so the "*_off_by_default" runs assert
+# true default behavior REGARDLESS of any *.auto.tfvars OpenTofu auto-loads from the cluster dir
+# (ca-material.auto.tfvars from scripts/init_ca.py, or a leftover .cross-cluster.auto.tfvars.json
+# from a prior `just up-connected`). The "*_on_*" runs override these at the run level (higher
+# precedence). Without this, generating the pinned root or a stale cross-cluster file breaks
+# `just check`. See specs/internal-ca.md.
 variables {
-  ssh_pubkey = "ssh-ed25519 AAAATESTKEY centralized-pki-tests"
+  ssh_pubkey           = "ssh-ed25519 AAAATESTKEY centralized-pki-tests"
+  log_shipping_target  = ""
+  openobserve_endpoint = ""
+  dns_server           = ""
+  internal_ca_cert     = ""
+  root_ca_cert         = ""
+  intermediate_ca_cert = ""
+  intermediate_ca_key  = ""
 }
 
 # --- default: cross-cluster off -> no shipping/OTLP wiring rendered ----------
