@@ -556,5 +556,8 @@ clusters/*/.rendered/
 # Cross-cluster wiring written by `just up-connected` (discovered peer IPs; see specs/cross-cluster.md)
 clusters/*/.cross-cluster.auto.tfvars.json
 
+# Bulk bring-up feature flags written by `just up-all` (enable_coroot / enable_discovery)
+clusters/*/.flags.auto.tfvars.json
+
 **/.claude/data
 **/logs

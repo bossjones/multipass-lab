@@ -130,6 +130,12 @@ variable "dns_server" {
   default     = ""
 }
 
+variable "domain" {
+  description = "DNS suffix for internal service hostnames registered into centralized_dns AdGuard (via `just set-dns`)."
+  type        = string
+  default     = "lab.theblacktonystark.com"
+}
+
 variable "log_shipping_target" {
   description = "host:port of the centralized_logging syslog-ng collector. Non-empty -> the VM renders the syslog-ng client drop-in shipping to it. Empty (default) = disabled."
   type        = string

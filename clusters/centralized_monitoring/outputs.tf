@@ -17,6 +17,19 @@ output "hosts" {
   }
 }
 
+# Service hostname -> IP A-records for the fleet resolver (all dashboards live on the server VM).
+# `just set-dns` reads this and registers each as an AdGuard rewrite.
+output "dns_records" {
+  description = "hostname -> ipv4 A-records to register in centralized_dns AdGuard. Consumed by `just set-dns`."
+  value = {
+    "grafana.${var.domain}"      = multipass_instance.server.ipv4
+    "prometheus.${var.domain}"   = multipass_instance.server.ipv4
+    "alertmanager.${var.domain}" = multipass_instance.server.ipv4
+    "openobserve.${var.domain}"  = multipass_instance.server.ipv4
+    "uptime.${var.domain}"       = multipass_instance.server.ipv4
+  }
+}
+
 # Sorted list of active enable_* flags. tests/testinfra parametrizes over this so a
 # disabled exporter is skipped (not failed) in the live suite.
 output "enabled_exporters" {

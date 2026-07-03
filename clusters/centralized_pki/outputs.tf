@@ -17,6 +17,19 @@ output "hosts" {
   }
 }
 
+# Service hostname -> IP A-records for the fleet resolver. auth./warden./traefik. front the
+# Traefik/Authelia/Vaultwarden VM; ca. is step-ca. `just set-dns` registers these as AdGuard
+# rewrites — replacing the /etc/hosts entries USAGE.md describes.
+output "dns_records" {
+  description = "hostname -> ipv4 A-records to register in centralized_dns AdGuard. Consumed by `just set-dns`."
+  value = {
+    "auth.${var.domain}"    = multipass_instance.services.ipv4
+    "warden.${var.domain}"  = multipass_instance.services.ipv4
+    "traefik.${var.domain}" = multipass_instance.services.ipv4
+    "ca.${var.domain}"      = multipass_instance.ca.ipv4
+  }
+}
+
 output "domain" {
   description = "DNS suffix for internal services (ca./auth./warden. live under this)."
   value       = var.domain

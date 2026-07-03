@@ -174,6 +174,23 @@ name mapping. `verify-connected` reuses the `test_e2e_shipping.py` idiom (`logge
 grep `/var/log/remote/` on the logging central) and `prometheus_cli.py targets` against the monitoring
 server.
 
+The consumer loop tracks a per-cluster `rc` (mirroring `up-all`) and prints a `FAILED consumer: <c>`
+line + nonzero exit on any failure, so a broken consumer bring-up is loud instead of silent. Bulk
+bring-up also enables the heavier opt-in features that change cloud-init (so they must be set at first
+apply): `up-connected` writes `enable_coroot=true` into the logging hub's `.cross-cluster.auto.tfvars.json`
+and `enable_discovery=true` into netbox's; `up-all` drops a small `<cluster>/.flags.auto.tfvars.json`
+for the same two (both gitignored).
+
+### DNS record registration — the final step
+
+As its **last** step (after the Prometheus scrape-target hot-push), `up-connected` runs `just
+set-dns-all`, which merges every up cluster's `dns_records` output and syncs them into
+`centralized_dns`'s AdGuard as idempotent rewrites (`adguard_cli.py rewrite-sync`). This is why it runs
+dead last: each cluster's `dns_records` needs its VMs' DHCP IPs, so the whole fleet must be up first.
+After that, `grafana.<domain>` / `netbox.<domain>` / `auth.<domain>` / … resolve fleet-wide — no
+`/etc/hosts` edits. `just verify-dns` `dig`s each record against the AdGuard IP. See
+`specs/centralized_dns.md` §7a for the CLI + per-cluster `dns_records`/`domain` contract.
+
 ## Testing
 
 Two-layer split, mirroring the rest of the repo:

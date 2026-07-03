@@ -88,6 +88,12 @@ variable "dns_server" {
   default     = ""
 }
 
+variable "domain" {
+  description = "DNS suffix for internal service hostnames registered into centralized_dns AdGuard (via `just set-dns`)."
+  type        = string
+  default     = "lab.theblacktonystark.com"
+}
+
 variable "grafana_admin_password" {
   description = "Grafana admin user password (provisioned via compose env)."
   type        = string

@@ -23,6 +23,24 @@ output "hosts" {
   }
 }
 
+# Service hostname -> IP A-records for the fleet resolver. Dashboards live on the docker VM;
+# syslog-ng on central; the Coroot UI on the k0s node only when enable_coroot. `just set-dns`
+# reads this and registers each as an AdGuard rewrite.
+output "dns_records" {
+  description = "hostname -> ipv4 A-records to register in centralized_dns AdGuard. Consumed by `just set-dns`."
+  value = merge(
+    {
+      "logs-grafana.${var.domain}"    = multipass_instance.docker.ipv4
+      "logs-prometheus.${var.domain}" = multipass_instance.docker.ipv4
+      "heimdall.${var.domain}"        = multipass_instance.docker.ipv4
+      "syslog.${var.domain}"          = multipass_instance.central.ipv4
+    },
+    var.enable_coroot ? {
+      "coroot.${var.domain}" = multipass_instance.k0s.ipv4
+    } : {},
+  )
+}
+
 output "hostname_source" {
   description = "Active $HOST foldering strategy on central (keep | dns | ip)."
   value       = var.hostname_source

@@ -93,6 +93,12 @@ up-all:
       cluster="$(basename "$dir")"
       [ -f "$dir/main.tf" ] || continue   # skip non-cluster dirs like _shared/
       echo "=== up: $cluster ==="
+      # Bulk bring-up enables the heavier opt-in features (they change cloud-init, so they must be
+      # set at first apply). `.auto.tfvars` outranks terraform.tfvars (TF_VAR_ would be lower).
+      case "$cluster" in
+        centralized_logging) echo '{"enable_coroot": true}'    > "$dir/.flags.auto.tfvars.json" ;;
+        centralized_netbox)  echo '{"enable_discovery": true}' > "$dir/.flags.auto.tfvars.json" ;;
+      esac
       just up "$cluster" || rc=1
     done
     exit "$rc"
@@ -124,6 +130,7 @@ destroy-all:
 up-connected:
     #!/usr/bin/env bash
     set -uo pipefail
+    rc=0
     dns=centralized_dns
     logging=centralized_logging
     monitoring=centralized_monitoring
@@ -131,7 +138,7 @@ up-connected:
     # 0. DNS hub FIRST — pure :53 sink. No telemetry targets yet (the hubs don't exist).
     echo "=== up-connected: dns hub ($dns) ==="
     rm -f {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json 2>/dev/null || true
-    just up "$dns"
+    just up "$dns" || { echo "FAILED hub: $dns"; rc=1; }
     dns_ip="$(tofu -chdir={{cluster_root}}/$dns output -raw server_ipv4)"
     echo "    AdGuard Home resolver: $dns_ip:53"
     # health-gate: do NOT wire anyone until AdGuard actually answers, else a dependent VM switches
@@ -142,11 +149,12 @@ up-connected:
       sleep 5
     done
 
-    # 1. logging hub — pure sink; now resolves via DNS.
+    # 1. logging hub — pure sink; now resolves via DNS. enable_coroot brings up the eBPF
+    #    observability stack on the k0s node (bulk bring-up always includes it, per the fleet spec).
     echo "=== up-connected: logging hub ($logging) ==="
-    jq -n --arg dns "$dns_ip" '{dns_server: $dns}' \
+    jq -n --arg dns "$dns_ip" '{dns_server: $dns, enable_coroot: true}' \
       > {{cluster_root}}/$logging/.cross-cluster.auto.tfvars.json
-    just up "$logging"
+    just up "$logging" || { echo "FAILED hub: $logging"; rc=1; }
     log_ip="$(tofu -chdir={{cluster_root}}/$logging output -raw central_ipv4)"
     echo "    syslog-ng collector: $log_ip:514"
 
@@ -154,7 +162,7 @@ up-connected:
     echo "=== up-connected: monitoring hub ($monitoring) ==="
     jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" '{dns_server: $dns, log_shipping_target: $log}' \
       > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
-    just up "$monitoring"
+    just up "$monitoring" || { echo "FAILED hub: $monitoring"; rc=1; }
     mon_ip="$(tofu -chdir={{cluster_root}}/$monitoring output -raw server_ipv4)"
     echo "    OpenObserve/OTLP sink: $mon_ip:5080"
 
@@ -166,10 +174,13 @@ up-connected:
       [ -f "$dir/main.tf" ] || continue
       case "$c" in "$dns"|"$logging"|"$monitoring") continue ;; esac
       echo "=== up-connected: consumer $c ==="
-      jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg oo "$mon_ip:5080" \
-        '{dns_server: $dns, log_shipping_target: $log, openobserve_endpoint: $oo}' \
+      # netbox joins the fleet with discovery on (Diode + orb-agent), per the bulk bring-up spec.
+      extra='{}'
+      [ "$c" = "centralized_netbox" ] && extra='{"enable_discovery": true}'
+      jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg oo "$mon_ip:5080" --argjson extra "$extra" \
+        '{dns_server: $dns, log_shipping_target: $log, openobserve_endpoint: $oo} + $extra' \
         > "$dir/.cross-cluster.auto.tfvars.json"
-      just up "$c"
+      just up "$c" || { echo "FAILED consumer: $c"; rc=1; }
       # accumulate this consumer's VM IPs as Prometheus scrape targets (node_exporter :9100)
       targets="$(tofu -chdir={{cluster_root}}/$c output -json hosts 2>/dev/null \
         | jq --argjson acc "$targets" \
@@ -220,7 +231,89 @@ up-connected:
       ubuntu@"$mon_ip":/tmp/prometheus.yml
     ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$mon_ip" \
       'sudo cp /tmp/prometheus.yml /opt/stack/prometheus/prometheus.yml && sudo docker compose -f /opt/stack/compose.yaml restart prometheus'
-    echo "up-connected complete — $(echo "$targets" | jq 'length') cross-cluster scrape targets wired; fleet resolving via $dns_ip."
+    echo "up-connected: $(echo "$targets" | jq 'length') cross-cluster scrape targets wired; fleet resolving via $dns_ip."
+
+    # 6. DEAD LAST — register every up cluster's service hostnames as AdGuard rewrites, so
+    #    grafana.<domain>/netbox.<domain>/auth.<domain>/... resolve fleet-wide. Only meaningful
+    #    once the whole fleet is up (each cluster's dns_records needs its VM IPs).
+    echo "=== up-connected: registering fleet DNS records (set-dns-all) ==="
+    just set-dns-all || { echo "FAILED: set-dns-all"; rc=1; }
+
+    if [ "$rc" -ne 0 ]; then
+      echo "up-connected FAILED — one or more steps did not complete (see the FAILED lines above)." >&2
+    else
+      echo "up-connected complete — fleet up, wired, and DNS-registered."
+    fi
+    exit "$rc"
+
+# register ONE cluster's service hostnames (its `dns_records` output) into centralized_dns's
+# AdGuard Home as idempotent DNS rewrites, so <service>.<domain> resolves fleet-wide.
+# Requires that cluster AND the dns hub to be up.  just set-dns centralized_pki
+set-dns CLUSTER:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    records="$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json dns_records 2>/dev/null || true)"
+    if [ -z "$records" ] || [ "$records" = "{}" ]; then
+      echo "no dns_records for {{CLUSTER}} (not up, or no records) — nothing to register"
+      exit 0
+    fi
+    echo "$records" | jq .
+    echo "$records" | uv run {{cluster_root}}/centralized_dns/scripts/adguard_cli.py \
+      --cluster centralized_dns rewrite-sync --file -
+
+# register EVERY up cluster's `dns_records` into AdGuard in one idempotent sync. Clusters that
+# aren't up contribute nothing (their `tofu output` errors -> {}). Run after the fleet is up
+# (up-connected does this automatically as its last step).  just set-dns-all
+set-dns-all:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    docs=()
+    for dir in {{cluster_root}}/*/; do
+      [ -f "$dir/main.tf" ] || continue   # skip non-cluster dirs like _shared/
+      records="$(tofu -chdir="$dir" output -json dns_records 2>/dev/null || echo '{}')"
+      [ -n "$records" ] || records='{}'
+      docs+=("$records")
+    done
+    merged="$(printf '%s\n' "${docs[@]}" | jq -s 'reduce .[] as $x ({}; . * $x)')"
+    echo "$merged" | jq .
+    if [ "$merged" = "{}" ] || [ -z "$merged" ]; then
+      echo "no dns_records found across clusters — nothing to register (is the fleet up?)"
+      exit 0
+    fi
+    echo "$merged" | uv run {{cluster_root}}/centralized_dns/scripts/adguard_cli.py \
+      --cluster centralized_dns rewrite-sync --file -
+
+# live: assert every registered record resolves through AdGuard to the expected IP (dig against
+# the dns hub). Nonzero exit on any mismatch.  just verify-dns
+verify-dns:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    dns_ip="$(tofu -chdir={{cluster_root}}/centralized_dns output -raw server_ipv4 2>/dev/null || true)"
+    if [ -z "$dns_ip" ]; then
+      echo "centralized_dns is not up (no server_ipv4) — cannot verify" >&2
+      exit 1
+    fi
+    docs=()
+    for dir in {{cluster_root}}/*/; do
+      [ -f "$dir/main.tf" ] || continue
+      records="$(tofu -chdir="$dir" output -json dns_records 2>/dev/null || echo '{}')"
+      [ -n "$records" ] || records='{}'
+      docs+=("$records")
+    done
+    merged="$(printf '%s\n' "${docs[@]}" | jq -s 'reduce .[] as $x ({}; . * $x)')"
+    rc=0
+    while IFS=$'\t' read -r host ip; do
+      [ -n "$host" ] || continue
+      got="$(dig +short +time=2 +tries=1 @"$dns_ip" "$host" 2>/dev/null | head -1)"
+      if [ "$got" = "$ip" ]; then
+        echo "ok:   $host -> $got"
+      else
+        echo "FAIL: $host -> expected $ip, got '${got:-<none>}'"
+        rc=1
+      fi
+    done < <(echo "$merged" | jq -r 'to_entries[] | "\(.key)\t\(.value)"')
+    [ "$rc" -eq 0 ] && echo "verify-dns: all records resolve via $dns_ip" || echo "verify-dns: MISMATCHES above" >&2
+    exit "$rc"
 
 # delete + purge Multipass VMs for this cluster that OpenTofu no longer tracks.
 # A failed `up` (e.g. a launch timeout) leaves a VM behind that `tofu destroy` can't
