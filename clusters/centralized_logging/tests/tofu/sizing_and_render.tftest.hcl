@@ -144,6 +144,15 @@ run "exporters_render_with_defaults" {
     condition     = strcontains(local_file.k0s_ci.content, "kube-state-metrics")
     error_message = "k0s must render the kube-state-metrics deployment"
   }
+  # Debug tooling (unconditional): ccze (apt), k9s + stern (release tarballs), and an admin
+  # kubeconfig for the ubuntu login so k9s/stern connect out-of-box.
+  assert {
+    condition = alltrue([for marker in [
+      "ccze", "derailed/k9s", "k9s_Linux_{ARCH}", "stern/stern", "stern_1.34.0",
+      "/home/ubuntu/.kube/config",
+    ] : strcontains(local_file.k0s_ci.content, marker)])
+    error_message = "k0s cloud-init must install ccze/k9s/stern and drop the ubuntu kubeconfig"
+  }
 
   # docker: cadvisor on :8089 + Traefik metrics entrypoint.
   assert {
@@ -437,6 +446,48 @@ run "coroot_and_ingress_render_when_enabled" {
   assert {
     condition     = can(yamldecode(local_file.k0s_ci.content))
     error_message = "k0s cloud-init must stay valid YAML after adding the Coroot + ingress blocks"
+  }
+}
+
+# --- Docker operator tooling (wharf/oxker/dive) — default ON on the docker VM only ----
+
+run "docker_tools_render_by_default" {
+  command = plan
+
+  # The shared installer is spliced into the docker VM and invoked from runcmd.
+  assert {
+    condition     = strcontains(local_file.docker_ci.content, "install-docker-tools.sh")
+    error_message = "docker VM must install the docker operator TUIs by default"
+  }
+  assert {
+    condition = alltrue([for m in [
+      "idesyatov/wharf", "mrjackwills/oxker", "wagoodman/dive",
+      "WHARF_VERSION=\"0.9.1\"", "OXKER_VERSION=\"0.13.2\"", "DIVE_VERSION=\"0.13.1\"",
+    ] : strcontains(local_file.docker_ci.content, m)])
+    error_message = "docker cloud-init must reference the pinned wharf/oxker/dive releases"
+  }
+  # It's a docker-only tool — the non-docker VMs must never carry it.
+  assert {
+    condition     = !strcontains(local_file.central_ci.content, "install-docker-tools.sh") && !strcontains(local_file.k0s_ci.content, "install-docker-tools.sh")
+    error_message = "install-docker-tools.sh must only render on the docker VM"
+  }
+  # cloud-init must stay valid YAML with the installer script spliced in.
+  assert {
+    condition     = can(yamldecode(local_file.docker_ci.content))
+    error_message = "docker cloud-init must stay valid YAML after adding the docker-tools installer"
+  }
+}
+
+run "docker_tools_absent_when_disabled" {
+  command = plan
+
+  variables {
+    enable_docker_tools = false
+  }
+
+  assert {
+    condition     = !strcontains(local_file.docker_ci.content, "install-docker-tools.sh")
+    error_message = "disabled enable_docker_tools must omit the installer from the docker VM"
   }
 }
 

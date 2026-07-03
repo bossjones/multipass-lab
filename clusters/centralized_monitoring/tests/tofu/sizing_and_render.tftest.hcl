@@ -161,6 +161,15 @@ run "defaults_sizing_names_and_render" {
     condition     = strcontains(local_file.k0s_ci.content, "ssh-ed25519 AAAATESTKEY")
     error_message = "k0s cloud-init must inject the SSH public key"
   }
+  # Debug tooling (unconditional): ccze (apt), k9s + stern (release tarballs), and an admin
+  # kubeconfig for the ubuntu login so k9s/stern connect out-of-box.
+  assert {
+    condition = alltrue([for marker in [
+      "ccze", "derailed/k9s", "k9s_Linux_{ARCH}", "stern/stern", "stern_1.34.0",
+      "/home/ubuntu/.kube/config",
+    ] : strcontains(local_file.k0s_ci.content, marker)])
+    error_message = "k0s cloud-init must install ccze/k9s/stern and drop the ubuntu kubeconfig"
+  }
 
   # --- k0s log shipping: otelcol-contrib agent installs (endpoint injected post-apply) ---
   assert {
@@ -479,5 +488,44 @@ run "grafana_dashboards_render" {
   assert {
     condition     = strcontains(local_file.server_ci.content, "foldersFromFilesStructure: true")
     error_message = "dashboard provider must set foldersFromFilesStructure: true"
+  }
+}
+
+# --- Docker operator tooling (wharf/oxker/dive) — default ON on the server VM ---------
+
+run "docker_tools_render_by_default" {
+  command = plan
+
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "install-docker-tools.sh")
+    error_message = "server VM must install the docker operator TUIs by default"
+  }
+  assert {
+    condition = alltrue([for m in [
+      "idesyatov/wharf", "mrjackwills/oxker", "wagoodman/dive",
+      "WHARF_VERSION=\"0.9.1\"", "OXKER_VERSION=\"0.13.2\"", "DIVE_VERSION=\"0.13.1\"",
+    ] : strcontains(local_file.server_ci.content, m)])
+    error_message = "server cloud-init must reference the pinned wharf/oxker/dive releases"
+  }
+  assert {
+    condition     = output.docker_tools_enabled == true
+    error_message = "docker_tools_enabled output must report true by default"
+  }
+  assert {
+    condition     = can(yamldecode(local_file.server_ci.content))
+    error_message = "server cloud-init must stay valid YAML after adding the docker-tools installer"
+  }
+}
+
+run "docker_tools_absent_when_disabled" {
+  command = plan
+
+  variables {
+    enable_docker_tools = false
+  }
+
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "install-docker-tools.sh")
+    error_message = "disabled enable_docker_tools must omit the installer from the server VM"
   }
 }

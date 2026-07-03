@@ -19,6 +19,7 @@ packages:
   - vim
   - htop
   - jq
+  - ccze
 
 ssh_authorized_keys:
   - ${ssh_pubkey}
@@ -62,6 +63,28 @@ write_files:
       UNIT
       systemctl daemon-reload
       systemctl enable --now "$name"
+
+  # Debug CLI installer: download a GitHub release (tar.gz or raw binary) and drop the
+  # binary in /usr/local/bin. Same arch/{ARCH} handling as install-exporter.sh, minus the
+  # systemd unit — k9s/stern are interactive CLIs, not daemons.
+  - path: /usr/local/sbin/install-cli.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      name="$1"; url="$2"; bin="$3"
+      arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+      case "$arch" in aarch64) arch=arm64 ;; x86_64) arch=amd64 ;; esac
+      url="$${url//\{ARCH\}/$arch}"
+      tmp="$(mktemp -d)"
+      curl -sSLf "$url" -o "$tmp/dl"
+      if tar -tzf "$tmp/dl" >/dev/null 2>&1; then
+        tar -xzf "$tmp/dl" -C "$tmp"
+        found="$(find "$tmp" -type f -name "$bin" | head -n1)"
+      else
+        found="$tmp/dl"
+      fi
+      install -m0755 "$found" "/usr/local/bin/$name"
 %{ if enable_syslogng_metrics ~}
   # syslog-ng metrics via node_exporter textfile collector.
   - path: /usr/local/sbin/syslogng-textfile.sh
@@ -242,6 +265,14 @@ runcmd:
   - /usr/local/bin/k0s install controller --single
 %{ endif ~}
   - /usr/local/bin/k0s start
+  # Debug CLIs (unconditional): k9s (terminal k8s UI) + stern (multi-pod log tail).
+  - /usr/local/sbin/install-cli.sh k9s https://github.com/derailed/k9s/releases/download/v0.51.0/k9s_Linux_{ARCH}.tar.gz k9s
+  - /usr/local/sbin/install-cli.sh stern https://github.com/stern/stern/releases/download/v1.34.0/stern_1.34.0_linux_{ARCH}.tar.gz stern
+  # Admin kubeconfig for the ubuntu login so k9s/stern (and kubectl) work over SSH out-of-box.
+  - mkdir -p /home/ubuntu/.kube
+  - /usr/local/bin/k0s kubeconfig admin > /home/ubuntu/.kube/config
+  - chown -R ubuntu:ubuntu /home/ubuntu/.kube
+  - chmod 600 /home/ubuntu/.kube/config
 %{ if enable_node_exporter || enable_syslogng_metrics ~}
   - mkdir -p /var/lib/node_exporter/textfile_collector
 %{ endif ~}

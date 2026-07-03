@@ -6,6 +6,11 @@ locals {
 
   render_dir = "${path.module}/.rendered"
 
+  # Interactive docker tooling installer (wharf/oxker/dive), shared byte-identically across
+  # every cluster with a docker VM. Static script → file() (no templating); embedded into the
+  # server cloud-init via write_files and run under enable_docker_tools.
+  docker_tools_installer = file("${path.module}/../_shared/cloud-init/install-docker-tools.sh")
+
   # multipass exec/transfer don't route to VMs in this environment (see CLAUDE.md); every
   # post-apply VM touch goes over SSH instead, using the same key injected via cloud-init.
   ssh_private_key = trimsuffix(pathexpand(var.ssh_pubkey_path), ".pub")
@@ -180,6 +185,9 @@ resource "local_file" "server_ci" {
     # log_shipping_target so the default `just up` stays isolated. See specs/cross-cluster.md.
     log_shipping_target = var.log_shipping_target
     syslog_client_conf  = local.syslog_client_conf
+    # Docker operator TUIs (wharf/oxker/dive) on the observability hub (the docker VM).
+    enable_docker_tools    = var.enable_docker_tools
+    docker_tools_installer = local.docker_tools_installer
   }))
 }
 

@@ -124,10 +124,11 @@ output "web_urls" {
 # Opt-in non-exporter features (Coroot + ingress). tests/testinfra/conftest.py reads this so the
 # live Coroot suite is *skipped* (not failed) when the feature is off — mirrors enabled_exporters.
 output "enabled_features" {
-  description = "Opt-in feature flags beyond the exporter layer: { coroot, ingress }."
+  description = "Opt-in feature flags beyond the exporter layer: { coroot, ingress, docker_tools }."
   value = {
-    coroot  = var.enable_coroot
-    ingress = var.enable_ingress
+    coroot       = var.enable_coroot
+    ingress      = var.enable_ingress
+    docker_tools = var.enable_docker_tools
   }
 }
 

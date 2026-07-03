@@ -91,6 +91,13 @@ def _connect(ip, ssh_config_file):
 
 
 @pytest.fixture(scope="session")
+def docker_tools_enabled(tofu_output):
+    """Whether the docker operator TUIs (wharf/oxker/dive) are installed. test_docker_tools
+    skips when off."""
+    return tofu_output["docker_tools_enabled"]["value"]
+
+
+@pytest.fixture(scope="session")
 def ca(hosts, ssh_config_file):
     return _connect(hosts["ca"]["ipv4"], ssh_config_file)
 

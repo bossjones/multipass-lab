@@ -30,6 +30,14 @@ write_files:
     permissions: '0644'
     content: |
       ${indent(6, ca_compose)}
+%{ if enable_docker_tools ~}
+
+  # Interactive docker operator TUIs (wharf, oxker, dive) — installed by a runcmd below.
+  - path: /usr/local/sbin/install-docker-tools.sh
+    permissions: '0755'
+    content: |
+      ${indent(6, docker_tools_installer)}
+%{ endif ~}
 
   # Generic exporter installer (copied from the centralized_logging cluster).
   - path: /usr/local/sbin/install-exporter.sh
@@ -114,6 +122,11 @@ runcmd:
   - systemctl enable docker
   - systemctl restart docker
   - docker compose -f /opt/pki/compose.yaml up -d
+%{ if enable_docker_tools ~}
+  # Interactive docker operator TUIs (wharf/oxker/dive); best-effort so a download blip can't
+  # break boot. Idempotent — re-run with `sudo /usr/local/sbin/install-docker-tools.sh`.
+  - /usr/local/sbin/install-docker-tools.sh || true
+%{ endif ~}
 %{ if enable_node_exporter ~}
   # node_exporter — OS host metrics (:9100), parity with the other clusters' metrics tests.
   - /usr/local/sbin/install-exporter.sh node_exporter https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-{ARCH}.tar.gz node_exporter

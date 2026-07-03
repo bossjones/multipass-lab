@@ -95,6 +95,13 @@ output "enabled_exporters" {
   value       = local.enabled_exporters
 }
 
+# Whether the docker operator TUIs (wharf/oxker/dive) are installed on the docker VMs (server;
+# agent when discovery). tests/testinfra/conftest.py reads this so the live suite skips when off.
+output "docker_tools_enabled" {
+  description = "Whether the docker TUI/inspection tools (wharf, oxker, dive) are installed on VMs running docker."
+  value       = var.enable_docker_tools
+}
+
 # Browser URLs for `just open centralized_netbox [--full]`. core = the NetBox UI; all folds in
 # the API root plus every enabled exporter /metrics endpoint (server + client) and, when discovery
 # is on, the Diode ingress URL (the only host-published Diode port).

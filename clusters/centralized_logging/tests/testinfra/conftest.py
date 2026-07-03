@@ -21,9 +21,7 @@ CLOUD_INIT_TIMEOUT = 600
 
 # tests/testinfra/ -> clusters/centralized_logging/
 CLUSTER_DIR = Path(__file__).resolve().parents[2]
-SSH_KEY = os.path.expanduser(
-    os.environ.get("CLUSTER_SSH_KEY", "~/.ssh/id_ed25519")
-)
+SSH_KEY = os.path.expanduser(os.environ.get("CLUSTER_SSH_KEY", "~/.ssh/id_ed25519"))
 
 
 @pytest.fixture(scope="session")
@@ -67,6 +65,13 @@ def metrics_targets(tofu_output):
 def enabled_features(tofu_output):
     """Opt-in non-exporter features {coroot, ingress}. test_coroot skips when off."""
     return tofu_output["enabled_features"]["value"]
+
+
+@pytest.fixture(scope="session")
+def docker_tools_enabled(enabled_features):
+    """Whether the docker operator TUIs (wharf/oxker/dive) are installed. test_docker_tools
+    skips when off."""
+    return enabled_features.get("docker_tools", False)
 
 
 @pytest.fixture(scope="session")

@@ -6,6 +6,11 @@ locals {
 
   render_dir = "${path.module}/.rendered"
 
+  # Interactive docker tooling installer (wharf/oxker/dive), shared byte-identically across
+  # every cluster with a docker VM. Static script → file() (no templating); embedded into both
+  # VM cloud-inits via write_files and run under enable_docker_tools (both VMs run docker).
+  docker_tools_installer = file("${path.module}/../_shared/cloud-init/install-docker-tools.sh")
+
   ca_name       = "${var.name_prefix}-ca"
   services_name = "${var.name_prefix}-services"
 
@@ -115,6 +120,9 @@ resource "local_file" "ca_ci" {
     openobserve_endpoint = var.openobserve_endpoint
     syslog_client_conf   = local.syslog_client_conf
     otel_agent_conf      = local.otel_agent_conf_ca
+    # Docker operator TUIs (wharf/oxker/dive) — the CA VM runs docker (step-ca).
+    enable_docker_tools    = var.enable_docker_tools
+    docker_tools_installer = local.docker_tools_installer
   }))
 }
 
@@ -151,6 +159,9 @@ resource "local_file" "services_ci" {
     openobserve_endpoint = var.openobserve_endpoint
     syslog_client_conf   = local.syslog_client_conf
     otel_agent_conf      = local.otel_agent_conf_services
+    # Docker operator TUIs (wharf/oxker/dive) — the services VM runs docker (Traefik/Authelia/etc).
+    enable_docker_tools    = var.enable_docker_tools
+    docker_tools_installer = local.docker_tools_installer
   }))
 }
 

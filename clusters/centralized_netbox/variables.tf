@@ -320,6 +320,16 @@ variable "enable_node_exporter" {
   default     = true
 }
 
+# Interactive docker TUIs/inspectors (wharf, oxker, dive) on the docker VMs (server always;
+# discovery agent when enable_discovery). The client VM has no docker and is left out. Not a
+# /metrics exporter, so it is threaded straight into those templatefiles. All three ship native
+# arm64 builds, so this defaults ON. See clusters/_shared/cloud-init/install-docker-tools.sh.
+variable "enable_docker_tools" {
+  description = "Install docker TUI/inspection tools (wharf, oxker, dive) on VMs running docker."
+  type        = bool
+  default     = true
+}
+
 variable "enable_process_exporter" {
   description = "process-exporter (:9256) on both VMs — per-process metrics (NetBox workers, postgres, redis)."
   type        = bool

@@ -104,6 +104,19 @@ variable "enable_kube_state_metrics" {
   default     = true
 }
 
+# --- Docker operator tooling ------------------------------------------------
+# Interactive docker TUIs/inspectors (wharf, oxker, dive) installed on any VM that
+# runs a docker daemon (the docker VM here). Not a /metrics exporter, so it is
+# threaded straight into the docker templatefile rather than via local.flags. All
+# three ship native arm64 builds, so this defaults ON. See clusters/_shared/cloud-init/
+# install-docker-tools.sh.
+
+variable "enable_docker_tools" {
+  description = "Install docker TUI/inspection tools (wharf, oxker, dive) on VMs running docker."
+  type        = bool
+  default     = true
+}
+
 # --- Coroot (self-hosted eBPF observability) + ingress ----------------------
 # Coroot is deployed declaratively onto the single-node k0s cluster (operator + coroot-ce
 # Helm charts) in the k0s cloud-init — no cloud account, no secrets. Heavy (bundles

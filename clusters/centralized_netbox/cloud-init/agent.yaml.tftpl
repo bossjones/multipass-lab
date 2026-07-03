@@ -27,6 +27,14 @@ write_files:
     permissions: '0644'
     content: |
       ${indent(6, orb_config)}
+%{ if enable_docker_tools ~}
+
+  # Interactive docker operator TUIs (wharf, oxker, dive) — installed by a runcmd below.
+  - path: /usr/local/sbin/install-docker-tools.sh
+    permissions: '0755'
+    content: |
+      ${indent(6, docker_tools_installer)}
+%{ endif ~}
 
   # Long-running orb-agent runner. Waits for the Diode ingress to accept connections, then runs the
   # agent (which executes its policy on load + on schedule). Writes a readiness marker once the
@@ -76,6 +84,11 @@ runcmd:
   # Enforce UTC late (Multipass injects the host timezone at first boot — see specs/ntp.md).
   - timedatectl set-timezone Etc/UTC
   - systemctl enable --now docker
+%{ if enable_docker_tools ~}
+  # Interactive docker operator TUIs (wharf/oxker/dive); best-effort so a download blip can't
+  # break boot. Idempotent — re-run with `sudo /usr/local/sbin/install-docker-tools.sh`.
+  - /usr/local/sbin/install-docker-tools.sh || true
+%{ endif ~}
   - systemctl daemon-reload
   # Start asynchronously so cloud-init completes inside Multipass's 300s launch window (the runner
   # waits up to ~15 min for the server's Diode to come up).
