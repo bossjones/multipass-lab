@@ -66,6 +66,7 @@ fields.)
 |---|---|
 | `LogAnalysis` | Day-to-day log analysis — volume, errors, per-host, containers, pods. (Named `LogAnalysis`, not `Logs`, to avoid the `**/logs` gitignore rule on case-insensitive filesystems.) |
 | `Correlation` | Cross-signal boards that line logs up against metrics and traces. |
+| `Infrastructure` | Single-signal metrics/traces boards — host resources, container resources, uptime probing, Prometheus self-health, and OTLP traces. See "Imported/adapted from OpenObserve community dashboards" below. |
 
 ## Dashboard inventory
 
@@ -80,6 +81,45 @@ Files live under `clusters/centralized_monitoring/openobserve/dashboards/<Folder
 | `LogAnalysis/container-logs.json` | **Container Logs** | Volume + errors by container (derived from `log_file_path`), stdout vs stderr split (`stream`), recent table. |
 | `LogAnalysis/k0s-pods.json` | **Kubernetes Pod Logs** | Volume by `k8s_namespace_name` / `k8s_pod_name`, per-pod error table, `$namespace` variable. |
 | `Correlation/cause-effect.json` | **Cause & Effect** | Shared-time board: log-error spikes (SQL) beside node CPU / mem / disk (PromQL over `metrics`) and a recent-traces panel (`otlp_logs`), for eyeballing cause→effect. |
+| `Infrastructure/prometheus-health.json` | **Prometheus Health** | Scrape targets up by job, down-target table, TSDB head series, samples/sec, scrape duration by job, config-reload status. |
+| `Infrastructure/uptime.json` | **Uptime** | Blackbox-exporter probe success/latency per target, current-status and HTTP-status-code tables. |
+| `Infrastructure/traces-overview.json` | **Traces Overview** | OTLP span volume, error spans, latency percentiles, volume by service — see the schema caveat below. |
+| `Infrastructure/traces-by-service.json` | **Traces By Service** | Per-service span count over time, errors by service, p95 latency by service (GROUP BY, no variable — see below). |
+| `Infrastructure/host-metrics.json` | **Host Metrics** | node_exporter CPU/memory/disk/network/load, per instance (monitoring server + k0s node). |
+| `Infrastructure/container-metrics.json` | **Container Metrics** | cadvisor CPU/memory/network/filesystem per container (`container_label_com_docker_compose_service`), on the server + k0s node only — does not cover NetBox's Postgres/Redis containers (not cadvisor-scraped). |
+
+### Imported/adapted from OpenObserve community dashboards
+
+The `Infrastructure` folder started from OpenObserve's own [community dashboards
+repo](https://github.com/openobserve/dashboards) (`hostmetrics`, `Docker_Metrics`,
+`Prometheus`, `Uptime_Monitor`, `Traces` folders) — but nothing there imports
+verbatim. That repo assumes an OTel Collector hostmetrics/k8scluster receiver
+pushing OTLP metrics directly, and OpenObserve's own `zo_*` self-metrics being
+scraped. This cluster's `metrics` stream is instead fed by **real Prometheus
+exporters** via `remote_write` — confirmed live (`streams` + `prometheus/api/v1/query`
+against a running `centralized_monitoring`): `node_exporter` (`node_cpu_seconds_total`,
+`node_memory_MemAvailable_bytes`, `node_filesystem_avail_bytes`/`size_bytes`,
+`node_network_{receive,transmit}_bytes_total`, `node_load{1,5,15}`), `cadvisor`
+(`container_cpu_usage_seconds_total`, `container_memory_usage_bytes`,
+`container_network_*`, `container_fs_*`, labeled with
+`container_label_com_docker_compose_service`), `blackbox_exporter` (`probe_success`,
+`probe_duration_seconds`, `probe_http_status_code`), and Prometheus's own self-metrics
+(`up`, `prometheus_tsdb_head_series`, `prometheus_config_last_reload_successful`, …).
+Every `Infrastructure/*.json` query was rewritten against these real, live-confirmed
+metric names — none of the source repo's OTel-semantic-convention names
+(`system_cpu_time`, `system_memory_usage`, etc.) are used.
+
+**Traces are the one open item.** The otel-collector's traces pipeline and its
+app-log pipeline both target `stream-name: otlp_logs`, but OpenObserve keys streams
+by `(name, type)`, so traces live at `otlp_logs` with `stream_type=traces` — distinct
+from the `otlp_logs` **logs** stream the `LogAnalysis`/`Correlation` dashboards use.
+No app in this lab currently pushes OTLP traces, so the stream doesn't exist yet and
+its field names (`service_name`, `http_status_code`, `http_route`, `span_status`,
+`duration`) could not be confirmed live — they're taken directly from OpenObserve's
+own `Traces - Overall`/`Traces - By service` community dashboards, which were built
+against OpenObserve's native OTLP trace ingestion schema. Reconfirm with
+`GET /api/default/streams/otlp_logs/schema?type=traces` once real trace traffic
+flows, per the same "must be confirmed live" caveat as the original streams table.
 
 Representative queries (log panels are SQL over `_search`; metric panels are PromQL):
 

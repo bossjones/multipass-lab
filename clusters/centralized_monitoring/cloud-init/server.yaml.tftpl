@@ -137,6 +137,10 @@ runcmd:
   # Host-installed (not compose); Prometheus reaches it via host.docker.internal (see compose.yaml).
   - mkdir -p /etc/netdata && touch /etc/netdata/.opt-out-from-anonymous-statistics
   - curl -sSLf https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh && DO_NOT_TRACK=1 sh /tmp/netdata-kickstart.sh --non-interactive --stable-channel --disable-telemetry --no-updates --dont-wait || true
+  # netdata's built-in StatsD collector is on by default and binds :8125 (UDP+TCP),
+  # colliding with this cluster's own statsd_exporter container (used for Locust
+  # StatsD load testing) — disable it so statsd_exporter can claim the port.
+  - printf '\n[plugins]\n\tstatsd = no\n' >> /etc/netdata/netdata.conf && systemctl restart netdata || true
 %{ endif ~}
 %{ if enable_heimdall && enable_heimdall_seed ~}
   # --- auto-seed Heimdall tiles (best-effort; never fails the boot) ----------

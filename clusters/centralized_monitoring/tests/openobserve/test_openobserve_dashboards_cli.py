@@ -27,6 +27,12 @@ EXPECTED_TITLES = {
     "Container Logs",
     "Kubernetes Pod Logs",
     "Cause & Effect",
+    "Prometheus Health",
+    "Uptime",
+    "Traces Overview",
+    "Traces By Service",
+    "Host Metrics",
+    "Container Metrics",
 }
 
 
@@ -213,7 +219,10 @@ def test_check_require_dashboards_fails_when_missing(httpserver, tmp_path):
 
 
 def test_shipped_dashboards_are_valid_json_with_title_and_panels():
-    files = sorted(SHIPPED_DIR.glob("**/*.json"))
+    # Exclude `logs/` dirs — gitignored (`**/logs`) hook-telemetry JSON, not dashboards.
+    files = sorted(
+        f for f in SHIPPED_DIR.glob("**/*.json") if "logs" not in f.parts
+    )
     assert files, f"no dashboard JSON found under {SHIPPED_DIR}"
     titles = set()
     for f in files:
