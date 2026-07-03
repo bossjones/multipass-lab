@@ -167,3 +167,22 @@ variable "client" {
     disk   = "10G"
   }
 }
+
+# --- Prometheus exporters (both VMs; verified locally, scraped cross-cluster later) -----------
+variable "enable_node_exporter" {
+  description = "node_exporter (:9100) on both VMs — host metrics; parity with the other clusters."
+  type        = bool
+  default     = true
+}
+
+variable "enable_process_exporter" {
+  description = "process-exporter (:9256) on both VMs — per-process metrics (NetBox workers, postgres, redis)."
+  type        = bool
+  default     = true
+}
+
+variable "enable_systemd_exporter" {
+  description = "systemd_exporter (:9558) on both VMs — per-unit health/resource metrics."
+  type        = bool
+  default     = true
+}

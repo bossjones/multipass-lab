@@ -26,13 +26,24 @@ locals {
   override_conf = templatefile("${path.module}/cloud-init/netbox/docker-compose.override.yml.tftpl", {
     netbox_port = var.netbox_port
   })
+
+  # Exporter feature flags, merged into every templatefile() call so each cloud-init template
+  # renders its own %{ if enable_x ~}…%{ endif ~} blocks (mirrors the other clusters).
+  flags = {
+    enable_node_exporter    = var.enable_node_exporter
+    enable_process_exporter = var.enable_process_exporter
+    enable_systemd_exporter = var.enable_systemd_exporter
+  }
+
+  # Sorted list of active flags — exported as enabled_exporters and consumed by tests/testinfra.
+  enabled_exporters = sort([for k, v in local.flags : k if v])
 }
 
 # --- NetBox server VM (netbox-docker stack) ---------------------------------
 
 resource "local_file" "server_ci" {
   filename = "${local.render_dir}/server.yaml"
-  content = templatefile("${path.module}/cloud-init/server.yaml.tftpl", {
+  content = templatefile("${path.module}/cloud-init/server.yaml.tftpl", merge(local.flags, {
     ssh_pubkey         = local.ssh_pubkey
     override_conf      = local.override_conf
     netbox_port        = var.netbox_port
@@ -61,7 +72,7 @@ resource "local_file" "server_ci" {
     host_manufacturer_slug = local.host_manufacturer_slug
     host_model             = var.netbox_host_model
     host_model_slug        = local.host_model_slug
-  })
+  }))
 }
 
 resource "multipass_instance" "server" {
@@ -80,14 +91,14 @@ resource "multipass_instance" "server" {
 
 resource "local_file" "client_ci" {
   filename = "${local.render_dir}/client.yaml"
-  content = templatefile("${path.module}/cloud-init/client.yaml.tftpl", {
+  content = templatefile("${path.module}/cloud-init/client.yaml.tftpl", merge(local.flags, {
     ssh_pubkey       = local.ssh_pubkey
     netbox_ip        = multipass_instance.server.ipv4
     netbox_port      = var.netbox_port
     netbox_api_token = var.netbox_api_token
     cluster_name     = var.cluster_name
     host_device_name = var.netbox_host_device_name
-  })
+  }))
 }
 
 resource "multipass_instance" "client" {

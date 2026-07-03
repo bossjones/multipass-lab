@@ -45,6 +45,18 @@ variable "enable_node_exporter" {
   default     = true
 }
 
+variable "enable_process_exporter" {
+  description = "process-exporter (:9256) on both VMs — per-process metrics for step-ca, Traefik, Authelia."
+  type        = bool
+  default     = true
+}
+
+variable "enable_systemd_exporter" {
+  description = "systemd_exporter (:9558) on both VMs — per-unit health/resource metrics."
+  type        = bool
+  default     = true
+}
+
 # --- Let's Encrypt staging (only consumed when enable_letsencrypt_staging = true) ---
 # GoDaddy has no per-zone scoping; treat these as account-wide secrets. Never committed —
 # pass via TF_VAR_godaddy_api_key / a gitignored *.auto.tfvars. See specs/centralized_pki.md.

@@ -61,7 +61,11 @@ locals {
 
   web_urls_metrics_candidates = [
     { url = "http://${local._ca_ip}:9100/metrics", on = var.enable_node_exporter },
+    { url = "http://${local._ca_ip}:9256/metrics", on = var.enable_process_exporter },
+    { url = "http://${local._ca_ip}:9558/metrics", on = var.enable_systemd_exporter },
     { url = "http://${local._svc_ip}:9100/metrics", on = var.enable_node_exporter },
+    { url = "http://${local._svc_ip}:9256/metrics", on = var.enable_process_exporter },
+    { url = "http://${local._svc_ip}:9558/metrics", on = var.enable_systemd_exporter },
   ]
   web_urls_metrics = [for c in local.web_urls_metrics_candidates : c.url if c.on]
 }
