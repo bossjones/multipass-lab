@@ -1,0 +1,15 @@
+# syslog-ng 3.28.1 — the EXACT Debian bullseye package the UniFi Cloud Key Gen2 runs
+# (3.28.1-2+deb11u2). Built FROM the matching Debian release (native arm64) rather than pulling
+# balabit/syslog-ng:3.28.1 (upstream build, Debian Buster, amd64-only) so the binary matches the
+# appliance artifact. See specs/centralized_unifi.md ("Where the exact versions come from").
+FROM ${controller_base_image}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        syslog-ng-core=${syslogng_deb_version} \
+        syslog-ng=${syslogng_deb_version} \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/log/remote /var/lib/syslog-ng
+
+# -F: run in the foreground (PID 1 in the container). Config is bind-mounted by compose.
+ENTRYPOINT ["/usr/sbin/syslog-ng", "-F", "--no-caps", "-f", "/etc/syslog-ng/syslog-ng.conf"]

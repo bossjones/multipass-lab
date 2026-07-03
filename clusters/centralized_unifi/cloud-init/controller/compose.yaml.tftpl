@@ -1,0 +1,38 @@
+# Controller stack: the exact syslog-ng 3.28.1 (UCK persona / collector) + the legacy-CSV
+# Prometheus exporter that works on syslog-ng 3.x. network_mode host so :514 (collector) and
+# :9577 (/metrics) land on the VM's network; a shared named volume carries the control socket
+# (/var/lib/syslog-ng/syslog-ng.ctl) from syslog-ng to the exporter.
+services:
+  syslog-ng:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: unifi-syslog-ng:3.28.1
+    container_name: unifi-syslog-ng
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - /opt/unifi/uck.conf:/etc/syslog-ng/syslog-ng.conf:ro
+      - ctl:/var/lib/syslog-ng
+      - /var/log/remote:/var/log/remote
+%{ if enable_syslogng_exporter ~}
+
+  # brandond/syslog_ng_exporter: reads the legacy `syslog-ng-ctl stats` output over the control
+  # socket and serves Prometheus on :9577 — the exporter path that works on syslog-ng 3.28.1
+  # (the modern `stats prometheus` needs 4.1+). This is what you'd run on the real UCK.
+  syslog-ng-exporter:
+    image: brandond/syslog_ng_exporter
+    container_name: unifi-syslogng-exporter
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - syslog-ng
+    volumes:
+      - ctl:/var/lib/syslog-ng
+    command:
+      - "--socket.path=/var/lib/syslog-ng/syslog-ng.ctl"
+      - "--telemetry.address=:9577"
+%{ endif ~}
+
+volumes:
+  ctl:
