@@ -306,6 +306,23 @@ up-connected:
     fi
     exit "$rc"
 
+# up-connected with internal-CA TLS + internal NTP both wired (INTERNAL_NTP=1 INTERNAL_TLS=1).
+# Needs centralized_pki's persisted root (ca-material.auto.tfvars) for TLS to activate.  just up-connected-full
+up-connected-full:
+    INTERNAL_NTP=1 INTERNAL_TLS=1 just up-connected
+
+# cold-boot validation: destroy-all (purges stale cross-cluster wiring) -> up-connected-full ->
+# verify-connected + verify-dns + tls-check-monitoring. Proves the committed cloud-init hardening
+# works at first boot with no hot-patching.  just cold-boot-validate
+cold-boot-validate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just destroy-all
+    just up-connected-full
+    just verify-connected
+    just verify-dns
+    just tls-check-monitoring
+
 # register ONE cluster's service hostnames (its `dns_records` output) into centralized_dns's
 # AdGuard Home as idempotent DNS rewrites, so <service>.<domain> resolves fleet-wide.
 # Requires that cluster AND the dns hub to be up.  just set-dns centralized_pki
