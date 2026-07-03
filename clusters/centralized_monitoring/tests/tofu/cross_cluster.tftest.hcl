@@ -264,4 +264,9 @@ run "internal_tls_on_renders_leaf_and_proxy" {
     condition     = contains(output.web_urls.core, "https://grafana.lab.theblacktonystark.com")
     error_message = "web_urls.core must expose https://grafana.<domain> when use_internal_tls is on"
   }
+  # the embedded script + nested Traefik config must not corrupt the cloud-init YAML
+  assert {
+    condition     = can(yamldecode(local_file.server_ci.content))
+    error_message = "server cloud-init must remain valid YAML with the TLS write_files blocks"
+  }
 }

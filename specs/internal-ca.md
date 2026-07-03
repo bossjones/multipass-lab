@@ -108,12 +108,20 @@ Generate root+intermediate **once**, offline, and make step-ca adopt them instea
 Reuse the PKI cluster's proven "get a leaf" recipe (`issue-cert.sh` + JWK `admin` provisioner +
 12h renew timer, `services.yaml.tftpl:102-172`) as a shared, parameterized building block.
 
-- Promote the leaf-issuance logic to `clusters/_shared/cloud-init/issue-cert.sh.tftpl` (params:
-  `ca_url`, `jwk_provisioner`, SAN list, cert paths) so each cluster renders its own SANs.
+**Status:** the shared snippet + `centralized_monitoring` are DONE (below); the other clusters
+(logging, netbox, dns, unifi) remain TODO.
+
+- **[DONE]** Promote the leaf-issuance logic to `clusters/_shared/cloud-init/issue-cert.sh.tftpl`
+  (params: `ca_url`, `ca_ip`, `domain`, `jwk_provisioner`, `cert_subject`, `sans`, cert paths,
+  `step_img`, `reload_cmd`) so each cluster renders its own SANs.
 - Per target cluster, add a TLS-terminating reverse proxy in front of existing plain-HTTP services
   and point it at the issued leaf. Priority order (highest value / already has a proxy first):
-  1. **centralized_monitoring** — already has an `enable_traefik` flag; front Grafana/Prometheus/
-     OpenObserve/Uptime-Kuma. SANs like `grafana.<domain>`, `prometheus.<domain>`.
+  1. **[DONE] centralized_monitoring** — `use_internal_tls` (default off) issues a leaf at first
+     boot and fronts Grafana/Prometheus/Alertmanager/OpenObserve/Uptime-Kuma via Traefik `:443`
+     (file provider + `defaultCertificate`), **additive** to the existing `http://IP:port` publishes.
+     SANs `grafana.<domain>` etc. `INTERNAL_TLS=1 just up-connected` wires `ca_ip`/`stepca_ca_password`
+     (when the CA is up) + `just dns-register` hot-pushes the AdGuard rewrites; `just
+     tls-check-monitoring` verifies the chain.
   2. **centralized_logging** — already runs Traefik `:80`; add `:443` + leaf for Heimdall/Grafana.
   3. **centralized_netbox** — NetBox UI/API + the Diode nginx ingress (gRPC benefits from TLS).
   4. **centralized_dns** — AdGuard Home UI (single service; lower priority).
