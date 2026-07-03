@@ -13,6 +13,9 @@ variables {
   internal_ca_cert     = ""
   log_shipping_target  = ""
   openobserve_endpoint = ""
+  # Phase 2 internal-CA TLS: `just dns-register` writes dns_rewrites into an auto.tfvars; pin it
+  # empty so the off-by-default run is hermetic to a leftover file. See specs/internal-ca.md.
+  dns_rewrites = []
 }
 
 # --- default: cross-cluster off -> no shipping/OTLP wiring rendered ----------
@@ -139,5 +142,41 @@ run "internal_ca_on_renders_trust" {
   assert {
     condition     = strcontains(local_file.server_ci.content, "MIITESTROOTCA")
     error_message = "the rendered CA cert must carry the injected PEM body"
+  }
+}
+
+# --- default: no AdGuard host rewrites (Phase 2 internal-CA TLS) -------------
+run "dns_rewrites_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = strcontains(local_file.adguard_conf.content, "rewrites: []")
+    error_message = "with dns_rewrites empty, the seeded AdGuardHome.yaml must render an empty rewrites list"
+  }
+}
+
+# --- dns_rewrites on: hostnames render as AdGuard host rewrites --------------
+run "dns_rewrites_render_records" {
+  command = plan
+
+  variables {
+    dns_rewrites = [
+      { domain = "grafana.lab.theblacktonystark.com", answer = "10.0.0.9" },
+      { domain = "prometheus.lab.theblacktonystark.com", answer = "10.0.0.9" },
+    ]
+  }
+
+  assert {
+    condition     = strcontains(local_file.adguard_conf.content, "- domain: grafana.lab.theblacktonystark.com")
+    error_message = "seeded AdGuardHome.yaml must carry a rewrite entry for each dns_rewrites domain"
+  }
+  assert {
+    condition     = strcontains(local_file.adguard_conf.content, "answer: 10.0.0.9")
+    error_message = "each rewrite must map to its injected answer IP"
+  }
+  # the standalone rendered file feeds `just dns-register`'s hot-push
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "- domain: prometheus.lab.theblacktonystark.com")
+    error_message = "the embedded (write_files) AdGuard seed must also carry the rewrites"
   }
 }

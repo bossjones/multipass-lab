@@ -94,6 +94,32 @@ variable "internal_ca_cert" {
   default     = ""
 }
 
+# --- Internal-CA TLS (opt-in; Phase 2, see specs/internal-ca.md) -------------
+variable "use_internal_tls" {
+  description = "Front the stack with Traefik serving an internal-CA leaf on :443. On -> the server issues a leaf from centralized_pki's step-ca at first boot (SANs grafana./prometheus./… .domain) and routes those hostnames over HTTPS; the plain http://IP:port ports stay published (additive). Needs ca_ip + stepca_ca_password wired (by `just up-connected` when the CA is up). Off (default) keeps `just up` turnkey/isolated. See specs/internal-ca.md §Phase 2."
+  type        = bool
+  default     = false
+}
+
+variable "domain" {
+  description = "DNS suffix for internal service hostnames when use_internal_tls is on (grafana.<domain>, prometheus.<domain>, …). Must match centralized_pki's domain so the leaf chains + AdGuard rewrites resolve."
+  type        = string
+  default     = "lab.theblacktonystark.com"
+}
+
+variable "ca_ip" {
+  description = "IPv4 of centralized_pki's step-ca VM, used at first boot to reach the CA (--add-host ca.<domain>) and issue the leaf. Empty (default) with use_internal_tls off = no TLS. `just up-connected` wires it from centralized_pki's ca_ipv4."
+  type        = string
+  default     = ""
+}
+
+variable "stepca_ca_password" {
+  description = "step-ca JWK provisioner password used to issue the leaf. MUST match centralized_pki's var.stepca_ca_password. Sensitive; do not carry this lab default to Proxmox."
+  type        = string
+  default     = "changeit-dev-pki-only"
+  sensitive   = true
+}
+
 variable "grafana_admin_password" {
   description = "Grafana admin user password (provisioned via compose env)."
   type        = string

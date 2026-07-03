@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Managed by OpenTofu — SHARED cross-cluster snippet (clusters/_shared/cloud-init). See specs/internal-ca.md.
+# Issue a TLS leaf from the lab step-ca (centralized_pki) via a JWK provisioner — password-
+# authenticated, no ACME challenge, so no inbound reachback is needed (the DNS-less lab can't do
+# challenge reachback). Re-runnable: a systemd renew timer calls it again and the proxy's file-watch
+# reloads the rotated cert. Rendered by templatefile(), so bare $VAR is literal shell and dollar-brace
+# sequences are injected OpenTofu vars — do NOT use dollar-brace shell expansions here (use $VAR).
+set -euo pipefail
+CERT_DIR=${cert_dir}
+SECRETS=${secrets_dir}
+STEP_IMG=${step_img}
+mkdir -p "$CERT_DIR"
+# 1. Fetch the root (self-authenticating; -k is step-ca's documented TOFU bootstrap). Needed as the
+#    --root for the issuance call below; OS-wide trust is handled separately (Phase 1 internal_ca_cert).
+for i in $(seq 1 60); do
+  if curl -fsSk ${ca_url}/roots.pem -o "$CERT_DIR/root_ca.crt"; then break; fi
+  echo "waiting for step-ca at ${ca_url} ($i)"; sleep 5
+done
+# 2. Issue the leaf (positional subject "${cert_subject}" + the injected SANs). Retry until the CA is ready.
+for i in $(seq 1 30); do
+  # --user 0:0: the step-cli image runs as uid 1000, but the mounted provisioner-password file is
+  # root-owned 0600; run as root so it can read it (keeps the secret non-world-readable).
+  if docker run --rm --user 0:0 \
+       --add-host "ca.${domain}:${ca_ip}" \
+       -v "$CERT_DIR:/certs" -v "$SECRETS:/secrets:ro" \
+       "$STEP_IMG" \
+       step ca certificate ${cert_subject} /certs/${cert_file} /certs/${key_file} \
+         --ca-url ${ca_url} --root /certs/root_ca.crt \
+         --provisioner ${jwk_provisioner} --provisioner-password-file /secrets/provisioner_password \
+         %{ for s in sans ~}--san "${s}" %{ endfor ~}--force; then
+    break
+  fi
+  echo "cert issuance retry ($i)"; sleep 5
+done
+chmod 644 "$CERT_DIR/${cert_file}" || true
+chmod 600 "$CERT_DIR/${key_file}" || true
+# On renewal, nudge the proxy to reload the rotated cert. No-op on first boot (the proxy starts
+# after this with the cert already present).
+${reload_cmd} >/dev/null 2>&1 || true

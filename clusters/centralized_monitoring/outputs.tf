@@ -3,6 +3,13 @@ output "server_ipv4" {
   value       = multipass_instance.server.ipv4
 }
 
+# DNS suffix for the internal-CA TLS hostnames (grafana.<domain>, …). Read by `just dns-register`
+# and the tls_cli chain check. See specs/internal-ca.md.
+output "domain" {
+  description = "DNS suffix for internal service hostnames when use_internal_tls is on."
+  value       = var.domain
+}
+
 output "k0s_ipv4" {
   description = "IPv4 address of the monitored k0s client VM."
   value       = multipass_instance.k0s.ipv4
@@ -51,7 +58,17 @@ locals {
   _server_ip = multipass_instance.server.ipv4
   _k0s_ip    = multipass_instance.k0s.ipv4
 
-  web_urls_core = [for c in [
+  # When use_internal_tls is on, `just open` points at the green-lock hostnames (Traefik :443 leaf,
+  # resolved via the centralized_dns AdGuard rewrites); otherwise the plain http://IP:port ports
+  # (still published — the TLS path is additive). Both are gated on the same enable_* flags.
+  web_urls_core = var.use_internal_tls ? [for c in [
+    { url = "https://heimdall.${var.domain}", on = var.enable_heimdall },
+    { url = "https://grafana.${var.domain}", on = true },
+    { url = "https://prometheus.${var.domain}", on = true },
+    { url = "https://alertmanager.${var.domain}", on = true },
+    { url = "https://openobserve.${var.domain}", on = var.enable_openobserve },
+    { url = "https://uptime.${var.domain}", on = var.enable_uptime_kuma },
+    ] : c.url if c.on] : [for c in [
     { url = "http://${local._server_ip}", on = var.enable_heimdall },         # Heimdall homepage
     { url = "http://${local._server_ip}:3000", on = true },                   # Grafana
     { url = "http://${local._server_ip}:9090/targets", on = true },           # Prometheus

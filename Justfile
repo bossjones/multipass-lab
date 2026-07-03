@@ -133,6 +133,23 @@ up-connected:
     if [ -f "$ca_crt" ]; then ca_pem="$(cat "$ca_crt")"; echo "internal CA: distributing $ca_crt fleet-wide"; \
       else echo "internal CA: no pinned root ($ca_crt absent) — skipping fleet trust (run scripts/init_ca.py)"; fi
 
+    # Internal-CA TLS (Phase 2, opt-in): with INTERNAL_TLS set AND centralized_pki's CA up, front the
+    # monitoring stack with a step-ca leaf issued at the monitoring VM's first boot. tls_json (empty
+    # {} when off) is merged into the monitoring hub's tfvars; step 6 wires the AdGuard rewrites so
+    # the hostnames resolve. See specs/internal-ca.md §Phase 2.
+    tls_json='{}'
+    if [ -n "${INTERNAL_TLS:-}" ]; then
+      tls_ca_ip="$(tofu -chdir={{cluster_root}}/centralized_pki output -raw ca_ipv4 2>/dev/null || true)"
+      if [ -n "$tls_ca_ip" ]; then
+        echo "internal TLS: fronting monitoring via step-ca @ $tls_ca_ip"
+        tls_json="$(jq -n --arg ip "$tls_ca_ip" --arg dom "${INTERNAL_TLS_DOMAIN:-lab.theblacktonystark.com}" \
+          --arg pw "${STEPCA_CA_PASSWORD:-changeit-dev-pki-only}" \
+          '{use_internal_tls: true, ca_ip: $ip, domain: $dom, stepca_ca_password: $pw}')"
+      else
+        echo "internal TLS: INTERNAL_TLS set but centralized_pki CA not up (no ca_ipv4) — skipping TLS"
+      fi
+    fi
+
     # 0. DNS hub FIRST — pure :53 sink. No telemetry targets yet (the hubs don't exist), but it DOES
     #    get the CA trust anchor at first boot (static, so no ordering dependency on the PKI hub).
     echo "=== up-connected: dns hub ($dns) ==="
@@ -159,8 +176,10 @@ up-connected:
 
     # 2. monitoring hub — resolves via DNS + trusts the internal CA + self-ships its OWN OS logs.
     echo "=== up-connected: monitoring hub ($monitoring) ==="
-    jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg ca "$ca_pem" \
-      '{dns_server: $dns, log_shipping_target: $log, internal_ca_cert: $ca}' \
+    # TLS (tls_json) must be set HERE — the VM is created by this `just up`, and use_internal_tls
+    # gates the leaf-issuance cloud-init; the step-5 re-apply is content-only and won't recreate it.
+    jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg ca "$ca_pem" --argjson tls "$tls_json" \
+      '{dns_server: $dns, log_shipping_target: $log, internal_ca_cert: $ca} + $tls' \
       > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
     just up "$monitoring"
     mon_ip="$(tofu -chdir={{cluster_root}}/$monitoring output -raw server_ipv4)"
@@ -219,8 +238,10 @@ up-connected:
     # 5. hot-push the discovered scrape targets into the RUNNING monitoring server (no recreate).
     #    Keep log_shipping_target + dns_server so the re-apply preserves the hub's wiring in state.
     echo "=== up-connected: wiring Prometheus scrape targets ==="
-    echo "$targets" | jq -c --arg dns "$dns_ip" --arg log "$log_ip:514" --arg ca "$ca_pem" \
-      '{dns_server: $dns, log_shipping_target: $log, internal_ca_cert: $ca, extra_scrape_targets: .}' \
+    # Preserve tls_json here too so the content-only re-apply keeps use_internal_tls in state/render
+    # (it does NOT recreate the VM — the leaf was already issued at the step-2 boot).
+    echo "$targets" | jq -c --arg dns "$dns_ip" --arg log "$log_ip:514" --arg ca "$ca_pem" --argjson tls "$tls_json" \
+      '{dns_server: $dns, log_shipping_target: $log, internal_ca_cert: $ca, extra_scrape_targets: .} + $tls' \
       > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
     tofu -chdir={{cluster_root}}/$monitoring apply -auto-approve   # re-renders .rendered/prometheus.yml only
     scp {{ssh_opts}} -i {{ssh_key}} \
@@ -228,6 +249,13 @@ up-connected:
       ubuntu@"$mon_ip":/tmp/prometheus.yml
     ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$mon_ip" \
       'sudo cp /tmp/prometheus.yml /opt/stack/prometheus/prometheus.yml && sudo docker compose -f /opt/stack/compose.yaml restart prometheus'
+
+    # 6. Internal-CA TLS DNS records — make grafana.<domain> etc. resolve to the monitoring VM so
+    #    browsers get the green lock by hostname. Hot-pushed into the running AdGuard hub (no recreate).
+    if [ "$tls_json" != '{}' ]; then
+      echo "=== up-connected: registering monitoring TLS hostnames in AdGuard ==="
+      just dns-register "$monitoring"
+    fi
     echo "up-connected complete — $(echo "$targets" | jq 'length') cross-cluster scrape targets wired; fleet resolving via $dns_ip."
 
 # delete + purge Multipass VMs for this cluster that OpenTofu no longer tracks.
@@ -482,6 +510,41 @@ trust-ca-all:
 # Mutates the login/System keychain + Firefox NSS DBs, so it prints what it will do and prompts.
 trust-ca-macos *ARGS:
     uv run {{cluster_root}}/centralized_pki/scripts/macos_trust_cli.py {{ARGS}} install
+
+# HOT-PUSH a cluster's internal-CA TLS hostnames (https:// web_urls) as AdGuard host rewrites -> the
+# cluster's server VM, so browsers resolve grafana.<domain> etc. for the green lock. No recreate: it
+# merges dns_rewrites into the DNS hub's tfvars, re-applies (content-only), scps the seed, restarts
+# AdGuard. Called by `up-connected` when INTERNAL_TLS is on.  just dns-register centralized_monitoring
+dns-register CLUSTER:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dns=centralized_dns
+    ip="$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.server.ipv4')"
+    rewrites="$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json web_urls \
+      | jq -c --arg ip "$ip" '[.core[] | select(startswith("https://")) \
+          | {domain: (ltrimstr("https://") | split("/")[0]), answer: $ip}]')"
+    n="$(echo "$rewrites" | jq 'length')"
+    if [ "$n" -eq 0 ]; then echo "dns-register: {{CLUSTER}} has no https hostnames (use_internal_tls off?) — nothing to do"; exit 0; fi
+    echo "dns-register: seeding $n AdGuard rewrite(s) -> $ip for {{CLUSTER}}"
+    # Merge into the DNS hub's existing cross-cluster tfvars so its telemetry wiring is preserved.
+    f="{{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json"
+    base='{}'; [ -f "$f" ] && base="$(cat "$f")"
+    echo "$base" | jq --argjson rw "$rewrites" '. + {dns_rewrites: $rw}' > "$f"
+    dns_ip="$(tofu -chdir={{cluster_root}}/$dns output -raw server_ipv4)"
+    tofu -chdir={{cluster_root}}/$dns apply -auto-approve   # re-renders .rendered/AdGuardHome.yaml only; no recreate
+    scp {{ssh_opts}} -i {{ssh_key}} \
+      {{cluster_root}}/$dns/.rendered/AdGuardHome.yaml ubuntu@"$dns_ip":/tmp/AdGuardHome.yaml
+    ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$dns_ip" \
+      'sudo install -D -m0644 /tmp/AdGuardHome.yaml /opt/AdGuardHome/AdGuardHome.yaml && sudo systemctl restart AdGuardHome'
+    echo "dns-register: {{CLUSTER}} hostnames now resolve to $ip via $dns_ip"
+
+# assert the monitoring stack's Traefik leaf chains to the internal root (via centralized_pki):  just tls-check-monitoring
+tls-check-monitoring *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mon_ip="$(tofu -chdir={{cluster_root}}/centralized_monitoring output -raw server_ipv4)"
+    domain="$(tofu -chdir={{cluster_root}}/centralized_monitoring output -raw domain 2>/dev/null || echo lab.theblacktonystark.com)"
+    uv run {{cluster_root}}/centralized_pki/scripts/tls_cli.py --cluster centralized_pki check "$mon_ip" --sni "grafana.$domain" {{ARGS}}
 
 # NetBox health + auth + self-registration, exit nonzero on failure:  just netbox-check centralized_netbox
 netbox-check CLUSTER:

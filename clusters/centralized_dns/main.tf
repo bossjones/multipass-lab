@@ -31,6 +31,7 @@ locals {
     adguard_web_port      = var.adguard_web_port
     upstream_unbound      = var.upstream_unbound
     blocklists            = var.blocklists
+    dns_rewrites          = var.dns_rewrites
   })
 
   unbound_conf = file("${path.module}/cloud-init/unbound/unbound.conf")
@@ -111,4 +112,13 @@ resource "local_file" "otel_conf" {
   count    = local.push_otlp ? 1 : 0
   filename = "${local.render_dir}/otel-config.yaml"
   content  = local.otel_agent_conf
+}
+
+# The seeded AdGuard config, rendered standalone so `just dns-register <cluster>` can hot-push
+# updated host rewrites (internal-CA TLS hostnames) onto the running VM without a recreate — the
+# DNS IP the whole fleet points at must stay stable. Always present (mirrors the embedded copy in
+# server.yaml's write_files). See specs/internal-ca.md.
+resource "local_file" "adguard_conf" {
+  filename = "${local.render_dir}/AdGuardHome.yaml"
+  content  = local.adguard_conf
 }

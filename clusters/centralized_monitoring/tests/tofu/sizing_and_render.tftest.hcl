@@ -13,6 +13,11 @@ mock_provider "multipass" {
 variables {
   # Provide an inline key so the test never depends on a real ~/.ssh file.
   ssh_pubkey = "ssh-ed25519 AAAATESTKEY centralized-monitoring-tests"
+  # Pin the Phase 2 internal-CA TLS opt-in OFF so a leftover .cross-cluster.auto.tfvars.json (from
+  # `just up-connected --INTERNAL_TLS`) can't flip it on and break these plain-HTTP assertions.
+  use_internal_tls   = false
+  ca_ip              = ""
+  stepca_ca_password = ""
 }
 
 run "defaults_sizing_names_and_render" {

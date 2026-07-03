@@ -156,11 +156,20 @@ services:
   # --- Traefik — ingress fronting the stack + its own /metrics --------------
   traefik:
     image: traefik:v3.1
+%{ if use_internal_tls ~}
+    # Fixed name so issue-cert.sh's `docker restart traefik` reload hook resolves it.
+    container_name: traefik
+%{ endif ~}
     command:
       - "--api.dashboard=true"
       - "--api.insecure=true"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
+%{ if use_internal_tls ~}
+      # Internal-CA TLS (Phase 2): the file provider serves the step-ca leaf + HTTPS hostname routers.
+      - "--providers.file.filename=/etc/traefik/dynamic.yaml"
+      - "--providers.file.watch=true"
+%{ endif ~}
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       - "--entrypoints.metrics.address=:8082"
@@ -172,6 +181,10 @@ services:
       - "8082:8082"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+%{ if use_internal_tls ~}
+      - /opt/stack/traefik/dynamic.yaml:/etc/traefik/dynamic.yaml:ro
+      - /opt/stack/traefik/certs:/etc/traefik/certs:ro
+%{ endif ~}
     restart: unless-stopped
 %{ endif ~}
 %{ if enable_statsd_exporter ~}

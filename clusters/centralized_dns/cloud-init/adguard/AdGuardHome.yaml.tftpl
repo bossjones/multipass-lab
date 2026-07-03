@@ -43,6 +43,18 @@ filtering:
   enabled: true
   filtering_enabled: true
   protection_enabled: true
+  # Host rewrites (domain -> IP). Seeded from var.dns_rewrites so internal-CA TLS hostnames
+  # (grafana.<domain>, …) resolve to the fronting service's IP for green-lock browsing. Empty by
+  # default. See specs/internal-ca.md.
+%{ if length(dns_rewrites) > 0 ~}
+  rewrites:
+%{ for r in dns_rewrites ~}
+    - domain: ${r.domain}
+      answer: ${r.answer}
+%{ endfor ~}
+%{ else ~}
+  rewrites: []
+%{ endif ~}
   blocked_services:
     schedule:
       time_zone: Local

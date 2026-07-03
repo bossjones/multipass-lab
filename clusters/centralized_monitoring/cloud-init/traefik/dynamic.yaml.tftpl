@@ -1,0 +1,88 @@
+# Traefik dynamic (file-provider) config — internal-CA TLS (Phase 2, use_internal_tls). Adds an
+# HTTPS router per enabled service on the `websecure` (:443) entrypoint, each terminated with the
+# step-ca leaf served as the default cert. Traefik reaches the apps by compose service name over the
+# stack network; the plain http://IP:port publishes stay in place (additive). Routers are gated on
+# the same enable_* flags that decide whether the service is composed at all. See specs/internal-ca.md.
+http:
+  routers:
+    grafana:
+      rule: "Host(`grafana.${domain}`)"
+      entryPoints:
+        - websecure
+      service: grafana
+      tls: {}
+    prometheus:
+      rule: "Host(`prometheus.${domain}`)"
+      entryPoints:
+        - websecure
+      service: prometheus
+      tls: {}
+    alertmanager:
+      rule: "Host(`alertmanager.${domain}`)"
+      entryPoints:
+        - websecure
+      service: alertmanager
+      tls: {}
+%{ if enable_openobserve ~}
+    openobserve:
+      rule: "Host(`openobserve.${domain}`)"
+      entryPoints:
+        - websecure
+      service: openobserve
+      tls: {}
+%{ endif ~}
+%{ if enable_uptime_kuma ~}
+    uptime:
+      rule: "Host(`uptime.${domain}`)"
+      entryPoints:
+        - websecure
+      service: uptime
+      tls: {}
+%{ endif ~}
+%{ if enable_heimdall ~}
+    heimdall-tls:
+      rule: "Host(`heimdall.${domain}`)"
+      entryPoints:
+        - websecure
+      service: heimdall-tls
+      tls: {}
+%{ endif ~}
+
+  services:
+    grafana:
+      loadBalancer:
+        servers:
+          - url: "http://grafana:3000"
+    prometheus:
+      loadBalancer:
+        servers:
+          - url: "http://prometheus:9090"
+    alertmanager:
+      loadBalancer:
+        servers:
+          - url: "http://alertmanager:9093"
+%{ if enable_openobserve ~}
+    openobserve:
+      loadBalancer:
+        servers:
+          - url: "http://openobserve:5080"
+%{ endif ~}
+%{ if enable_uptime_kuma ~}
+    uptime:
+      loadBalancer:
+        servers:
+          - url: "http://uptime-kuma:3001"
+%{ endif ~}
+%{ if enable_heimdall ~}
+    heimdall-tls:
+      loadBalancer:
+        servers:
+          - url: "http://heimdall:80"
+%{ endif ~}
+
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /etc/traefik/certs/leaf.crt
+        keyFile: /etc/traefik/certs/leaf.key

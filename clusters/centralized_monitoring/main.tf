@@ -140,7 +140,39 @@ locals {
   compose_conf = templatefile("${path.module}/cloud-init/docker/compose.yaml.tftpl", merge(local.flags, {
     grafana_admin_password = var.grafana_admin_password
     openobserve_password   = local.openobserve_password
+    # Internal-CA TLS (Phase 2): mounts the leaf + file-provider dynamic config into Traefik.
+    use_internal_tls = var.use_internal_tls
   }))
+
+  # --- Internal-CA TLS (opt-in; Phase 2, see specs/internal-ca.md) -----------
+  # At first boot the server issues a leaf from centralized_pki's step-ca (via the shared
+  # issue-cert.sh), Traefik's file provider serves it as the default cert, and hostname routers
+  # front each enabled service over :443. Rendered only when use_internal_tls is on (else "").
+  ca_url = "https://ca.${var.domain}:9000"
+  # Hostnames that get a leaf SAN + an HTTPS router — the always-on spine plus each enabled service.
+  tls_sans = concat(
+    ["grafana.${var.domain}", "prometheus.${var.domain}", "alertmanager.${var.domain}"],
+    var.enable_openobserve ? ["openobserve.${var.domain}"] : [],
+    var.enable_uptime_kuma ? ["uptime.${var.domain}"] : [],
+    var.enable_heimdall ? ["heimdall.${var.domain}"] : [],
+  )
+  issue_cert_sh = var.use_internal_tls ? templatefile("${path.module}/../_shared/cloud-init/issue-cert.sh.tftpl", {
+    ca_url          = local.ca_url
+    ca_ip           = var.ca_ip
+    domain          = var.domain
+    jwk_provisioner = "admin"
+    cert_subject    = "monitoring"
+    sans            = local.tls_sans
+    cert_dir        = "/opt/stack/traefik/certs"
+    cert_file       = "leaf.crt"
+    key_file        = "leaf.key"
+    secrets_dir     = "/opt/stack/secrets"
+    step_img        = "smallstep/step-cli:0.28.2"
+    reload_cmd      = "docker restart traefik"
+  }) : ""
+  traefik_dynamic = var.use_internal_tls ? templatefile("${path.module}/cloud-init/traefik/dynamic.yaml.tftpl", merge(local.flags, {
+    domain = var.domain
+  })) : ""
 
   grafana_datasources = templatefile("${path.module}/cloud-init/grafana/provisioning/datasources/datasources.yaml.tftpl", merge(local.flags, {
     openobserve_password = local.openobserve_password
@@ -228,6 +260,13 @@ resource "local_file" "server_ci" {
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
     internal_ca_cert  = var.internal_ca_cert
+    # Internal-CA TLS (Phase 2) — issue a leaf at first boot + serve it via Traefik :443, gated on
+    # use_internal_tls so the default `just up` stays plain-HTTP/turnkey. See specs/internal-ca.md.
+    use_internal_tls   = var.use_internal_tls
+    domain             = var.domain
+    stepca_ca_password = var.stepca_ca_password
+    issue_cert_sh      = local.issue_cert_sh
+    traefik_dynamic    = local.traefik_dynamic
     # Docker operator TUIs (wharf/oxker/dive) on the observability hub (the docker VM).
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer

@@ -147,6 +147,50 @@ write_files:
     content: |
       ${indent(6, internal_ca_cert)}
 %{ endif ~}
+%{ if use_internal_tls ~}
+
+  # --- Internal-CA TLS (Phase 2) — issue a Traefik leaf from step-ca + serve it on :443 ----------
+  # step-ca JWK provisioner password (= centralized_pki's stepca_ca_password). |- strips the trailing newline.
+  - path: /opt/stack/secrets/provisioner_password
+    permissions: '0600'
+    content: |-
+      ${stepca_ca_password}
+
+  # Fetch step-ca's root + issue the Traefik leaf via the JWK "admin" provisioner (shared snippet).
+  # Re-runnable: the renew timer calls it again and Traefik's file-watch reloads the rotated cert.
+  - path: /usr/local/sbin/issue-cert.sh
+    permissions: '0755'
+    content: |
+      ${indent(6, issue_cert_sh)}
+
+  # Traefik file-provider dynamic config — HTTPS routers per enabled service + the leaf as default cert.
+  - path: /opt/stack/traefik/dynamic.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, traefik_dynamic)}
+
+  - path: /etc/systemd/system/monitoring-cert-renew.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Reissue the Traefik cert from step-ca
+      After=docker.service
+      Wants=docker.service
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/issue-cert.sh
+
+  - path: /etc/systemd/system/monitoring-cert-renew.timer
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Renew the Traefik cert from step-ca every 12h
+      [Timer]
+      OnBootSec=12h
+      OnUnitActiveSec=12h
+      [Install]
+      WantedBy=timers.target
+%{ endif ~}
 
 runcmd:
   # Enforce UTC late: Multipass injects the host timezone during first boot and can beat the
@@ -166,6 +210,14 @@ runcmd:
   - usermod -aG docker ubuntu  # let the SSH user reach the docker socket (heimdall CLI remote transport)
   - systemctl enable docker
   - systemctl restart docker
+%{ if use_internal_tls ~}
+  # Internal-CA TLS (Phase 2): issue the Traefik leaf from step-ca BEFORE the stack starts (so
+  # Traefik finds the cert on disk), then arm the 12h renew timer. See specs/internal-ca.md.
+  - mkdir -p /opt/stack/traefik/certs /opt/stack/secrets
+  - /usr/local/sbin/issue-cert.sh
+  - systemctl daemon-reload
+  - systemctl enable --now monitoring-cert-renew.timer
+%{ endif ~}
   - docker compose -f /opt/stack/compose.yaml up -d
 %{ if enable_openobserve ~}
   # Seed the app-OTLP streams (otlp_logs logs+traces) and import the OpenObserve dashboards, once

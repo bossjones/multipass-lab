@@ -78,6 +78,16 @@ variable "blocklists" {
   ]
 }
 
+# --- DNS rewrites (opt-in; internal-CA TLS hostname resolution, see specs/internal-ca.md) -----
+variable "dns_rewrites" {
+  description = "AdGuard Home host rewrites (domain -> answer IP) seeded into AdGuardHome.yaml. Used by Phase 2 internal-CA TLS so `grafana.<domain>` etc. resolve to the fronting service's IP for green-lock browsing. Empty (default) = none. `just dns-register <cluster>` populates + hot-pushes these to the running hub."
+  type = list(object({
+    domain = string
+    answer = string
+  }))
+  default = []
+}
+
 # --- Exporter versions -------------------------------------------------------
 
 variable "adguard_exporter_version" {
