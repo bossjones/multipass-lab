@@ -173,9 +173,15 @@ variable "diode_plugin_version" {
 }
 
 variable "diode_tag" {
-  description = "Image tag for the netboxlabs/diode-* server images (DIODE_TAG). 'latest' by default; pin a real release once confirmed arm64-available in Phase 0."
+  description = <<-EOT
+    Image tag for the netboxlabs/diode-{ingester,reconciler,auth} server images (DIODE_TAG, consumed
+    by the Diode .env). Pinned to "2.0.0" — the only tag that exists consistently across all three
+    images (diode-auth lags at 1.12.0 on the 1.13.0 line, so 1.13.0 is NOT a usable single tag) and
+    confirmed linux/arm64-native for the Apple-Silicon lab host. It matches the `release`-branch
+    compose this cluster vendors. See specs/netbox-discovery.md.
+  EOT
   type        = string
-  default     = "latest"
+  default     = "2.0.0"
 }
 
 variable "orb_agent_image" {
@@ -190,11 +196,10 @@ variable "diode_port" {
   default     = 8080
 }
 
-variable "diode_metrics_port" {
-  description = "Host TCP port Diode's Prometheus /metrics is published on (the ingester's telemetry). See diode/docs/metrics.md."
-  type        = number
-  default     = 9090
-}
+# NOTE: the real netboxlabs/diode release publishes NO per-service metrics ports (the diode images
+# are distroless with no EXPOSE and no TELEMETRY_METRICS_PORT; prometheus is scraped internally). The
+# previous representative config invented a 9090 publish; it has been removed so the compose matches
+# the release. Only the nginx ingress (var.diode_port) is published to the host.
 
 # Pinned LAB-ONLY OAuth2 client secrets (Ory Hydra client-credentials). We render Diode's
 # client-credentials.json + .env with these fixed values instead of running quickstart.sh (which

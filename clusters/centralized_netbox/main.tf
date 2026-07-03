@@ -35,17 +35,19 @@ locals {
   diode_env = templatefile("${path.module}/cloud-init/diode/env.tftpl", {
     netbox_port                   = var.netbox_port
     diode_port                    = var.diode_port
-    diode_metrics_port            = var.diode_metrics_port
     diode_tag                     = var.diode_tag
     redis_password                = var.diode_redis_password
     postgres_password             = var.diode_postgres_password
     hydra_system_secret           = var.diode_hydra_system_secret
     diode_to_netbox_client_secret = var.diode_to_netbox_client_secret
   })
-  diode_compose = templatefile("${path.module}/cloud-init/diode/docker-compose.yaml.tftpl", {
-    diode_tag          = var.diode_tag
-    diode_port         = var.diode_port
-    diode_metrics_port = var.diode_metrics_port
+  # The compose file is byte-for-byte the upstream release (values flow from .env via compose
+  # ${VAR} interpolation), so templatefile gets no Tofu vars — see docker-compose.yaml.tftpl.
+  diode_compose = templatefile("${path.module}/cloud-init/diode/docker-compose.yaml.tftpl", {})
+  # Multi-DB initdb script (creates the diode + hydra databases) — the fix for stock postgres
+  # ignoring POSTGRES_MULTIPLE_DATABASES. Rendered with the pinned lab postgres password.
+  diode_postgres_init = templatefile("${path.module}/cloud-init/diode/postgres-init.sh.tftpl", {
+    postgres_password = var.diode_postgres_password
   })
   diode_credentials = templatefile("${path.module}/cloud-init/diode/client-credentials.json.tftpl", {
     diode_ingest_client_secret    = var.diode_ingest_client_secret
@@ -125,12 +127,12 @@ resource "local_file" "server_ci" {
     # enable_discovery }` blocks decide whether they are written. See specs/netbox-discovery.md.
     enable_discovery              = var.enable_discovery
     diode_port                    = var.diode_port
-    diode_metrics_port            = var.diode_metrics_port
     diode_plugin_version          = var.diode_plugin_version
     diode_to_netbox_client_secret = var.diode_to_netbox_client_secret
     netbox_to_diode_client_secret = var.netbox_to_diode_client_secret
     diode_env                     = local.diode_env
     diode_compose                 = local.diode_compose
+    diode_postgres_init           = local.diode_postgres_init
     diode_credentials             = local.diode_credentials
     diode_nginx                   = local.diode_nginx
     plugin_requirements           = local.plugin_requirements

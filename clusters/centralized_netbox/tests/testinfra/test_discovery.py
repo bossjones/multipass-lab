@@ -7,7 +7,9 @@ network_discovery of the Multipass /24 populated NetBox IPAM with a host it did 
 See specs/netbox-discovery.md.
 """
 
+import socket
 import time
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -40,13 +42,27 @@ def test_diode_stack_running(server):
     assert server.run("test -f /var/lib/netbox-bootstrap/discovery-done").rc == 0
     ps = server.run("docker compose -f /opt/diode/docker-compose.yaml ps")
     assert ps.rc == 0, ps.stderr
-    assert "diode-ingester" in ps.stdout
-    assert "diode-reconciler" in ps.stdout
+    # Every long-running service of the real diode release must be up (the two oneshots —
+    # hydra-migrate + diode-auth-bootstrap — exit 0 and so are absent from the running-only listing).
+    for svc in (
+        "ingress-nginx",
+        "diode-ingester",
+        "diode-reconciler",
+        "diode-auth",
+        "hydra",
+        "redis",
+        "postgres",
+    ):
+        assert svc in ps.stdout, f"diode service {svc} not running:\n{ps.stdout}"
 
 
-def test_diode_metrics_reachable(discovery):
-    resp = httpx.get(discovery["diode_metrics_url"], timeout=15)
-    assert resp.status_code == 200, f"Diode /metrics returned {resp.status_code}"
+def test_diode_ingress_reachable(discovery):
+    """The nginx ingress (gRPC + HTTP mux) is the only host-published Diode port. Assert a TCP
+    connection succeeds — the real release publishes no HTTP /metrics port to probe."""
+    parsed = urlparse(discovery["diode_url"])
+    host, port = parsed.hostname, parsed.port
+    with socket.create_connection((host, port), timeout=15):
+        pass
 
 
 def test_agent_running(agent):

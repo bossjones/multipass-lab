@@ -552,11 +552,74 @@ fix) four concrete plugin-build bugs that the hermetic layer can't catch, and co
    1.4.1`, `/api/plugins/diode/` → 200).
 
 **Confirmed working live:** the custom plugin image builds and NetBox serves the Diode plugin API.
-**Still a gap (representative config):** the self-hosted **Diode server stack** did not converge — the
-stock `postgres:16-alpine` ignores `POSTGRES_MULTIPLE_DATABASES` (no `hydra` DB), Hydra's `DSN`
-isn't wired, and `bootstrap-clients.sh` is a hand-rolled approximation. Bringing Diode fully up
-needs the **actual diode-server release's** `docker-compose.yaml` + `.env` (reconciled against the
-pinned-secret model), which is a tracked follow-up — not a quick patch.
+**Was a gap, now reconciled:** the self-hosted **Diode server stack** did not converge under the
+representative config — stock `postgres:16-alpine` ignores `POSTGRES_MULTIPLE_DATABASES` (no `hydra`
+DB), Hydra's `DSN` wasn't wired, and `bootstrap-clients.sh` was a hand-rolled approximation. That
+config has been **replaced with the actual `netboxlabs/diode` release's `docker-compose.yaml` +
+`sample.env`** (reconciled against this repo's pinned-secret model) — see the next section.
+
+## Diode server config reconciled to the upstream release (2026-07-02 follow-up)
+
+The `clusters/centralized_netbox/cloud-init/diode/*.tftpl` files are now the actual
+[`netboxlabs/diode`](https://github.com/netboxlabs/diode) self-hosted deployment
+(`diode-server/docker/`, `release` branch), not a hand-rolled approximation. What changed and why:
+
+- **Real 9-service compose** (`docker-compose.yaml.tftpl`): `ingress-nginx`, `diode-ingester`,
+  `diode-reconciler`, `diode-auth`, `diode-auth-bootstrap`, `hydra`, `hydra-migrate`, `redis`,
+  `postgres`. Values flow from the rendered `.env` via docker-compose `${VAR}` interpolation, so the
+  compose is byte-for-byte upstream (modulo two documented deviations). OpenTofu injects nothing into
+  it (`templatefile(..., {})`); every `$${VAR}` in the `.tftpl` renders to a literal `${VAR}` for
+  compose, and `$$VAR` renders to a literal `$VAR` for a container's runtime shell.
+- **Single postgres, both DBs** — the `hydra` DB gap is fixed. Upstream creates the `diode` + `hydra`
+  databases in one postgres via an inline `POSTGRES_INIT_SCRIPT` env + custom `command` hack. We
+  reproduce the **exact same SQL** but via a mounted `docker-entrypoint-initdb.d` script
+  (`postgres-init.sh.tftpl`, rendered with the pinned lab password) — **deliberate deviation #1**,
+  because the inline hack would need brittle triple-layer OpenTofu→compose→bash escaping. (The task
+  explicitly sanctioned "add an initdb script".)
+- **Hydra fully wired** — `DSN=postgres://hydra:…@postgres:5432/hydra?sslmode=disable…`,
+  `SECRETS_SYSTEM`, `URLS_SELF_ISSUER`, JWT strategies, TTL, and `hydra-migrate` running
+  `migrate sql up -e --yes` — all from upstream.
+- **OAuth2 bootstrap is upstream's, not hand-rolled** — the `diode-auth` image ships
+  `/etc/config/oauth2/bootstrap-clients.sh` (registers the 3 pinned clients into Hydra via the Ory
+  **Hydra CLI**, `token_endpoint_auth_method=client_secret_post`, idempotent). The compose invokes
+  it against the mounted `oauth2/client/client-credentials.json`; we no longer ship a bootstrap
+  script. The 3 clients/scopes (`diode-ingest` → `diode:ingest`, `diode-to-netbox` →
+  `netbox:read netbox:write`, `netbox-to-diode` → `diode:read diode:write`) already matched upstream.
+- **Real nginx mux** (`nginx.conf.tftpl`, verbatim upstream, mounted at `conf.d/default.conf`):
+  gRPC `/diode/diode.v1.IngesterService` + `/diode/diode.v1.ReconcilerService` → ingester/reconciler
+  `:8081`, HTTP `/diode/auth` → diode-auth `:8080`, both gRPC paths gated by an `auth_request`
+  subrequest to diode-auth `/introspect`. The agent target stays `grpc://<server>:8080/diode`.
+- **`DIODE_TAG` pinned to `2.0.0`** — the only tag consistent across all three diode images
+  (diode-auth lags at `1.12.0` on the `1.13.0` line, so `1.13.0` is not a single usable tag) and
+  confirmed `linux/arm64`-native (as are `orb-agent`, `oryd/hydra:v26.2.0`,
+  `redis/redis-stack-server`, `postgres:16-alpine`, `nginx` — the whole stack runs on Apple Silicon).
+- **No metrics ports** — **deliberate deviation #2**: the real release publishes none (the diode
+  images are distroless, no `EXPOSE`, no `TELEMETRY_METRICS_PORT`; prometheus is scraped internally).
+  The representative config's invented `9090:9090` publishes and the `diode_metrics_port` variable /
+  `diode_metrics_url` output are removed; only the nginx ingress (`var.diode_port`) is host-published.
+  `test_discovery.py` now asserts Diode health via ingress TCP-reachability + `docker compose ps`
+  showing every long-running service, not an HTTP `/metrics` probe.
+
+### Version-triple decision (kept NetBox 4.4.5 + plugin 1.4.1)
+
+Diode server ↔ plugin ↔ NetBox is a three-way version constraint. The newest diode-server (2.0.0,
+May 2026) pairs most closely with plugin ~1.12/1.13 — but those require **NetBox ≥ 4.6**, past the
+v1-token cliff (4.5), which would destroy the pinned-token model the whole cluster depends on. So the
+coherent choice under "keep pinnable v1 tokens" (NetBox ≤ 4.4.x) is:
+
+- **Kept `netbox_docker_ref_discovery = 3.4.1` (NetBox 4.4.5) + `diode_plugin_version = 1.4.1`** — the
+  only combination **live-proven to load** (`/api/plugins/diode/` → 200). The compat table
+  ([plugin README]) is `NetBox ≥ 4.4.0 → 1.4.1`, `≥ 4.4.10 → 1.7.0`, `≥ 4.6.0 → 1.12.0`.
+- **Did *not* bump to plugin 1.7.0**: it needs NetBox ≥ 4.4.10, and the netbox-docker image tag does
+  not encode the patch level (`v4.4-3.4.2`'s bundled NetBox patch is not confirmable from the tag),
+  so that path risks the *exact* silent-plugin-non-load already hit live with 1.7.0 on 4.4.5.
+- **Fallback if live ingest fails** (server 2.0.0 reconciler ↔ plugin 1.4.1 API drift): all three
+  pins are variables — try an older `diode_tag`, or bump `netbox_docker_ref_discovery` to a
+  confirmed NetBox ≥ 4.4.10 (< 4.5) ref **and** `diode_plugin_version = 1.7.0` **together**. The
+  OAuth2 client-credentials reconcile path has been stable since plugin 1.x / NetBox 4.2.3, so 1.4.1
+  is expected to interoperate; this is the one thing only a live bring-up can confirm.
+
+[plugin README]: https://github.com/netboxlabs/diode-netbox-plugin
 
 ## Notes
 

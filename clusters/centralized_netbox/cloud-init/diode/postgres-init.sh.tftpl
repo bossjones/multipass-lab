@@ -1,0 +1,20 @@
+#!/bin/bash
+# Diode postgres init — creates the `diode` and `hydra` databases + owners in the single shared
+# postgres instance. This is the reconciliation for the known gap where stock postgres:16-alpine
+# ignores POSTGRES_MULTIPLE_DATABASES, so the `hydra` DB was never created. It reproduces the exact
+# SQL from the upstream netboxlabs/diode compose's inline init script, but as a mounted
+# /docker-entrypoint-initdb.d script (rendered by OpenTofu with the pinned lab password) rather than
+# upstream's inline POSTGRES_INIT_SCRIPT env hack — same result, no triple-layer escaping.
+# Runs once, on first postgres init (empty data dir). See specs/netbox-discovery.md.
+#
+# $POSTGRES_USER / $POSTGRES_DB are the postgres image's own superuser env (set in the compose);
+# the password is a LAB-ONLY pinned value injected by OpenTofu at render time.
+set -euo pipefail
+
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+  -c "CREATE USER diode WITH PASSWORD '${postgres_password}';" \
+  -c "CREATE DATABASE diode OWNER diode;" \
+  -c "GRANT ALL PRIVILEGES ON DATABASE diode TO diode;" \
+  -c "CREATE USER hydra WITH PASSWORD '${postgres_password}';" \
+  -c "CREATE DATABASE hydra OWNER hydra;" \
+  -c "GRANT ALL PRIVILEGES ON DATABASE hydra TO hydra;"
