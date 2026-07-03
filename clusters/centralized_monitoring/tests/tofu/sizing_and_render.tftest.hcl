@@ -351,6 +351,14 @@ run "openobserve_off_omits_remote_write" {
     condition     = !strcontains(local_file.server_ci.content, "http://openobserve:5080")
     error_message = "disabling OpenObserve must omit every OpenObserve endpoint (remote_write + OTel exporters)"
   }
+  # ...and the dashboard seed/import machinery (script + dropped JSON) must be gone too.
+  assert {
+    condition = !anytrue([for marker in [
+      "/usr/local/sbin/openobserve-provision.sh",
+      "/opt/stack/openobserve/dashboards/",
+    ] : strcontains(local_file.server_ci.content, marker)])
+    error_message = "disabling OpenObserve must omit the dashboard seed/import script + dropped dashboards"
+  }
 }
 
 run "k0s_log_shipping_off_omits_agent" {
@@ -537,6 +545,36 @@ run "grafana_dashboards_render" {
   assert {
     condition     = strcontains(local_file.server_ci.content, "foldersFromFilesStructure: true")
     error_message = "dashboard provider must set foldersFromFilesStructure: true"
+  }
+}
+
+run "openobserve_dashboards_render" {
+  command = plan
+
+  # OpenObserve dashboards (default-on) are spliced under their folder subdirs and the seed+import
+  # script + its runcmd invocation are present.
+  assert {
+    condition = alltrue([for marker in [
+      "/opt/stack/openobserve/dashboards/Infrastructure/traces-overview.json",
+      "/opt/stack/openobserve/dashboards/LogAnalysis/log-overview.json",
+      "/opt/stack/openobserve/dashboards/Correlation/cause-effect.json",
+      "/usr/local/sbin/openobserve-provision.sh",
+      "openobserve-provision.sh || true",
+    ] : strcontains(local_file.server_ci.content, marker)])
+    error_message = "default render must embed the OpenObserve dashboards + seed/import script + runcmd"
+  }
+
+  # The `title` filter must keep the non-dashboard log-sample JSON (top-level arrays under logs/)
+  # out of the cloud-init entirely — they'd crash the importer.
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "/opt/stack/openobserve/dashboards/logs/")
+    error_message = "non-dashboard JSON (logs/*.json arrays) must be filtered out, not spliced in"
+  }
+
+  # The embedded script + gz+b64 dashboards must keep the cloud-init valid YAML.
+  assert {
+    condition     = can(yamldecode(local_file.server_ci.content))
+    error_message = "rendered server cloud-init must be valid YAML"
   }
 }
 
