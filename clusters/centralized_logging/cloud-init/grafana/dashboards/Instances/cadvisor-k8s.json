@@ -8,9 +8,10 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "id": 1,
       "title": "Container CPU (rate)",
+      "description": "Grouped by pod/container (readable) rather than by name — the cAdvisor name label is empty on the k0s containerd node.",
       "type": "timeseries",
       "targets": [
-        { "expr": "sum(rate(container_cpu_usage_seconds_total[5m])) by (name)", "legendFormat": "{{name}}", "refId": "A" }
+        { "expr": "sum(rate(container_cpu_usage_seconds_total{container!=\"\",container!=\"POD\"}[5m])) by (namespace, pod, container)", "legendFormat": "{{namespace}}/{{pod}}/{{container}}", "refId": "A" }
       ]
     },
     {

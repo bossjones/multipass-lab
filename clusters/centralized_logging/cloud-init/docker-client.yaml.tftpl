@@ -190,7 +190,14 @@ write_files:
             format: ["prometheus"]
           honor_labels: true
           static_configs:
-            - targets: ["${central_ip}:19999", "__SELF_IP__:19999", "${k0s_ip}:19999"]
+            # Friendly `instance` labels for the Netdata dashboards' $instance picker;
+            # netdata emits no `instance` of its own so honor_labels:true keeps these.
+            - targets: ["${central_ip}:19999"]
+              labels: { instance: "logging-central" }
+            - targets: ["__SELF_IP__:19999"]
+              labels: { instance: "logging-docker" }
+            - targets: ["${k0s_ip}:19999"]
+              labels: { instance: "logging-k0s" }
 %{ endif ~}
 
   - path: /opt/stack/alertmanager.yml

@@ -40,6 +40,7 @@ dashboards imported from [grafana.com](https://grafana.com/grafana/dashboards/).
 | `Platform` | The monitoring stack itself (Prometheus, Alertmanager, Blackbox). |
 | `Kubernetes` | k0s node / cluster state (cAdvisor + kube-state-metrics). |
 | `Logging` | syslog-ng pipeline health (logging cluster only). |
+| `Netdata` | Real-time host + container views from the scraped `netdata_*` series. |
 
 ## Dashboard inventory
 
@@ -50,9 +51,36 @@ dashboards imported from [grafana.com](https://grafana.com/grafana/dashboards/).
 | `Instances/instance-overview.json` | Instance Overview | Flagship. `$instance` variable; up/uptime, CPU busy %, load 1/5/15, mem/swap used %, per-mount disk used %, disk IO, network RX/TX, filesystem inodes, running containers, failed systemd units. |
 | `Instances/processes-systemd.json` | Processes & systemd | `$instance` variable; top processes by CPU and RSS (`namedprocess_namegroup_*`), open FDs, systemd unit states (`node_systemd_unit_state`). |
 | `Logging/logging-pipeline.json` | Logging Pipeline | (logging cluster) syslog-ng ingested/dropped/queued from the textfile collector, per-client last-received freshness + file size from filestat_exporter. |
+| `Netdata/netdata-fleet.json` | Netdata — Fleet | `$instance` (multi); per-second CPU busy %, RAM used %, load1, root-FS used %, net rx/tx across every VM from the scraped `netdata_*` series. |
+| `Netdata/netdata-instance.json` | Netdata — Instance | `$instance`; realtime deep dive — CPU by mode (stacked), memory breakdown, per-mount disk, disk I/O, per-interface net, load. |
+| `Netdata/netdata-containers.json` | Netdata — Containers | `$instance` + `$container`; per-container CPU/mem/net/PIDs/throttling keyed on netdata's resolved **`cgroup_name`** + **`image`** labels — never a container id. |
 
 The two original starter dashboards are retained (moved to `Instances/`) with their
 datasource uid corrected.
+
+**Netdata series names (verified live, netdata v2.10.3).** The `netdata_*` metric names are
+version-dependent — panels were built against a live `curl :19999/api/v1/allmetrics?format=prometheus`
+dump (mirroring the `syslogng_*` caution below). Key contexts: `netdata_system_cpu_percentage_average`
+(`dimension`), `netdata_system_ram_MiB_average` (`dimension` free/used/cached/buffers),
+`netdata_system_load_load_average`, `netdata_disk_space_GiB_average` (`family`=mount),
+`netdata_disk_io_KiB_persec_average` (`device`), `netdata_net_net_kilobits_persec_average` (`family`=iface),
+and the cgroup family `netdata_cgroup_{cpu_percentage,mem_usage_MiB,net_net_kilobits_persec,pids_current_pids,throttled_percentage}_average`,
+all carrying `cgroup_name` + `image`. Note: **used-% panels wrap the numerator in the same
+`sum by (...)` as the denominator** — netdata's per-dimension series carry extra `chart`/`family`/`dimension`
+labels, so `metric{dimension="used"} / sum by (instance)(metric)` matches nothing; aggregate both sides.
+
+### Identity: never key a panel on a container id
+
+Panels identify workloads by the friendliest available label, never a raw cgroup path or
+container hash. Priority: **compose service / k8s `namespace`+`pod`+`container` / process `groupname`
+/ netdata `cgroup_name` > `name` > `id`.** Concretely:
+- `Netdata/netdata-containers.json` uses netdata's resolved `cgroup_name` (`stack-grafana-1`) + `image`.
+- `Instances/cadvisor-k8s.json` groups `by (namespace, pod, container)` with `container!="",container!="POD"`
+  (the cAdvisor `name` label is **empty** on the k0s containerd node — the original `by (name)` showed nothing).
+- `Kubernetes/kubernetes.json` (community import) already groups `by (pod, container)` with readable
+  legends; its `id="/"` selectors are legitimate node-root-cgroup aggregates, left intact.
+- `Instances/processes-systemd.json` keys processes on `groupname`; docker `Infrastructure/cadvisor.json`
+  uses the friendly Docker container `name`.
 
 ### Community imports (grafana.com — datasource re-pointed to `uid: prometheus`)
 
@@ -65,8 +93,9 @@ datasource uid corrected.
 | `Platform/alertmanager.json` | Alertmanager | [9578](https://grafana.com/grafana/dashboards/9578-alertmanager/) | Platform |
 | `Kubernetes/kubernetes.json` | Kubernetes (cAdvisor + KSM) | [15398](https://grafana.com/grafana/dashboards/15398-kubernetes-monitor/) (fallback [315](https://grafana.com/grafana/dashboards/315-kubernetes-cluster-monitoring-via-prometheus/)) | Kubernetes |
 
-**Not included:** Netdata (monitoring-k0s only) already exposes a full self-hosted UI on
-`:19999`; a Prometheus-scrape dashboard duplicates it for little value.
+**Netdata:** each VM still exposes its full self-hosted UI on `:19999`, but the scraped
+`netdata_*` series are now also surfaced in Grafana (the `Netdata/` folder above) so a single
+pane covers the whole fleet — including the readable per-container view. See `specs/dashboard-update.md`.
 
 Import adaptation recipe (applied programmatically, see `scripts/`/notes below):
 1. Delete `__inputs` and `__requires`.

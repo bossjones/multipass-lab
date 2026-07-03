@@ -1,0 +1,145 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": ["netdata", "instance", "realtime"],
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "label": "Instance",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(netdata_system_uptime_seconds_average, instance)",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(netdata_system_uptime_seconds_average, instance)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2, "sort": 1, "includeAll": false, "multi": false, "current": {}, "options": []
+      }
+    ]
+  },
+  "time": { "from": "now-15m", "to": "now" },
+  "title": "Netdata — Instance",
+  "uid": "netdata-instance",
+  "version": 1,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "Uptime",
+      "type": "stat",
+      "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": { "colorMode": "none", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "netdata_system_uptime_seconds_average{instance=~\"$instance\", dimension=\"uptime\"}", "instant": true, "legendFormat": "uptime", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "title": "CPU busy",
+      "type": "gauge",
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "sum(netdata_system_cpu_percentage_average{instance=~\"$instance\", dimension!=\"idle\"})", "instant": true, "legendFormat": "busy", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "title": "RAM used",
+      "type": "gauge",
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 80 }, { "color": "red", "value": 90 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "100 * sum(netdata_system_ram_MiB_average{instance=~\"$instance\", dimension=\"used\"}) / sum(netdata_system_ram_MiB_average{instance=~\"$instance\"})", "instant": true, "legendFormat": "ram", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "title": "Load 1m",
+      "type": "stat",
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": { "colorMode": "none", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "netdata_system_load_load_average{instance=~\"$instance\", dimension=\"load1\"}", "instant": true, "legendFormat": "load1", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "id": 5,
+      "title": "CPU by mode (per-second)",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "percent", "custom": { "fillOpacity": 30, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "targets": [
+        { "expr": "netdata_system_cpu_percentage_average{instance=~\"$instance\", dimension!=\"idle\"}", "legendFormat": "{{dimension}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "id": 6,
+      "title": "Memory breakdown",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "mbytes", "custom": { "fillOpacity": 20, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "targets": [
+        { "expr": "netdata_system_ram_MiB_average{instance=~\"$instance\"}", "legendFormat": "{{dimension}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "id": 7,
+      "title": "Disk space used % by mount",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+      "targets": [
+        { "expr": "100 * sum by (family) (netdata_disk_space_GiB_average{instance=~\"$instance\", dimension=\"used\"}) / sum by (family) (netdata_disk_space_GiB_average{instance=~\"$instance\"})", "legendFormat": "{{family}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "id": 8,
+      "title": "Disk I/O by device",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "KiBs" }, "overrides": [] },
+      "targets": [
+        { "expr": "netdata_disk_io_KiB_persec_average{instance=~\"$instance\"}", "legendFormat": "{{device}} {{dimension}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "id": 9,
+      "title": "Network by interface",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "Kbits" }, "overrides": [] },
+      "targets": [
+        { "expr": "netdata_net_net_kilobits_persec_average{instance=~\"$instance\"}", "legendFormat": "{{family}} {{dimension}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "id": 10,
+      "title": "Load average",
+      "type": "timeseries",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "expr": "netdata_system_load_load_average{instance=~\"$instance\"}", "legendFormat": "{{dimension}}", "refId": "A" }
+      ]
+    }
+  ]
+}

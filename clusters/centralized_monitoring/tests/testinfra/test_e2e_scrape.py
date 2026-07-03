@@ -106,6 +106,9 @@ def test_grafana_dashboards_provisioned(server):
         "cadvisor",
         "alertmanager",
         "kubernetes-monitor",
+        "netdata-fleet",
+        "netdata-instance",
+        "netdata-containers",
     }
     missing = expected - uids
     assert not missing, f"dashboards not provisioned: {missing} (have {uids})"
@@ -116,3 +119,30 @@ def test_grafana_dashboards_provisioned(server):
         "http://admin:admin@localhost:3000/api/dashboards/uid/instance-overview"
     )
     assert res.stdout.strip() == "200", f"instance-overview not loadable: {res.stdout}"
+
+
+def test_netdata_series_present_for_dashboards(server, enabled_exporters):
+    """The Netdata dashboards' underlying series exist in Prometheus, so panels populate.
+
+    Checks a host-level series (fleet/instance dashboards) and the cgroup series the
+    Containers dashboard keys on — the latter proves netdata resolved a readable
+    `cgroup_name` label (never a container id). Skips when netdata is disabled.
+    """
+    if "enable_netdata" not in enabled_exporters:
+        pytest.skip("enable_netdata disabled")
+
+    host_cpu = _curl_json(
+        server,
+        "http://localhost:9090/api/v1/query?query=netdata_system_cpu_percentage_average",
+    )
+    assert host_cpu.get("data", {}).get("result"), "no netdata host CPU series"
+
+    cgroup = _curl_json(
+        server,
+        "http://localhost:9090/api/v1/query?query=netdata_cgroup_cpu_percentage_average",
+    )
+    results = cgroup.get("data", {}).get("result", [])
+    assert results, "no netdata cgroup CPU series"
+    assert any(r["metric"].get("cgroup_name") for r in results), (
+        "netdata cgroup series carry no cgroup_name label (container identity broken)"
+    )

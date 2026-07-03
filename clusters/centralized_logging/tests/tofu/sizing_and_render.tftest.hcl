@@ -331,8 +331,17 @@ run "docker_prometheus_scrape_and_grafana_render" {
     condition = alltrue([for p in [
       "/opt/stack/grafana/dashboards/Instances/instance-overview.json",
       "/opt/stack/grafana/dashboards/Logging/logging-pipeline.json",
+      "/opt/stack/grafana/dashboards/Netdata/netdata-fleet.json",
+      "/opt/stack/grafana/dashboards/Netdata/netdata-instance.json",
+      "/opt/stack/grafana/dashboards/Netdata/netdata-containers.json",
     ] : strcontains(local_file.docker_ci.content, p)])
-    error_message = "docker Grafana must splice the provisioned dashboards (overview + logging pipeline)"
+    error_message = "docker Grafana must splice the provisioned dashboards (overview + logging pipeline + netdata)"
+  }
+  # Friendly `instance` labels so the Netdata dashboards' $instance picker reads a hostname.
+  assert {
+    condition = alltrue([for l in ["logging-central", "logging-docker", "logging-k0s"] :
+    strcontains(local_file.docker_ci.content, l)])
+    error_message = "logging-netdata scrape targets must carry friendly instance labels"
   }
   assert {
     condition     = strcontains(local_file.docker_ci.content, "encoding: gz+b64")

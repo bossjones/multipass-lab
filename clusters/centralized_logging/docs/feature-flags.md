@@ -64,6 +64,12 @@ and `cAdvisor` on purpose — Netdata adds per-second resolution and a zero-conf
 dashboard on `:19999`. Live coverage: [`test_netdata.py`](../tests/testinfra/test_netdata.py)
 (service running + `:19999` listening + Prometheus endpoint + the `logging-netdata` target `up`).
 
+The scraped `netdata_*` series are also surfaced in this cluster's Grafana under the **`Netdata/`**
+folder (`netdata-fleet`, `netdata-instance`, `netdata-containers`); the scrape targets carry friendly
+`instance` labels (`logging-central`/`logging-docker`/`logging-k0s`) so the dashboards' `$instance`
+picker reads a hostname. The container view keys on netdata's resolved `cgroup_name`, not an id. See
+`specs/dashboard-update.md` and `specs/dashboards.md`.
+
 ## `enabled_exporters` and the test suite
 
 `outputs.tf` exposes `enabled_exporters = sort([for k, v in local.flags : k if v])` — a sorted
