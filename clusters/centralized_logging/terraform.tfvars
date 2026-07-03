@@ -29,5 +29,5 @@ docker_client = {
 # Uncomment to deploy Coroot onto the k0s node and expose its UI via ingress. Both default off.
 enable_coroot   = true
 enable_ingress  = true
-coroot_host     = "coroot.local"  # ingress Host header for the UI (or add to /etc/hosts)
-coroot_nodeport = 30080           # browser-friendly UI URL: http://<k0s_ip>:30080
+coroot_host     = "coroot.local" # ingress Host header for the UI (or add to /etc/hosts)
+coroot_nodeport = 30080          # browser-friendly UI URL: http://<k0s_ip>:30080
