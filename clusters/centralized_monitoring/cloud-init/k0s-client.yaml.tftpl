@@ -198,6 +198,15 @@ runcmd:
 %{ if dns_server != "" ~}
   # Cross-cluster DNS — point this VM's resolver at the centralized_dns AdGuard Home hub.
   - systemctl restart systemd-resolved
+  # Wait until the new resolver actually answers before the k0s install curls over the network —
+  # otherwise a boot-time race with the AdGuard hub warming up makes `curl https://get.k0s.sh` fail
+  # ("Could not resolve host: get.k0s.sh"), k0s never installs, and the `k0s .../readyz` wait loop
+  # below spins forever. Mirrors the docker-pull gate in centralized_logging/docker-client.yaml.tftpl.
+  - |
+    for i in $(seq 1 30); do
+      getent hosts get.k0s.sh >/dev/null 2>&1 && break
+      sleep 2
+    done
 %{ endif ~}
 %{ if internal_ca_cert != "" ~}
   # Fleet-wide trust — install the internal root CA into the OS trust store. See specs/internal-ca.md.
@@ -205,7 +214,12 @@ runcmd:
 %{ endif ~}
   # --- single-node k0s (controller + worker in one). The kubelet read-only port (10255,
   # http, no auth) is enabled so the server can scrape kubelet/cAdvisor without a token.
-  - curl -sSLf https://get.k0s.sh | sh
+  # Retry the installer so a transient DNS/network blip on first boot can't leave k0s uninstalled.
+  - |
+    for i in $(seq 1 5); do
+      curl -sSLf https://get.k0s.sh | sh && break
+      echo "k0s install attempt $i failed; retrying"; sleep 5
+    done
   - /usr/local/bin/k0s install controller --single --kubelet-extra-args="--read-only-port=10255"
   - /usr/local/bin/k0s start
   # Debug CLIs (unconditional): k9s (terminal k8s UI) + stern (multi-pod log tail).

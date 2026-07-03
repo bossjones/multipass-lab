@@ -200,6 +200,14 @@ runcmd:
 %{ if dns_server != "" ~}
   # Cross-cluster DNS — point this VM's resolver at the centralized_dns AdGuard Home hub.
   - systemctl restart systemd-resolved
+  # Wait until the new resolver actually answers before the docker install + image pulls below —
+  # otherwise a boot-time race with the AdGuard hub warming up makes them fail (SERVFAIL, no retry),
+  # leaving the stack empty. Mirrors the gate in centralized_logging/docker-client.yaml.tftpl.
+  - |
+    for i in $(seq 1 30); do
+      getent hosts registry-1.docker.io >/dev/null 2>&1 && break
+      sleep 2
+    done
 %{ endif ~}
 %{ if internal_ca_cert != "" ~}
   # Fleet-wide trust — install the internal root CA into the OS trust store. See specs/internal-ca.md.
