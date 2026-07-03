@@ -127,3 +127,23 @@ def test_logs_tail_without_follow_single_window(config_file, httpserver):
 def test_logs_search_requires_stream_or_sql(config_file):
     result = _invoke(["logs", "search"], config_file)
     assert result.exit_code != 0
+
+
+def test_logs_tail_autodiscovers_logs_streams(config_file, httpserver):
+    httpserver.expect_request("/api/default/streams").respond_with_json(
+        {"list": [{"name": "container_logs", "stream_type": "logs"}]}
+    )
+    httpserver.expect_request("/api/default/_search", method="POST").respond_with_json(
+        {"hits": [{"_timestamp": 2_000_000_000_000_000, "log": "hello world"}]}
+    )
+    result = _invoke(["logs", "tail", "--since", "5m"], config_file, httpserver)
+    assert result.exit_code == 0
+    assert "container_logs" in result.output  # status line
+    assert "hello world" in result.output
+
+
+def test_logs_tail_no_logs_streams_exits_nonzero(config_file, httpserver):
+    httpserver.expect_request("/api/default/streams").respond_with_json({"list": []})
+    result = _invoke(["logs", "tail", "--since", "5m"], config_file, httpserver)
+    assert result.exit_code != 0
+    assert "no logs streams" in result.output

@@ -69,9 +69,9 @@ ooctl logs search --stream default --since 1h [--limit 100] [--json]
 ooctl logs search --sql 'SELECT * FROM default ORDER BY _timestamp DESC'
 
 # live tail
-ooctl logs tail --stream default                 # one window then exit
-ooctl logs tail -f --stream default              # follow new logs
-ooctl logs tail -f --stream app --stream sys     # tail multiple streams at once
+ooctl logs tail                                  # auto-discover logs streams, one window then exit
+ooctl logs tail -f                               # auto-discover + follow new logs
+ooctl logs tail -f --stream app --stream sys     # tail specific streams at once
 ooctl logs tail -f --since 30s --interval 1 --json
 ```
 
@@ -94,7 +94,7 @@ resolves the server IP from `tofu output` and injects it via `$OOCTL_ENDPOINT`:
 # from repo root
 just up centralized_monitoring
 # from tools/ooctl
-just tail                 # tail -f the default stream against the live cluster
+just tail                 # tail -f every logs stream (auto-discovered) against the live cluster
 just search default 'SELECT * FROM default'
 just streams
 just health

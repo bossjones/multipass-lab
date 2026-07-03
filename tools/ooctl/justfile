@@ -32,7 +32,7 @@ test-int:
 _endpoint:
     @echo "http://$(tofu -chdir={{repo_root}}/clusters/centralized_monitoring output -raw server_ipv4):5080"
 
-# tail live logs, following:  just tail            (or: just tail dev)
+# tail live logs, following (auto-discovers logs streams):  just tail   (or: just tail dev)
 tail PROFILE="default" *ARGS:
     OOCTL_ENDPOINT="$(just _endpoint)" uv run ooctl --config {{config}} --profile {{PROFILE}} logs tail -f {{ARGS}}
 

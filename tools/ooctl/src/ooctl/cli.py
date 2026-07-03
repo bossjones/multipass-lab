@@ -5,7 +5,7 @@ default; see ``example.config.yaml``). Select a profile with ``--profile`` and
 override the endpoint at runtime with ``$OOCTL_ENDPOINT``.
 
     ooctl configure list
-    ooctl logs tail -f --profile default --stream default
+    ooctl logs tail -f --profile default            # auto-discovers logs streams
     ooctl logs search --sql 'SELECT * FROM default' --since 1h
 """
 
@@ -258,14 +258,12 @@ def logs_tail(
     limit: int = typer.Option(200, "--limit", help="max rows per poll"),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
-    """Tail logs. Without -f, prints one window and exits; with -f, follows live."""
+    """Tail logs. Without -f, prints one window and exits; with -f, follows live.
+
+    With neither --stream nor --sql, auto-discovers every logs-type stream and
+    tails them concurrently.
+    """
     profile = _resolve(ctx)
-    if stream:
-        streams = list(stream)
-    elif sql:
-        streams = ["query"]  # single producer driven by --sql
-    else:
-        streams = ["default"]
     since_micros = _parse_since(since)
 
     def _on_hit(hit: dict[str, Any]) -> None:
@@ -273,6 +271,16 @@ def logs_tail(
 
     async def _run() -> None:
         async with _client(profile) as c:
+            if stream:
+                streams = list(stream)
+            elif sql:
+                streams = ["query"]  # single producer driven by --sql
+            else:
+                discovered = await c.streams(stream_type="logs")
+                streams = [s["name"] for s in discovered if s.get("name")]
+                if not streams:
+                    _die("no logs streams found to tail; pass --stream or --sql", code=2)
+                console.print(f"[dim]tailing: {', '.join(streams)}[/dim]")
             await run_tail(
                 c,
                 streams=streams,
