@@ -73,3 +73,43 @@ run "otlp_push_renders_agent_conf" {
     error_message = "services OTLP agent must ship to the centralized_pki_services stream"
   }
 }
+
+# --- default: cross-cluster DNS off -> no resolved.conf.d drop-in rendered ----
+run "dns_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = !strcontains(local_file.ca_ci.content, "resolved.conf.d/99-centralized-dns.conf")
+    error_message = "with dns_server unset, ca cloud-init must NOT render the systemd-resolved drop-in"
+  }
+  assert {
+    condition     = !strcontains(local_file.services_ci.content, "resolved.conf.d/99-centralized-dns.conf")
+    error_message = "with dns_server unset, services cloud-init must NOT render the systemd-resolved drop-in"
+  }
+}
+
+# --- DNS on: systemd-resolved drop-in renders with the AdGuard resolver IP ----
+run "dns_on_renders_resolved_conf" {
+  command = plan
+
+  variables {
+    dns_server = "10.7.7.7"
+  }
+
+  assert {
+    condition     = strcontains(local_file.ca_ci.content, "resolved.conf.d/99-centralized-dns.conf")
+    error_message = "ca cloud-init must drop the systemd-resolved config when dns_server is set"
+  }
+  assert {
+    condition     = strcontains(local_file.ca_ci.content, "DNS=10.7.7.7")
+    error_message = "ca systemd-resolved drop-in must point at the injected AdGuard resolver IP"
+  }
+  assert {
+    condition     = strcontains(local_file.services_ci.content, "resolved.conf.d/99-centralized-dns.conf")
+    error_message = "services cloud-init must drop the systemd-resolved config when dns_server is set"
+  }
+  assert {
+    condition     = strcontains(local_file.services_ci.content, "DNS=10.7.7.7")
+    error_message = "services systemd-resolved drop-in must point at the injected AdGuard resolver IP"
+  }
+}

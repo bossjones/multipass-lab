@@ -28,6 +28,13 @@ variable "ssh_pubkey" {
   default     = ""
 }
 
+# --- Cross-cluster (opt-in) --------------------------------------------------
+variable "dns_server" {
+  description = "IP (or host[:port]) of the centralized_dns AdGuard Home resolver. Non-empty -> every VM points systemd-resolved at it at first boot. Empty (default) = image default resolver. See specs/cross-cluster.md."
+  type        = string
+  default     = ""
+}
+
 # --- Fidelity model ----------------------------------------------------------
 # `exact` (default): run the appliances' ACTUAL Debian packages in containers —
 #   syslog-ng 3.28.1 (bullseye, native arm64) + rsyslog 5.8.11 (wheezy, emulated amd64),

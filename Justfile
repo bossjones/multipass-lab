@@ -106,47 +106,63 @@ destroy-all:
     exit "$rc"
 
 # Bring the whole fleet up ALREADY WIRED for cross-cluster telemetry (specs/cross-cluster.md):
-# every consumer cluster ships logs to centralized_logging + pushes host logs to
-# centralized_monitoring's OpenObserve, and Prometheus scrapes every consumer VM.  just up-connected
+# every VM resolves through centralized_dns's AdGuard Home, consumer clusters ship logs to
+# centralized_logging + push host logs to centralized_monitoring's OpenObserve, and Prometheus
+# scrapes every VM.  just up-connected
 #
-# Ordering resolves the logging<->monitoring cycle: logging (pure sink) and monitoring (OTLP/
-# OpenObserve sink) come up FIRST so consumers learn both hub IPs and wire all three signals in a
-# single boot (stable IPs, no recreate). Consumer scrape targets are then HOT-PUSHED into the
-# already-running Prometheus (scp the re-rendered prometheus.yml + restart the container) so the
-# monitoring VM is never recreated — which would churn the IP consumers push OTLP to.
+# Ordering: centralized_dns comes up FIRST (pure :53 sink, depends on nobody) so every later VM
+# learns the DNS hub IP and points its resolver at AdGuard at first boot. Then logging (pure sink)
+# and monitoring (OTLP/OpenObserve sink) come up so consumers learn both hub IPs and wire all
+# signals in a single boot (stable IPs, no recreate). The DNS hub booted before the telemetry hubs,
+# so its OWN log-shipping + the consumer scrape targets are HOT-PUSHED afterwards — the monitoring
+# and DNS VMs are never recreated, so the IPs consumers push OTLP to / resolve against never churn.
 up-connected:
     #!/usr/bin/env bash
     set -uo pipefail
+    dns=centralized_dns
     logging=centralized_logging
     monitoring=centralized_monitoring
 
-    # 1. logging hub first — pure sink, depends on nobody.
+    # 0. DNS hub FIRST — pure :53 sink. No telemetry targets yet (the hubs don't exist).
+    echo "=== up-connected: dns hub ($dns) ==="
+    rm -f {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json 2>/dev/null || true
+    just up "$dns"
+    dns_ip="$(tofu -chdir={{cluster_root}}/$dns output -raw server_ipv4)"
+    echo "    AdGuard Home resolver: $dns_ip:53"
+    # health-gate: do NOT wire anyone until AdGuard actually answers, else a dependent VM switches
+    # its resolver at boot and cannot resolve archive.ubuntu.com. `dig` ships with macOS.
+    echo "    waiting for AdGuard Home to answer DNS on $dns_ip:53 ..."
+    for i in $(seq 1 60); do
+      if dig +time=2 +tries=1 @"$dns_ip" example.com >/dev/null 2>&1; then break; fi
+      sleep 5
+    done
+
+    # 1. logging hub — pure sink; now resolves via DNS.
     echo "=== up-connected: logging hub ($logging) ==="
+    jq -n --arg dns "$dns_ip" '{dns_server: $dns}' \
+      > {{cluster_root}}/$logging/.cross-cluster.auto.tfvars.json
     just up "$logging"
     log_ip="$(tofu -chdir={{cluster_root}}/$logging output -raw central_ipv4)"
     echo "    syslog-ng collector: $log_ip:514"
 
-    # 2. monitoring hub next — brings up OpenObserve/OTLP + Prometheus so consumers can push. The
-    #    logging hub is already up, so the monitoring hub ALSO ships its OWN OS logs there at first
-    #    boot (log_shipping_target). No extra_scrape_targets yet — consumer IPs aren't known until
-    #    step 3, and they're hot-pushed in step 4 without recreating this VM.
+    # 2. monitoring hub — resolves via DNS + self-ships its OWN OS logs (logging is already up).
     echo "=== up-connected: monitoring hub ($monitoring) ==="
-    jq -n --arg log "$log_ip:514" '{log_shipping_target: $log}' \
+    jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" '{dns_server: $dns, log_shipping_target: $log}' \
       > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
     just up "$monitoring"
     mon_ip="$(tofu -chdir={{cluster_root}}/$monitoring output -raw server_ipv4)"
     echo "    OpenObserve/OTLP sink: $mon_ip:5080"
 
-    # 3. consumers — everything except the two hubs and non-cluster dirs. Single boot with BOTH
-    #    hub IPs known: syslog shipping + OTLP push + node_exporter all wired at first boot.
+    # 3. consumers — everything except the three hubs and non-cluster dirs. Single boot with all
+    #    hub IPs known: DNS resolver + syslog shipping + OTLP push + node_exporter, all at first boot.
     targets='[]'
     for dir in {{cluster_root}}/*/; do
       c="$(basename "$dir")"
       [ -f "$dir/main.tf" ] || continue
-      case "$c" in "$logging"|"$monitoring") continue ;; esac
+      case "$c" in "$dns"|"$logging"|"$monitoring") continue ;; esac
       echo "=== up-connected: consumer $c ==="
-      jq -n --arg log "$log_ip:514" --arg oo "$mon_ip:5080" \
-        '{log_shipping_target: $log, openobserve_endpoint: $oo}' \
+      jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg oo "$mon_ip:5080" \
+        '{dns_server: $dns, log_shipping_target: $log, openobserve_endpoint: $oo}' \
         > "$dir/.cross-cluster.auto.tfvars.json"
       just up "$c"
       # accumulate this consumer's VM IPs as Prometheus scrape targets (node_exporter :9100)
@@ -154,11 +170,44 @@ up-connected:
         | jq --argjson acc "$targets" \
             '$acc + [to_entries[] | {job: .value.name, ip: .value.ipv4, port: 9100}]')"
     done
+    # add the DNS hub's OWN exporters (node :9100, adguard :9618, unbound :9167).
+    targets="$(echo "$targets" | jq --arg ip "$dns_ip" \
+      '. + [{job:"centralized-dns-server",ip:$ip,port:9100},
+            {job:"centralized-dns-adguard",ip:$ip,port:9618},
+            {job:"centralized-dns-unbound",ip:$ip,port:9167}]')"
 
-    # 4. hot-push the discovered scrape targets into the RUNNING monitoring server (no recreate).
-    #    Keep log_shipping_target so the re-apply preserves the hub's self-shipping wiring in state.
+    # 4. DNS-hub self-telemetry HOT-PUSH (mirrors the Prometheus scrape hot-push; no recreate):
+    #    the DNS VM booted before the hubs, so wire its log shipping now. A targeted re-apply
+    #    (content-only change — never recreates the VM) materializes the rendered drop-ins for scp.
+    echo "=== up-connected: wiring DNS hub self-telemetry ==="
+    jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg oo "$mon_ip:5080" \
+      '{log_shipping_target: $log, openobserve_endpoint: $oo}' \
+      > {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json
+    tofu -chdir={{cluster_root}}/$dns apply -auto-approve   # re-renders .rendered/ drop-ins only
+    scp {{ssh_opts}} -i {{ssh_key}} \
+      {{cluster_root}}/$dns/.rendered/10-ship.conf ubuntu@"$dns_ip":/tmp/10-ship.conf
+    scp {{ssh_opts}} -i {{ssh_key}} \
+      {{cluster_root}}/$dns/.rendered/otel-config.yaml ubuntu@"$dns_ip":/tmp/otel-config.yaml
+    ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$dns_ip" \
+      'set -e; \
+       sudo DEBIAN_FRONTEND=noninteractive apt-get install -y syslog-ng >/dev/null; \
+       sudo mkdir -p /var/lib/syslog-ng /etc/syslog-ng/conf.d /var/lib/otelcol-contrib/storage; \
+       sudo cp /tmp/10-ship.conf /etc/syslog-ng/conf.d/10-ship.conf; \
+       grep -q "conf.d/\*.conf" /etc/syslog-ng/syslog-ng.conf || echo "@include \"/etc/syslog-ng/conf.d/*.conf\"" | sudo tee -a /etc/syslog-ng/syslog-ng.conf >/dev/null; \
+       sudo systemctl enable syslog-ng >/dev/null 2>&1 || true; sudo systemctl restart syslog-ng; \
+       if ! command -v otelcol-contrib >/dev/null 2>&1; then \
+         V=0.109.0; A="$(dpkg --print-architecture)"; \
+         curl -sSLf "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v${V}/otelcol-contrib_${V}_linux_${A}.deb" -o /tmp/otelcol.deb; \
+         sudo dpkg -i /tmp/otelcol.deb || sudo DEBIAN_FRONTEND=noninteractive apt-get install -f -y; \
+       fi; \
+       sudo cp /tmp/otel-config.yaml /etc/otelcol-contrib/config.yaml; \
+       sudo systemctl enable otelcol-contrib >/dev/null 2>&1 || true; sudo systemctl restart otelcol-contrib'
+
+    # 5. hot-push the discovered scrape targets into the RUNNING monitoring server (no recreate).
+    #    Keep log_shipping_target + dns_server so the re-apply preserves the hub's wiring in state.
     echo "=== up-connected: wiring Prometheus scrape targets ==="
-    echo "$targets" | jq -c --arg log "$log_ip:514" '{log_shipping_target: $log, extra_scrape_targets: .}' \
+    echo "$targets" | jq -c --arg dns "$dns_ip" --arg log "$log_ip:514" \
+      '{dns_server: $dns, log_shipping_target: $log, extra_scrape_targets: .}' \
       > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
     tofu -chdir={{cluster_root}}/$monitoring apply -auto-approve   # re-renders .rendered/prometheus.yml only
     scp {{ssh_opts}} -i {{ssh_key}} \
@@ -166,7 +215,7 @@ up-connected:
       ubuntu@"$mon_ip":/tmp/prometheus.yml
     ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$mon_ip" \
       'sudo cp /tmp/prometheus.yml /opt/stack/prometheus/prometheus.yml && sudo docker compose -f /opt/stack/compose.yaml restart prometheus'
-    echo "up-connected complete — $(echo "$targets" | jq 'length') cross-cluster scrape targets wired."
+    echo "up-connected complete — $(echo "$targets" | jq 'length') cross-cluster scrape targets wired; fleet resolving via $dns_ip."
 
 # delete + purge Multipass VMs for this cluster that OpenTofu no longer tracks.
 # A failed `up` (e.g. a launch timeout) leaves a VM behind that `tofu destroy` can't
@@ -213,11 +262,13 @@ verify-all:
     exit "$rc"
 
 # live e2e for the cross-cluster wiring (after `just up-connected`):  just verify-connected
-# 1) a centralized_pki VM's log line reaches the logging hub; 2) Prometheus scrapes the pki VMs.
+# 1) a centralized_pki VM's log line reaches the logging hub; 2) Prometheus scrapes the pki VMs;
+# 3) a consumer VM resolves through the centralized_dns AdGuard hub + Prometheus scrapes it.
 verify-connected:
     #!/usr/bin/env bash
     set -uo pipefail
     rc=0
+    dns_ip="$(tofu -chdir={{cluster_root}}/centralized_dns output -raw server_ipv4)"
     log_ip="$(tofu -chdir={{cluster_root}}/centralized_logging output -raw central_ipv4)"
     pki_ip="$(tofu -chdir={{cluster_root}}/centralized_pki output -json hosts | jq -r '.services.ipv4')"
     token="xcheck-$(tofu -chdir={{cluster_root}}/centralized_pki output -raw services_ipv4 | tr -d '.')"
@@ -233,6 +284,15 @@ verify-connected:
 
     echo "=== verify-connected: metrics scrape (Prometheus -> pki VMs) ==="
     just prometheus-query centralized_monitoring 'up{job=~"centralized-pki.*"}' || rc=1
+
+    echo "=== verify-connected: DNS resolver wiring (pki VM -> centralized_dns) ==="
+    if ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$pki_ip" "resolvectl status 2>/dev/null | grep -q $dns_ip || grep -q $dns_ip /etc/systemd/resolved.conf.d/99-centralized-dns.conf 2>/dev/null"; then
+      echo "PASS: pki VM resolver points at the AdGuard hub ($dns_ip)"
+    else
+      echo "FAIL: pki VM resolver is not pointed at $dns_ip"; rc=1
+    fi
+    echo "=== verify-connected: metrics scrape (Prometheus -> dns hub) ==="
+    just prometheus-query centralized_monitoring 'up{job=~"centralized-dns.*"}' || rc=1
     exit "$rc"
 
 # reconcile Heimdall tiles (generate -> sync --prune):  just heimdall-sync centralized_monitoring
@@ -389,6 +449,31 @@ netbox-discover CLUSTER:
      if [ -z "$ip" ]; then echo "no agent VM — set enable_discovery=true and 'just recreate {{CLUSTER}}'"; exit 1; fi; \
      ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" 'sudo systemctl restart orb-agent.service'; \
      echo "orb-agent restarted on $ip — a scan will run; re-check with: just netbox-check {{CLUSTER}}"
+
+# AdGuard Home running + forwarding to the local Unbound upstream, exit nonzero:  just adguard-check centralized_dns
+adguard-check CLUSTER="centralized_dns":
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/adguard_cli.py --cluster {{CLUSTER}} check
+
+# AdGuard Home status / stats / filters:  just adguard-status centralized_dns
+adguard-status CLUSTER="centralized_dns":
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/adguard_cli.py --cluster {{CLUSTER}} status
+
+# Unbound reachable via its exporter (:9167), exit nonzero:  just unbound-check centralized_dns
+unbound-check CLUSTER="centralized_dns":
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/unbound_cli.py --cluster {{CLUSTER}} check
+
+# key Unbound resolver stats (via unbound_exporter):  just unbound-stats centralized_dns
+unbound-stats CLUSTER="centralized_dns":
+    uv run {{cluster_root}}/{{CLUSTER}}/scripts/unbound_cli.py --cluster {{CLUSTER}} stats
+
+# both DNS service checks (AdGuard + Unbound), exit nonzero on any failure:  just dns-check
+dns-check CLUSTER="centralized_dns":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=0
+    just adguard-check {{CLUSTER}} || rc=1
+    just unbound-check {{CLUSTER}} || rc=1
+    exit "$rc"
 
 # import the OpenObserve log dashboards (idempotent; see specs/openobserve-dashboards.md):  just openobserve-dashboards centralized_monitoring
 # afterwards `... check --require-dashboards` asserts they resolve (not in verify-api since import is on-demand).

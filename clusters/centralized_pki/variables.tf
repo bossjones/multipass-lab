@@ -78,6 +78,12 @@ variable "log_shipping_target" {
   default     = ""
 }
 
+variable "dns_server" {
+  description = "IP (or host[:port]) of the centralized_dns AdGuard Home resolver. Non-empty -> every VM points systemd-resolved at it at first boot. Empty (default) = image default resolver. See specs/cross-cluster.md."
+  type        = string
+  default     = ""
+}
+
 variable "openobserve_endpoint" {
   description = "host:port of centralized_monitoring's OpenObserve. Non-empty -> both VMs run an otelcol-contrib agent pushing host logs via OTLP/HTTP. Empty (default) = disabled."
   type        = string

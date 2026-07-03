@@ -81,6 +81,13 @@ variable "log_shipping_target" {
   default     = ""
 }
 
+# --- Cross-cluster DNS (opt-in; see specs/cross-cluster.md) ------------------
+variable "dns_server" {
+  description = "IP (or host[:port]) of the centralized_dns AdGuard Home resolver. Non-empty -> every VM points systemd-resolved at it at first boot. Empty (default) = image default resolver. See specs/cross-cluster.md."
+  type        = string
+  default     = ""
+}
+
 variable "grafana_admin_password" {
   description = "Grafana admin user password (provisioned via compose env)."
   type        = string

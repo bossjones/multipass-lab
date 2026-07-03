@@ -28,9 +28,32 @@ The three signal paths flow in **two opposite directions**, which dictates the a
 
 | Signal | Model | Who needs whose IP | Hub change |
 |---|---|---|---|
+| DNS → AdGuard Home | **config-PUSH** | *every* VM needs the *DNS hub* IP at first boot | none (already listens `0.0.0.0:53`) |
 | Logs → syslog-ng | **PUSH** | consumer needs the *logging hub* IP | none (already listens `0.0.0.0:514`) |
 | Logs/traces → OpenObserve/OTLP | **PUSH** | consumer needs the *monitoring hub* IP | none (OpenObserve `:5080`, OTel `:4318`) |
 | Metrics ← Prometheus | **PULL** | the *monitoring hub* needs every consumer IP | new `extra_scrape_targets` var |
+
+### DNS: the hub that must come up FIRST (`centralized_dns`)
+
+`centralized_dns` (AdGuard Home over Unbound; see `specs/centralized_dns.md`) is a fourth signal
+with the strongest ordering constraint. Every VM in the fleet — including both telemetry hubs —
+must know the DNS hub IP **at its own first boot** so it can point `systemd-resolved` at AdGuard
+via the shared `use-dns.conf.tftpl` drop-in. Like the telemetry hubs it is a pure sink (it needs
+nobody's IP to come up), so `up-connected` applies it **before everything else**, health-gates on
+AdGuard actually answering (`dig @<dns_ip> example.com`) — a dependent VM that switches its
+resolver before AdGuard is live can't resolve `archive.ubuntu.com` mid-boot — then wires every
+later cluster with `dns_server=<dns_ip>`.
+
+The DNS hub is *also* a telemetry consumer (its own logs → OpenObserve, its exporters scraped by
+Prometheus), but it booted **before** the telemetry hubs existed. This is resolved exactly like
+the Prometheus scrape-target problem: its own log-shipping is **hot-pushed** after the hubs come
+up (`up-connected` sets its `log_shipping_target`/`openobserve_endpoint`, re-applies to materialize
+the rendered drop-ins, then scp's them onto the running VM and restarts the agents — no recreate,
+so the DNS IP the whole fleet resolves against never churns), and its exporters (`:9100`, `:9618`,
+`:9167`) are added to the same `extra_scrape_targets` hot-push.
+
+The full apply order is therefore: `centralized_dns → centralized_logging → centralized_monitoring
+→ consumers → hot-push (DNS self-telemetry + Prometheus scrape targets)`.
 
 The two **PUSH** paths make both hubs pure *sinks* — they receive on a fixed port and need nobody's IP
 to come up. Only the **PULL** path (Prometheus scraping consumers) needs consumer IPs, and that need is
@@ -108,6 +131,7 @@ isolated — empty string = feature off):
 
 | Variable | Type | Default | Effect |
 |---|---|---|---|
+| `dns_server` | string | `""` | IP (or `host[:port]`) of the `centralized_dns` AdGuard Home resolver. Non-empty → every VM renders `/etc/systemd/resolved.conf.d/99-centralized-dns.conf` (shared `use-dns.conf.tftpl`) and repoints `systemd-resolved` at it at first boot. |
 | `log_shipping_target` | string | `""` | `host:port` of syslog-ng collector. Non-empty → VMs render the syslog client drop-in shipping to it. |
 | `openobserve_endpoint` | string | `""` | `host:port` of OpenObserve. Non-empty → VMs run an otelcol-contrib agent pushing host logs. |
 | `openobserve_org` | string | `"default"` | OpenObserve org in the OTLP push URL. |
@@ -133,6 +157,7 @@ as a non-cluster directory; Justfile recipes that iterate `clusters/*/` (`up-all
 
 | Snippet | Params | Derived from |
 |---|---|---|
+| `use-dns.conf.tftpl` | `dns_ip` | new — `resolved.conf.d` drop-in pointing at the `centralized_dns` AdGuard hub |
 | `syslog-client.conf.tftpl` | `central_ip`, `syslog_port` | `centralized_logging/cloud-init/syslog-ng/client.conf.tftpl` |
 | `otel-agent-config.yaml.tftpl` | `openobserve_ip`, `openobserve_port`, `openobserve_org`, `openobserve_password`, `stream_name` | `centralized_monitoring/cloud-init/otel/k0s-collector-config.yaml.tftpl` |
 | `install-node-exporter.sh` | — (arch-aware) | `centralized_monitoring`'s `install-exporter.sh` |

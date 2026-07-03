@@ -556,3 +556,49 @@ run "ingress_without_coroot" {
     error_message = "ingress-only must not bump the k0s VM sizing"
   }
 }
+
+# --- Cross-cluster opt-in DNS (var.dns_server) ---------------------------------------
+# Empty default => no systemd-resolved drop-in on any VM; non-empty => every VM points at
+# the centralized_dns AdGuard Home resolver. Mirrors the log/otel gating pattern.
+
+run "dns_off_by_default" {
+  command = plan
+
+  # No dns_server var set: the resolved.conf.d drop-in must be absent from every VM's cloud-init.
+  assert {
+    condition = alltrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : !strcontains(c, "resolved.conf.d/99-centralized-dns.conf")])
+    error_message = "dns_server unset must not render the centralized-dns resolved.conf drop-in on any VM"
+  }
+}
+
+run "dns_on_renders_resolved_conf" {
+  command = plan
+
+  variables {
+    dns_server = "10.7.7.7"
+  }
+
+  # Every VM must gain the drop-in file...
+  assert {
+    condition = alltrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : strcontains(c, "99-centralized-dns.conf")])
+    error_message = "dns_server set must render the 99-centralized-dns.conf drop-in on every VM"
+  }
+  # ...pointing systemd-resolved at the configured resolver IP.
+  assert {
+    condition = alltrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : strcontains(c, "DNS=10.7.7.7")])
+    error_message = "dns_server set must render DNS=<ip> into every VM's resolved.conf drop-in"
+  }
+  # The injected drop-in must keep the cloud-init valid YAML.
+  assert {
+    condition = alltrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : can(yamldecode(c))])
+    error_message = "rendered cloud-init must stay valid YAML after adding the DNS drop-in"
+  }
+}

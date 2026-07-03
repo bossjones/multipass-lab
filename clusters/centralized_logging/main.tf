@@ -106,6 +106,14 @@ locals {
     central_ip  = multipass_instance.central.ipv4
     syslog_port = var.syslog_port
   })
+
+  # Cross-cluster DNS (opt-in). Non-empty var.dns_server points every VM's systemd-resolved at
+  # the centralized_dns AdGuard Home resolver via a rendered drop-in (shared snippet). Empty (the
+  # default) leaves the image resolver untouched. See specs/cross-cluster.md.
+  use_dns = var.dns_server != ""
+  dns_resolved_conf = local.use_dns ? templatefile("${path.module}/../_shared/cloud-init/use-dns.conf.tftpl", {
+    dns_ip = split(":", var.dns_server)[0]
+  }) : ""
 }
 
 # --- Central logging VM (syslog-ng server) ----------------------------------
@@ -113,8 +121,10 @@ locals {
 resource "local_file" "central_ci" {
   filename = "${local.render_dir}/central.yaml"
   content = templatefile("${path.module}/cloud-init/central.yaml.tftpl", merge(local.flags, {
-    ssh_pubkey  = local.ssh_pubkey
-    server_conf = local.server_conf
+    ssh_pubkey        = local.ssh_pubkey
+    server_conf       = local.server_conf
+    dns_server        = var.dns_server
+    dns_resolved_conf = local.dns_resolved_conf
   }))
 }
 
@@ -132,8 +142,10 @@ resource "multipass_instance" "central" {
 resource "local_file" "k0s_ci" {
   filename = "${local.render_dir}/k0s-client.yaml"
   content = templatefile("${path.module}/cloud-init/k0s-client.yaml.tftpl", merge(local.flags, {
-    ssh_pubkey  = local.ssh_pubkey
-    client_conf = local.client_conf
+    ssh_pubkey        = local.ssh_pubkey
+    client_conf       = local.client_conf
+    dns_server        = var.dns_server
+    dns_resolved_conf = local.dns_resolved_conf
     # Coroot (opt-in). enable_coroot/enable_ingress gate the %{ if } blocks; the rendered
     # coroot-ce values + pinned chart versions drive the in-VM Helm install. See specs/coroot.md.
     enable_coroot                = var.enable_coroot
@@ -158,9 +170,11 @@ resource "multipass_instance" "k0s" {
 resource "local_file" "docker_ci" {
   filename = "${local.render_dir}/docker-client.yaml"
   content = templatefile("${path.module}/cloud-init/docker-client.yaml.tftpl", merge(local.flags, {
-    ssh_pubkey   = local.ssh_pubkey
-    client_conf  = local.client_conf
-    compose_conf = local.compose_conf
+    ssh_pubkey        = local.ssh_pubkey
+    client_conf       = local.client_conf
+    compose_conf      = local.compose_conf
+    dns_server        = var.dns_server
+    dns_resolved_conf = local.dns_resolved_conf
     # Peer IPs for the local Prometheus scrape config. Referencing central/k0s here forces
     # both to be created (and their DHCP IPs known) before the docker VM renders — the same
     # runtime IP-injection edge the syslog-ng client_conf already creates for central.

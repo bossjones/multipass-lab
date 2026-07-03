@@ -273,6 +273,12 @@ variable "agent" {
   }
 }
 
+variable "dns_server" {
+  description = "IP (or host[:port]) of the centralized_dns AdGuard Home resolver. Non-empty -> every VM points systemd-resolved at it at first boot. Empty (default) = image default resolver. See specs/cross-cluster.md."
+  type        = string
+  default     = ""
+}
+
 variable "ssh_pubkey_path" {
   description = "Path to the SSH public key injected into the ubuntu user (used by the testinfra verify loop)."
   type        = string

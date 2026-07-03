@@ -1,0 +1,69 @@
+# Managed by OpenTofu (centralized_dns) — pre-seeded AdGuard Home config.
+# Seeding a user + DNS config makes AdGuard Home skip the first-run setup wizard, so the VM
+# boots fully non-interactive. Derived from adguardhome-unbound-macos-setup's sanitized
+# tools/adguardctl/docker/adguardhome/AdGuardHome.yaml. Credentials are DEV-THROWAWAY.
+http:
+  address: 0.0.0.0:${adguard_web_port}
+users:
+  - name: ${adguard_user}
+    password: ${adguard_password_hash}
+auth_attempts: 5
+block_auth_min: 15
+# Log to syslog so journald picks it up and the cross-cluster shipper forwards AdGuard logs
+# to the centralized_logging collector + OpenObserve.
+log_file: syslog
+verbose: false
+dns:
+  bind_hosts:
+    - 0.0.0.0
+  port: 53
+  # Recursive resolver (local Unbound) per this repo's architecture.
+  upstream_dns:
+    - ${upstream_unbound}
+  upstream_mode: parallel
+  bootstrap_dns:
+    - 9.9.9.10
+    - 149.112.112.10
+  fallback_dns:
+    - 1.1.1.2
+  ratelimit: 0
+  dnssec_enabled: false
+  cache_size: 4194304
+  cache_ttl_min: 0
+  cache_ttl_max: 0
+  blocking_mode: default
+  blocked_response_ttl: 10
+  resolve_clients: true
+  use_private_ptr_resolvers: true
+  blocked_hosts:
+    - version.bind
+    - id.server
+    - hostname.bind
+filtering:
+  enabled: true
+  filtering_enabled: true
+  protection_enabled: true
+  blocked_services:
+    schedule:
+      time_zone: Local
+    ids: []
+  safe_search:
+    enabled: false
+querylog:
+  enabled: true
+  interval: 2160h
+statistics:
+  enabled: true
+  interval: 2160h
+filters:
+%{ for i, f in blocklists ~}
+  - enabled: true
+    id: ${i + 1}
+    name: ${f.name}
+    url: ${f.url}
+%{ endfor ~}
+whitelist_filters: []
+user_rules: []
+clients:
+  persistent: []
+schema_version: 28

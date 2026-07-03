@@ -85,6 +85,15 @@ locals {
     central_ip  = split(":", var.log_shipping_target)[0]
     syslog_port = try(split(":", var.log_shipping_target)[1], "514")
   }) : ""
+
+  # --- Cross-cluster DNS (opt-in; see specs/cross-cluster.md) -----------------
+  # Non-empty dns_server => every VM renders the SHARED systemd-resolved drop-in and points its
+  # stub resolver at the centralized_dns AdGuard Home hub. Empty => empty string so the cloud-init
+  # %{ if ... != "" } guard drops the block. Only the IP portion (before an optional :port) is used.
+  use_dns = var.dns_server != ""
+  dns_resolved_conf = local.use_dns ? templatefile("${path.module}/../_shared/cloud-init/use-dns.conf.tftpl", {
+    dns_ip = split(":", var.dns_server)[0]
+  }) : ""
 }
 
 # --- k0s-client (the monitored host) — created FIRST ------------------------
@@ -96,6 +105,9 @@ resource "local_file" "k0s_ci" {
   content = templatefile("${path.module}/cloud-init/k0s-client.yaml.tftpl", merge(local.flags, {
     ssh_pubkey      = local.ssh_pubkey
     k0s_otel_config = local.k0s_otel_placeholder
+    # Cross-cluster DNS — gated on a non-empty dns_server. See specs/cross-cluster.md.
+    dns_server        = var.dns_server
+    dns_resolved_conf = local.dns_resolved_conf
   }))
 }
 
@@ -210,6 +222,10 @@ resource "local_file" "server_ci" {
     # log_shipping_target so the default `just up` stays isolated. See specs/cross-cluster.md.
     log_shipping_target = var.log_shipping_target
     syslog_client_conf  = local.syslog_client_conf
+    # Cross-cluster DNS — the shared systemd-resolved drop-in, gated on a non-empty dns_server so
+    # the default `just up` keeps the image default resolver. See specs/cross-cluster.md.
+    dns_server        = var.dns_server
+    dns_resolved_conf = local.dns_resolved_conf
     # Docker operator TUIs (wharf/oxker/dive) on the observability hub (the docker VM).
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer

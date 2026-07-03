@@ -89,6 +89,13 @@ locals {
     syslog_port = try(split(":", var.log_shipping_target)[1], "514")
   }) : ""
 
+  # Cross-cluster DNS — point systemd-resolved at the centralized_dns AdGuard Home hub. Only the
+  # host portion is used (systemd-resolved DNS= takes an IP); a host:port target has the port dropped.
+  use_dns = var.dns_server != ""
+  dns_resolved_conf = local.use_dns ? templatefile("${path.module}/../_shared/cloud-init/use-dns.conf.tftpl", {
+    dns_ip = split(":", var.dns_server)[0]
+  }) : ""
+
   # One OTLP agent config per VM — OpenObserve derives the destination stream from stream-name,
   # so the ca and services VMs land in distinct streams.
   otel_agent_conf_ca = local.push_otlp ? templatefile("${path.module}/../_shared/cloud-init/otel-agent-config.yaml.tftpl", {
@@ -120,6 +127,8 @@ resource "local_file" "ca_ci" {
     openobserve_endpoint = var.openobserve_endpoint
     syslog_client_conf   = local.syslog_client_conf
     otel_agent_conf      = local.otel_agent_conf_ca
+    dns_server           = var.dns_server
+    dns_resolved_conf    = local.dns_resolved_conf
     # Docker operator TUIs (wharf/oxker/dive) — the CA VM runs docker (step-ca).
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
@@ -159,6 +168,8 @@ resource "local_file" "services_ci" {
     openobserve_endpoint = var.openobserve_endpoint
     syslog_client_conf   = local.syslog_client_conf
     otel_agent_conf      = local.otel_agent_conf_services
+    dns_server           = var.dns_server
+    dns_resolved_conf    = local.dns_resolved_conf
     # Docker operator TUIs (wharf/oxker/dive) — the services VM runs docker (Traefik/Authelia/etc).
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
