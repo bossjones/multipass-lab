@@ -263,7 +263,9 @@ runcmd:
   # netdata's built-in StatsD collector is on by default and binds :8125 (UDP+TCP);
   # disabled here for consistency with the server VM (see server.yaml.tftpl), even
   # though this node doesn't run statsd_exporter itself today.
-  - printf '\n[plugins]\n\tstatsd = no\n' >> /etc/netdata/netdata.conf && systemctl restart netdata || true
+  # Also disable Netdata's otel-plugin: it binds :4317 (OTLP gRPC) and would collide with any
+  # collector on this node. Matches the server. See specs/cross-cluster.md.
+  - printf '\n[plugins]\n\tstatsd = no\n\totel = no\n' >> /etc/netdata/netdata.conf && systemctl restart netdata || true
 %{ endif ~}
 %{ if enable_kube_state_metrics ~}
   # kube-state-metrics — wait for the API, drop the admin kubeconfig next to the manifest, then

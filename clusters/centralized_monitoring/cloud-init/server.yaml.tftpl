@@ -233,7 +233,14 @@ runcmd:
   - systemctl daemon-reload
   - systemctl enable --now monitoring-cert-renew.timer
 %{ endif ~}
-  - docker compose -f /opt/stack/compose.yaml up -d
+  # Retry the stack bring-up: a transient DNS SERVFAIL on ANY image host (e.g. public.ecr.aws for
+  # OpenObserve, which the resolver-ready gate above doesn't probe) can fail a single pull and abort
+  # `up -d` with zero containers — then openobserve-provision.sh loops forever and hangs cloud-init.
+  - |
+    for i in $(seq 1 5); do
+      docker compose -f /opt/stack/compose.yaml up -d && break
+      echo "stack compose up attempt $i failed; retrying"; sleep 10
+    done
 %{ if enable_openobserve ~}
   # Seed the app-OTLP streams (otlp_logs logs+traces) and import the OpenObserve dashboards, once
   # the stack is up. Best-effort (|| true) so a slow/again-failing OpenObserve can't break the boot;
@@ -256,7 +263,10 @@ runcmd:
   # netdata's built-in StatsD collector is on by default and binds :8125 (UDP+TCP),
   # colliding with this cluster's own statsd_exporter container (used for Locust
   # StatsD load testing) — disable it so statsd_exporter can claim the port.
-  - printf '\n[plugins]\n\tstatsd = no\n' >> /etc/netdata/netdata.conf && systemctl restart netdata || true
+  # Disable Netdata's statsd AND otel plugins: otel-plugin binds 127.0.0.1:4317 (OTLP gRPC) and would
+  # beat the stack's otel-collector container to the port, leaving the collector down. The stack
+  # collector owns OTLP ingest here. See specs/cross-cluster.md.
+  - printf '\n[plugins]\n\tstatsd = no\n\totel = no\n' >> /etc/netdata/netdata.conf && systemctl restart netdata || true
 %{ endif ~}
 %{ if enable_heimdall && enable_heimdall_seed ~}
   # --- auto-seed Heimdall tiles (best-effort; never fails the boot) ----------

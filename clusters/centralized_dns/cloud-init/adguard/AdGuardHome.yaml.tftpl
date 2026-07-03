@@ -27,6 +27,12 @@ dns:
   fallback_dns:
     - 1.1.1.2
   ratelimit: 0
+  # The Multipass lab VMs are IPv4-only (no IPv6 default route), so hand them no AAAA records —
+  # otherwise a container image layer served from an IPv6-reachable CDN (e.g. CloudFront) resolves to
+  # an IPv6 address the VM can't route and the pull dies with "dial tcp [<v6>]:443: network
+  # unreachable" (hung the monitoring stack's OpenObserve pull). AdGuard returns empty AAAA so
+  # getaddrinfo falls back to A. See specs/cross-cluster.md.
+  aaaa_disabled: true
   dnssec_enabled: false
   cache_size: 4194304
   cache_ttl_min: 0

@@ -282,8 +282,8 @@ up-connected:
     echo "=== up-connected: wiring Prometheus scrape targets ==="
     # Preserve tls_json here too so the content-only re-apply keeps use_internal_tls in state/render
     # (it does NOT recreate the VM — the leaf was already issued at the step-2 boot).
-    echo "$targets" | jq -c --arg dns "$dns_ip" --arg log "$log_ip:514" --arg ca "$ca_pem" --argjson tls "$tls_json" \
-      '{dns_server: $dns, log_shipping_target: $log, internal_ca_cert: $ca, extra_scrape_targets: .} + $tls' \
+    echo "$targets" | jq -c --arg dns "$dns_ip" --arg log "$log_ip:514" --arg ca "$ca_pem" --argjson tls "$tls_json" --argjson ntp "$ntp_json" \
+      '{dns_server: $dns, log_shipping_target: $log, internal_ca_cert: $ca, extra_scrape_targets: .} + $tls + $ntp' \
       > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
     tofu -chdir={{cluster_root}}/$monitoring apply -auto-approve   # re-renders .rendered/prometheus.yml only
     scp {{ssh_opts}} -i {{ssh_key}} \
@@ -443,6 +443,15 @@ refresh-cross-cluster:
     oo_target="";  [ -n "$mon_ip" ] && oo_target="$mon_ip:5080"
     echo "=== refresh-cross-cluster: dns=$dns_ip logging=$log_ip monitoring=$mon_ip ==="
 
+    # Preserve internal-NTP wiring across the rewrite: honor INTERNAL_NTP, or auto-detect it from the
+    # DNS box's existing tfvars (enable_ntp_server:true) so a plain refresh doesn't silently unwire it.
+    dns_ntp_json='{}'; ntp_json='{}'
+    if [ -n "${INTERNAL_NTP:-}" ] || grep -sq '"enable_ntp_server": *true' {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json; then
+      dns_ntp_json='{"enable_ntp_server": true}'
+      [ -n "$dns_ip" ] && ntp_json="$(jq -n --arg ip "$dns_ip" '{ntp_server: $ip}')"
+      echo "    internal NTP: preserving chrony hub + fleet ntp_server=$dns_ip"
+    fi
+
     # recompute extra_scrape_targets from every currently-up, already-wired cluster
     targets='[]'
     for dir in {{cluster_root}}/*/; do
@@ -463,8 +472,8 @@ refresh-cross-cluster:
 
     if [ -f {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json ]; then
       echo "=== refresh: $dns (self-telemetry) ==="
-      jq -n --arg log "$log_target" --arg oo "$oo_target" \
-        '{log_shipping_target: $log, openobserve_endpoint: $oo}' \
+      jq -n --arg log "$log_target" --arg oo "$oo_target" --argjson ntp "$dns_ntp_json" \
+        '{log_shipping_target: $log, openobserve_endpoint: $oo} + $ntp' \
         > {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json
       tofu -chdir={{cluster_root}}/$dns apply -auto-approve || { echo "FAILED apply: $dns"; rc=1; }
       just _hot-push-cross-cluster "$dns" || rc=1
@@ -472,7 +481,7 @@ refresh-cross-cluster:
 
     if [ -f {{cluster_root}}/$logging/.cross-cluster.auto.tfvars.json ]; then
       echo "=== refresh: $logging ==="
-      jq -n --arg dns "$dns_ip" '{dns_server: $dns, enable_coroot: true}' \
+      jq -n --arg dns "$dns_ip" --argjson ntp "$ntp_json" '{dns_server: $dns, enable_coroot: true} + $ntp' \
         > {{cluster_root}}/$logging/.cross-cluster.auto.tfvars.json
       tofu -chdir={{cluster_root}}/$logging apply -auto-approve || { echo "FAILED apply: $logging"; rc=1; }
       just _hot-push-cross-cluster "$logging" || rc=1
@@ -480,8 +489,8 @@ refresh-cross-cluster:
 
     if [ -f {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json ]; then
       echo "=== refresh: $monitoring ==="
-      echo "$targets" | jq -c --arg dns "$dns_ip" --arg log "$log_target" \
-        '{dns_server: $dns, log_shipping_target: $log, extra_scrape_targets: .}' \
+      echo "$targets" | jq -c --arg dns "$dns_ip" --arg log "$log_target" --argjson ntp "$ntp_json" \
+        '{dns_server: $dns, log_shipping_target: $log, extra_scrape_targets: .} + $ntp' \
         > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
       tofu -chdir={{cluster_root}}/$monitoring apply -auto-approve || { echo "FAILED apply: $monitoring"; rc=1; }
       just _hot-push-cross-cluster "$monitoring" || rc=1
@@ -503,8 +512,8 @@ refresh-cross-cluster:
       echo "=== refresh: $c ==="
       extra='{}'
       [ "$c" = "centralized_netbox" ] && extra='{"enable_discovery": true}'
-      jq -n --arg dns "$dns_ip" --arg log "$log_target" --arg oo "$oo_target" --argjson extra "$extra" \
-        '{dns_server: $dns, log_shipping_target: $log, openobserve_endpoint: $oo} + $extra' \
+      jq -n --arg dns "$dns_ip" --arg log "$log_target" --arg oo "$oo_target" --argjson extra "$extra" --argjson ntp "$ntp_json" \
+        '{dns_server: $dns, log_shipping_target: $log, openobserve_endpoint: $oo} + $extra + $ntp' \
         > "$dir/.cross-cluster.auto.tfvars.json"
       tofu -chdir="$dir" apply -auto-approve || { echo "FAILED apply: $c"; rc=1; continue; }
       just _hot-push-cross-cluster "$c" || rc=1
@@ -602,6 +611,22 @@ verify-connected:
     fi
     echo "=== verify-connected: metrics scrape (Prometheus -> dns hub) ==="
     just prometheus-query centralized_monitoring 'up{job=~"centralized-dns.*"}' || rc=1
+
+    echo "=== verify-connected: time sync (pki VM clock synchronized) ==="
+    if ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$pki_ip" "timedatectl show -p NTP --value | grep -qx yes && timedatectl show -p NTPSynchronized --value | grep -qx yes"; then
+      echo "PASS: pki VM clock is synchronized (NTP=yes)"
+    else
+      echo "FAIL: pki VM clock not synchronized"; rc=1
+    fi
+    # When the fleet was wired with INTERNAL_NTP, assert the consumer disciplines against the DNS hub.
+    if [ -n "${INTERNAL_NTP:-}" ]; then
+      echo "=== verify-connected: internal NTP source (pki VM -> centralized_dns chrony) ==="
+      if ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$pki_ip" "grep -qs $dns_ip /etc/systemd/timesyncd.conf.d/99-centralized-ntp.conf"; then
+        echo "PASS: pki VM timesyncd points at the internal NTP hub ($dns_ip)"
+      else
+        echo "FAIL: pki VM is not pointed at the internal NTP hub $dns_ip"; rc=1
+      fi
+    fi
     exit "$rc"
 
 # reconcile Heimdall tiles (generate -> sync --prune):  just heimdall-sync centralized_monitoring

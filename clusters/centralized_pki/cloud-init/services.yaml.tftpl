@@ -263,7 +263,13 @@ runcmd:
   - systemctl daemon-reload
   - systemctl enable --now pki-cert-renew.timer
 %{ endif ~}
-  - docker compose -f /opt/stack/compose.yaml up -d
+  # Retry the stack bring-up so a transient DNS/registry SERVFAIL on a single image pull can't leave
+  # the services stack down. See specs/cross-cluster.md.
+  - |
+    for i in $(seq 1 5); do
+      docker compose -f /opt/stack/compose.yaml up -d && break
+      echo "services compose up attempt $i failed; retrying"; sleep 10
+    done
 %{ if enable_docker_tools ~}
   # Interactive docker operator TUIs (wharf/oxker/dive); best-effort so a download blip can't
   # break boot. Idempotent — re-run with `sudo /usr/local/sbin/install-docker-tools.sh`.

@@ -182,7 +182,12 @@ runcmd:
   - systemctl restart docker
   # Build + start the exact-version syslog-ng container (+ exporter). First build pulls the base
   # image; native arm64 for bullseye, so no emulation for the collector itself.
-  - docker compose -f /opt/unifi/compose.yaml up -d --build
+  # Retry so a transient DNS/registry SERVFAIL on a base-image pull can't abort the build.
+  - |
+    for i in $(seq 1 5); do
+      docker compose -f /opt/unifi/compose.yaml up -d --build && break
+      echo "controller compose up attempt $i failed; retrying"; sleep 10
+    done
 %{ if enable_docker_tools ~}
   # Interactive docker operator TUIs (wharf/oxker/dive); best-effort so a download blip can't
   # break boot. Idempotent — re-run with `sudo /usr/local/sbin/install-docker-tools.sh`.

@@ -179,7 +179,13 @@ runcmd:
   - curl -fsSL https://get.docker.com | sh
   - systemctl enable docker
   - systemctl restart docker
-  - docker compose -f /opt/pki/compose.yaml up -d
+  # Retry the stack bring-up so a transient DNS/registry SERVFAIL on a single image pull can't leave
+  # step-ca down (the pinning + services-VM root fetch below would then loop). See specs/cross-cluster.md.
+  - |
+    for i in $(seq 1 5); do
+      docker compose -f /opt/pki/compose.yaml up -d && break
+      echo "step-ca compose up attempt $i failed; retrying"; sleep 10
+    done
 %{ if pin_ca ~}
   # Persisted-root pinning (Phase 0): after step-ca self-inits (creating its provisioners +
   # password), swap in the pinned root + intermediate so leaves chain to a STABLE root that
