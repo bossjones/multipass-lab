@@ -253,6 +253,15 @@ runcmd:
 %{ if dns_server != "" ~}
   # Cross-cluster DNS — point this VM's resolver at the centralized_dns AdGuard Home hub.
   - systemctl restart systemd-resolved
+  # Wait until the new resolver actually answers before anything below pulls over the network
+  # (Docker's installer + `docker compose up` both need working DNS) — otherwise a boot-time race
+  # with the AdGuard hub warming up leaves the docker stack permanently empty (SERVFAIL on the
+  # image registry, no retry). Mirrors the wait pattern in centralized_dns/server.yaml.tftpl.
+  - |
+    for i in $(seq 1 30); do
+      getent hosts registry-1.docker.io >/dev/null 2>&1 && break
+      sleep 2
+    done
 %{ endif ~}
   # syslog-ng shipper
   - mkdir -p /var/lib/syslog-ng /opt/stack
