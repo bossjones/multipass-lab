@@ -56,8 +56,11 @@ plan CLUSTER: (init CLUSTER)
     tofu -chdir={{cluster_root}}/{{CLUSTER}} plan
 
 # apply -> launch all VMs, wait for cloud-init:  just up (centralized_logging|centralized_monitoring)
+# PATH-prepended wrapper raises multipass launch's 5min default init timeout (see its header
+# comment) — a loaded fleet host can blow that mid-cloud-init, orphaning the VM tofu never records.
 up CLUSTER: (init CLUSTER)
-    tofu -chdir={{cluster_root}}/{{CLUSTER}} apply -auto-approve
+    PATH="{{justfile_directory()}}/{{cluster_root}}/_shared/scripts/multipass-timeout-wrapper:$PATH" \
+      tofu -chdir={{cluster_root}}/{{CLUSTER}} apply -auto-approve
     @tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts \
       | jq -r '.[].ipv4' \
       | while read ip; do \
