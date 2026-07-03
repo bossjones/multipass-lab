@@ -38,6 +38,11 @@ locals {
   jwk_provisioner    = "admin"
   acme_directory_url = "${local.ca_url}/acme/${local.acme_provisioner}/directory"
 
+  # Pin the persisted root/intermediate over step-ca's self-generated pair when all three are
+  # provided (scripts/init_ca.py). Empty => step-ca self-inits an ephemeral root (today's behavior).
+  # See specs/internal-ca.md.
+  pin_ca = var.root_ca_cert != "" && var.intermediate_ca_cert != "" && var.intermediate_ca_key != ""
+
   # --- CA VM sub-config (step-ca compose) ---------------------------------
   # The CA's own IP can't be self-referenced in tofu, so DNS names carry a $${SELF_IP}
   # placeholder substituted at boot by a runcmd (the __SELF_IP__ pattern from docker-client).
@@ -129,6 +134,14 @@ resource "local_file" "ca_ci" {
     otel_agent_conf      = local.otel_agent_conf_ca
     dns_server           = var.dns_server
     dns_resolved_conf    = local.dns_resolved_conf
+    # Fleet-wide trust of the internal root CA (specs/internal-ca.md).
+    internal_ca_cert = var.internal_ca_cert
+    # Persisted-root pinning (Phase 0). pin_ca gates a runcmd that swaps step-ca's self-generated
+    # root/intermediate for this pinned pair so the CA identity survives `just recreate`.
+    pin_ca               = local.pin_ca
+    root_ca_cert         = var.root_ca_cert
+    intermediate_ca_cert = var.intermediate_ca_cert
+    intermediate_ca_key  = var.intermediate_ca_key
     # Docker operator TUIs (wharf/oxker/dive) — the CA VM runs docker (step-ca).
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
@@ -170,6 +183,8 @@ resource "local_file" "services_ci" {
     otel_agent_conf      = local.otel_agent_conf_services
     dns_server           = var.dns_server
     dns_resolved_conf    = local.dns_resolved_conf
+    # Fleet-wide trust of the internal root CA (specs/internal-ca.md).
+    internal_ca_cert = var.internal_ca_cert
     # Docker operator TUIs (wharf/oxker/dive) — the services VM runs docker (Traefik/Authelia/etc).
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer

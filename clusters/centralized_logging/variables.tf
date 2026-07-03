@@ -46,6 +46,12 @@ variable "dns_server" {
   default     = ""
 }
 
+variable "internal_ca_cert" {
+  description = "PEM of the internal root CA to trust on every VM. Non-empty -> each VM drops it into /usr/local/share/ca-certificates and runs update-ca-certificates at first boot. Empty (default) = no fleet trust. `just up-connected` injects it from centralized_pki. See specs/internal-ca.md."
+  type        = string
+  default     = ""
+}
+
 # --- Metrics / exporter layer feature flags ---------------------------------
 # Each flag gates an exporter's *install* in cloud-init (there is no local scrape to
 # gate — see specs/centralized_logging_metrics.md). A disabled flag = not installed,

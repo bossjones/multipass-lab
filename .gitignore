@@ -556,5 +556,10 @@ clusters/*/.rendered/
 # Cross-cluster wiring written by `just up-connected` (discovered peer IPs; see specs/cross-cluster.md)
 clusters/*/.cross-cluster.auto.tfvars.json
 
+# Persisted internal-CA material written by scripts/init_ca.py (root cert + password-encrypted
+# intermediate key; sensitive). See specs/internal-ca.md.
+clusters/*/ca-material.auto.tfvars
+clusters/*/.ca/
+
 **/.claude/data
 **/logs

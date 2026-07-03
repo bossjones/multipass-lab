@@ -279,6 +279,12 @@ variable "dns_server" {
   default     = ""
 }
 
+variable "internal_ca_cert" {
+  description = "PEM of the internal root CA to trust on every VM. Non-empty -> each VM drops it into /usr/local/share/ca-certificates and runs update-ca-certificates at first boot. Empty (default) = no fleet trust. `just up-connected` injects it from centralized_pki. See specs/internal-ca.md."
+  type        = string
+  default     = ""
+}
+
 variable "ssh_pubkey_path" {
   description = "Path to the SSH public key injected into the ubuntu user (used by the testinfra verify loop)."
   type        = string

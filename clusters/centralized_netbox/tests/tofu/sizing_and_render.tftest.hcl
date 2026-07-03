@@ -665,3 +665,49 @@ run "dns_on_points_resolved_at_hub" {
     error_message = "the rendered resolved drop-in must set DNS= to the dns_server IP on every VM"
   }
 }
+
+# --- Fleet-wide internal-CA trust (opt-in var.internal_ca_cert; see specs/internal-ca.md) ----
+
+run "internal_ca_off_by_default" {
+  command = plan
+
+  # No internal_ca_cert set — every VM must omit the trust block.
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "internal-root-ca.crt")
+    error_message = "with internal_ca_cert unset, server cloud-init must NOT render the trust block"
+  }
+  assert {
+    condition     = !strcontains(local_file.client_ci.content, "internal-root-ca.crt")
+    error_message = "with internal_ca_cert unset, client cloud-init must NOT render the trust block"
+  }
+}
+
+run "internal_ca_on_renders_trust" {
+  command = plan
+
+  variables {
+    internal_ca_cert = "-----BEGIN CERTIFICATE-----\nMIITESTROOTCA\n-----END CERTIFICATE-----"
+  }
+
+  # Both VMs drop the root PEM into the OS trust store and run update-ca-certificates.
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/usr/local/share/ca-certificates/internal-root-ca.crt")
+    error_message = "server cloud-init must drop the internal root CA when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "update-ca-certificates")
+    error_message = "server cloud-init must run update-ca-certificates when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.client_ci.content, "/usr/local/share/ca-certificates/internal-root-ca.crt")
+    error_message = "client cloud-init must drop the internal root CA when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.client_ci.content, "update-ca-certificates")
+    error_message = "client cloud-init must run update-ca-certificates when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "MIITESTROOTCA")
+    error_message = "server trust block must carry the injected root CA PEM"
+  }
+}

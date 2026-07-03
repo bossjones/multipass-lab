@@ -123,9 +123,21 @@ up-connected:
     logging=centralized_logging
     monitoring=centralized_monitoring
 
-    # 0. DNS hub FIRST — pure :53 sink. No telemetry targets yet (the hubs don't exist).
+    # Internal-CA trust anchor: the pinned root written by `scripts/init_ca.py generate`. It is a
+    # STATIC file (no dependency on centralized_pki being up), so every cluster — including the
+    # hubs that boot first — can trust it at first boot. Empty when no persisted root is configured
+    # (then trust distribution is a no-op; use `just trust-ca <cluster>` after fetching /roots.pem).
+    # See specs/internal-ca.md.
+    ca_crt="{{cluster_root}}/centralized_pki/.ca/root_ca.crt"
+    ca_pem=""
+    if [ -f "$ca_crt" ]; then ca_pem="$(cat "$ca_crt")"; echo "internal CA: distributing $ca_crt fleet-wide"; \
+      else echo "internal CA: no pinned root ($ca_crt absent) — skipping fleet trust (run scripts/init_ca.py)"; fi
+
+    # 0. DNS hub FIRST — pure :53 sink. No telemetry targets yet (the hubs don't exist), but it DOES
+    #    get the CA trust anchor at first boot (static, so no ordering dependency on the PKI hub).
     echo "=== up-connected: dns hub ($dns) ==="
-    rm -f {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json 2>/dev/null || true
+    jq -n --arg ca "$ca_pem" '{internal_ca_cert: $ca}' \
+      > {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json
     just up "$dns"
     dns_ip="$(tofu -chdir={{cluster_root}}/$dns output -raw server_ipv4)"
     echo "    AdGuard Home resolver: $dns_ip:53"
@@ -137,17 +149,18 @@ up-connected:
       sleep 5
     done
 
-    # 1. logging hub — pure sink; now resolves via DNS.
+    # 1. logging hub — pure sink; now resolves via DNS + trusts the internal CA.
     echo "=== up-connected: logging hub ($logging) ==="
-    jq -n --arg dns "$dns_ip" '{dns_server: $dns}' \
+    jq -n --arg dns "$dns_ip" --arg ca "$ca_pem" '{dns_server: $dns, internal_ca_cert: $ca}' \
       > {{cluster_root}}/$logging/.cross-cluster.auto.tfvars.json
     just up "$logging"
     log_ip="$(tofu -chdir={{cluster_root}}/$logging output -raw central_ipv4)"
     echo "    syslog-ng collector: $log_ip:514"
 
-    # 2. monitoring hub — resolves via DNS + self-ships its OWN OS logs (logging is already up).
+    # 2. monitoring hub — resolves via DNS + trusts the internal CA + self-ships its OWN OS logs.
     echo "=== up-connected: monitoring hub ($monitoring) ==="
-    jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" '{dns_server: $dns, log_shipping_target: $log}' \
+    jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg ca "$ca_pem" \
+      '{dns_server: $dns, log_shipping_target: $log, internal_ca_cert: $ca}' \
       > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
     just up "$monitoring"
     mon_ip="$(tofu -chdir={{cluster_root}}/$monitoring output -raw server_ipv4)"
@@ -161,8 +174,8 @@ up-connected:
       [ -f "$dir/main.tf" ] || continue
       case "$c" in "$dns"|"$logging"|"$monitoring") continue ;; esac
       echo "=== up-connected: consumer $c ==="
-      jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg oo "$mon_ip:5080" \
-        '{dns_server: $dns, log_shipping_target: $log, openobserve_endpoint: $oo}' \
+      jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg oo "$mon_ip:5080" --arg ca "$ca_pem" \
+        '{dns_server: $dns, log_shipping_target: $log, openobserve_endpoint: $oo, internal_ca_cert: $ca}' \
         > "$dir/.cross-cluster.auto.tfvars.json"
       just up "$c"
       # accumulate this consumer's VM IPs as Prometheus scrape targets (node_exporter :9100)
@@ -180,8 +193,8 @@ up-connected:
     #    the DNS VM booted before the hubs, so wire its log shipping now. A targeted re-apply
     #    (content-only change — never recreates the VM) materializes the rendered drop-ins for scp.
     echo "=== up-connected: wiring DNS hub self-telemetry ==="
-    jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg oo "$mon_ip:5080" \
-      '{log_shipping_target: $log, openobserve_endpoint: $oo}' \
+    jq -n --arg dns "$dns_ip" --arg log "$log_ip:514" --arg oo "$mon_ip:5080" --arg ca "$ca_pem" \
+      '{log_shipping_target: $log, openobserve_endpoint: $oo, internal_ca_cert: $ca}' \
       > {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json
     tofu -chdir={{cluster_root}}/$dns apply -auto-approve   # re-renders .rendered/ drop-ins only
     scp {{ssh_opts}} -i {{ssh_key}} \
@@ -206,8 +219,8 @@ up-connected:
     # 5. hot-push the discovered scrape targets into the RUNNING monitoring server (no recreate).
     #    Keep log_shipping_target + dns_server so the re-apply preserves the hub's wiring in state.
     echo "=== up-connected: wiring Prometheus scrape targets ==="
-    echo "$targets" | jq -c --arg dns "$dns_ip" --arg log "$log_ip:514" \
-      '{dns_server: $dns, log_shipping_target: $log, extra_scrape_targets: .}' \
+    echo "$targets" | jq -c --arg dns "$dns_ip" --arg log "$log_ip:514" --arg ca "$ca_pem" \
+      '{dns_server: $dns, log_shipping_target: $log, internal_ca_cert: $ca, extra_scrape_targets: .}' \
       > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
     tofu -chdir={{cluster_root}}/$monitoring apply -auto-approve   # re-renders .rendered/prometheus.yml only
     scp {{ssh_opts}} -i {{ssh_key}} \
@@ -422,6 +435,53 @@ vaultwarden-check CLUSTER:
 # assert a Traefik-served host's cert (chains to step-ca root, or is LE staging):  just tls-check centralized_pki <services-ip> --sni warden.<domain>
 tls-check CLUSTER HOST *ARGS:
     uv run {{cluster_root}}/{{CLUSTER}}/scripts/tls_cli.py --cluster {{CLUSTER}} check {{HOST}} {{ARGS}}
+
+# --- Internal-CA trust distribution (see specs/internal-ca.md) ----------------
+# Fleet-wide trust of the internal root CA is normally baked in at first boot by `just up-connected`
+# (the internal_ca_cert var). These recipes HOT-PUSH the root onto already-running VMs — repair a VM
+# without a full recreate, or trust a cluster brought up with a plain `just up`. Source of the root:
+# the pinned clusters/centralized_pki/.ca/root_ca.crt (scripts/init_ca.py); if that's absent, fetch
+# step-ca's current root from the CA's /roots.pem TOFU endpoint.
+
+# install/refresh the internal root CA on every running VM of a cluster (no recreate):  just trust-ca centralized_netbox
+trust-ca CLUSTER:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ca_crt="{{cluster_root}}/centralized_pki/.ca/root_ca.crt"
+    tmp="$(mktemp -t internal-root-ca.XXXXXX.crt)"
+    trap 'rm -f "$tmp"' EXIT
+    if [ -f "$ca_crt" ]; then
+      cp "$ca_crt" "$tmp"
+      echo "trust-ca: using pinned root $ca_crt"
+    else
+      ca_ip="$(tofu -chdir={{cluster_root}}/centralized_pki output -raw ca_ipv4)"
+      echo "trust-ca: no pinned root — fetching https://$ca_ip:9000/roots.pem (TOFU)"
+      curl -fsSk "https://$ca_ip:9000/roots.pem" -o "$tmp"
+    fi
+    tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.[].ipv4' | while read ip; do
+      echo "=== trust-ca: {{CLUSTER}} @ $ip ==="
+      scp {{ssh_opts}} -i {{ssh_key}} "$tmp" ubuntu@"$ip":/tmp/internal-root-ca.crt
+      ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" \
+        'sudo cp /tmp/internal-root-ca.crt /usr/local/share/ca-certificates/internal-root-ca.crt && sudo update-ca-certificates'
+    done
+
+# install/refresh the internal root CA on every VM of every cluster (glob-discovered):  just trust-ca-all
+trust-ca-all:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=0
+    for dir in {{cluster_root}}/*/; do
+      cluster="$(basename "$dir")"
+      [ -f "$dir/main.tf" ] || continue   # skip non-cluster dirs like _shared/
+      echo "=== trust-ca: $cluster ==="
+      just trust-ca "$cluster" || rc=1
+    done
+    exit "$rc"
+
+# install/refresh the internal root CA into the macOS host trust store (Chrome/Safari + Firefox):  just trust-ca-macos
+# Mutates the login/System keychain + Firefox NSS DBs, so it prints what it will do and prompts.
+trust-ca-macos *ARGS:
+    uv run {{cluster_root}}/centralized_pki/scripts/macos_trust_cli.py {{ARGS}} install
 
 # NetBox health + auth + self-registration, exit nonzero on failure:  just netbox-check centralized_netbox
 netbox-check CLUSTER:

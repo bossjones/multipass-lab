@@ -602,3 +602,50 @@ run "dns_on_renders_resolved_conf" {
     error_message = "rendered cloud-init must stay valid YAML after adding the DNS drop-in"
   }
 }
+
+# --- Fleet-wide internal-CA trust (var.internal_ca_cert) -----------------------------
+# Empty default => no CA cert file / update-ca-certificates on any VM; non-empty => every VM
+# drops the root CA into the OS trust store at first boot. Mirrors the dns_server gating pattern.
+# `just up-connected` injects it from centralized_pki. See specs/internal-ca.md.
+
+run "internal_ca_off_by_default" {
+  command = plan
+
+  # No internal_ca_cert var set: the trust-store cert file must be absent from every VM's cloud-init.
+  assert {
+    condition = alltrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : !strcontains(c, "internal-root-ca.crt")])
+    error_message = "internal_ca_cert unset must not render the internal-root-ca.crt trust-store file on any VM"
+  }
+}
+
+run "internal_ca_on_renders_trust" {
+  command = plan
+
+  variables {
+    internal_ca_cert = "-----BEGIN CERTIFICATE-----\nMIITESTROOTCA\n-----END CERTIFICATE-----"
+  }
+
+  # Every VM must gain the trust-store cert file...
+  assert {
+    condition = alltrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : strcontains(c, "/usr/local/share/ca-certificates/internal-root-ca.crt")])
+    error_message = "internal_ca_cert set must drop the root CA into /usr/local/share/ca-certificates on every VM"
+  }
+  # ...and run update-ca-certificates to install it into the OS trust store.
+  assert {
+    condition = alltrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : strcontains(c, "update-ca-certificates")])
+    error_message = "internal_ca_cert set must run update-ca-certificates on every VM"
+  }
+  # The PEM body must actually be spliced into the rendered cloud-init.
+  assert {
+    condition = anytrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : strcontains(c, "MIITESTROOTCA")])
+    error_message = "internal_ca_cert set must splice the CA PEM body into the rendered cloud-init"
+  }
+}

@@ -89,6 +89,32 @@ write_files:
     content: |
       ${indent(6, dns_resolved_conf)}
 %{ endif ~}
+%{ if internal_ca_cert != "" ~}
+
+  # Fleet-wide trust — the internal root CA, installed into the OS trust store by a runcmd. See specs/internal-ca.md.
+  - path: /usr/local/share/ca-certificates/internal-root-ca.crt
+    permissions: '0644'
+    content: |
+      ${indent(6, internal_ca_cert)}
+%{ endif ~}
+%{ if pin_ca ~}
+
+  # Persisted CA material (Phase 0) — pinned over step-ca's self-generated pair by a runcmd after
+  # the stack is up, so the root survives `just recreate`. The intermediate key is encrypted with
+  # the CA password. See specs/internal-ca.md.
+  - path: /opt/pki/pinned/root_ca.crt
+    permissions: '0644'
+    content: |
+      ${indent(6, root_ca_cert)}
+  - path: /opt/pki/pinned/intermediate_ca.crt
+    permissions: '0644'
+    content: |
+      ${indent(6, intermediate_ca_cert)}
+  - path: /opt/pki/pinned/intermediate_ca_key
+    permissions: '0600'
+    content: |
+      ${indent(6, intermediate_ca_key)}
+%{ endif ~}
 %{ if openobserve_endpoint != "" ~}
 
   # Cross-cluster OTLP push — otelcol-contrib agent (shared snippet) shipping host logs to
@@ -124,6 +150,10 @@ runcmd:
   # Cross-cluster DNS — point this VM's resolver at the centralized_dns AdGuard Home hub.
   - systemctl restart systemd-resolved
 %{ endif ~}
+%{ if internal_ca_cert != "" ~}
+  # Fleet-wide trust — install the internal root CA into the OS trust store. See specs/internal-ca.md.
+  - update-ca-certificates
+%{ endif ~}
   # step-ca needs its own IP in the cert SAN, but tofu can't self-reference this VM's IP. Compute it
   # at boot and hand it to docker compose via /opt/pki/.env ($${SELF_IP} in the CA compose).
   - |
@@ -134,6 +164,22 @@ runcmd:
   - systemctl enable docker
   - systemctl restart docker
   - docker compose -f /opt/pki/compose.yaml up -d
+%{ if pin_ca ~}
+  # Persisted-root pinning (Phase 0): after step-ca self-inits (creating its provisioners +
+  # password), swap in the pinned root + intermediate so leaves chain to a STABLE root that
+  # survives recreate. Provisioners (admin JWK, acme) are untouched — only the signing identity is
+  # replaced. Idempotent: re-running copies the same files. See specs/internal-ca.md.
+  - |
+    for i in $(seq 1 60); do
+      docker exec step-ca test -f /home/step/certs/root_ca.crt && break
+      echo "waiting for step-ca init ($i)"; sleep 2
+    done
+    docker cp /opt/pki/pinned/root_ca.crt         step-ca:/home/step/certs/root_ca.crt
+    docker cp /opt/pki/pinned/intermediate_ca.crt step-ca:/home/step/certs/intermediate_ca.crt
+    docker cp /opt/pki/pinned/intermediate_ca_key step-ca:/home/step/secrets/intermediate_ca_key
+    docker exec step-ca chown -R step:step /home/step/certs /home/step/secrets || true
+    docker restart step-ca
+%{ endif ~}
 %{ if enable_docker_tools ~}
   # Interactive docker operator TUIs (wharf/oxker/dive); best-effort so a download blip can't
   # break boot. Idempotent — re-run with `sudo /usr/local/sbin/install-docker-tools.sh`.

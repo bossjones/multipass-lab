@@ -125,6 +125,7 @@ resource "local_file" "central_ci" {
     server_conf       = local.server_conf
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
+    internal_ca_cert  = var.internal_ca_cert
   }))
 }
 
@@ -146,6 +147,7 @@ resource "local_file" "k0s_ci" {
     client_conf       = local.client_conf
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
+    internal_ca_cert  = var.internal_ca_cert
     # Coroot (opt-in). enable_coroot/enable_ingress gate the %{ if } blocks; the rendered
     # coroot-ce values + pinned chart versions drive the in-VM Helm install. See specs/coroot.md.
     enable_coroot                = var.enable_coroot
@@ -175,6 +177,7 @@ resource "local_file" "docker_ci" {
     compose_conf      = local.compose_conf
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
+    internal_ca_cert  = var.internal_ca_cert
     # Peer IPs for the local Prometheus scrape config. Referencing central/k0s here forces
     # both to be created (and their DHCP IPs known) before the docker VM renders — the same
     # runtime IP-injection edge the syslog-ng client_conf already creates for central.

@@ -108,6 +108,7 @@ resource "local_file" "k0s_ci" {
     # Cross-cluster DNS — gated on a non-empty dns_server. See specs/cross-cluster.md.
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
+    internal_ca_cert  = var.internal_ca_cert
   }))
 }
 
@@ -226,6 +227,7 @@ resource "local_file" "server_ci" {
     # the default `just up` keeps the image default resolver. See specs/cross-cluster.md.
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
+    internal_ca_cert  = var.internal_ca_cert
     # Docker operator TUIs (wharf/oxker/dive) on the observability hub (the docker VM).
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer

@@ -179,6 +179,7 @@ resource "local_file" "server_ci" {
     # Cross-cluster DNS (opt-in) — point systemd-resolved at the centralized_dns hub.
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
+    internal_ca_cert  = var.internal_ca_cert
     # Docker operator TUIs (wharf/oxker/dive) — the server runs the netbox-docker stack.
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
@@ -211,6 +212,7 @@ resource "local_file" "client_ci" {
     # Cross-cluster DNS (opt-in) — point systemd-resolved at the centralized_dns hub.
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
+    internal_ca_cert  = var.internal_ca_cert
   }))
 }
 
@@ -242,6 +244,7 @@ resource "local_file" "agent_ci" {
     # Cross-cluster DNS (opt-in) — point systemd-resolved at the centralized_dns hub.
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
+    internal_ca_cert  = var.internal_ca_cert
     # Docker operator TUIs (wharf/oxker/dive) — the agent runs orb-agent via docker.
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer

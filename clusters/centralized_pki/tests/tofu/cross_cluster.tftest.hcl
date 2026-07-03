@@ -113,3 +113,77 @@ run "dns_on_renders_resolved_conf" {
     error_message = "services systemd-resolved drop-in must point at the injected AdGuard resolver IP"
   }
 }
+
+# --- default: fleet-wide CA trust off -> no trust block rendered -------------
+run "internal_ca_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = !strcontains(local_file.ca_ci.content, "internal-root-ca.crt")
+    error_message = "with internal_ca_cert unset, ca cloud-init must NOT render the trust block"
+  }
+  assert {
+    condition     = !strcontains(local_file.services_ci.content, "internal-root-ca.crt")
+    error_message = "with internal_ca_cert unset, services cloud-init must NOT render the trust block"
+  }
+}
+
+# --- fleet-wide CA trust on: root PEM dropped + update-ca-certificates run ----
+run "internal_ca_on_renders_trust" {
+  command = plan
+
+  variables {
+    internal_ca_cert = "-----BEGIN CERTIFICATE-----\nMIITESTROOTCA\n-----END CERTIFICATE-----"
+  }
+
+  assert {
+    condition     = strcontains(local_file.ca_ci.content, "/usr/local/share/ca-certificates/internal-root-ca.crt")
+    error_message = "ca cloud-init must drop the internal root CA when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.ca_ci.content, "update-ca-certificates")
+    error_message = "ca cloud-init must run update-ca-certificates when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.services_ci.content, "/usr/local/share/ca-certificates/internal-root-ca.crt")
+    error_message = "services cloud-init must drop the internal root CA when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.services_ci.content, "MIITESTROOTCA")
+    error_message = "services trust block must carry the injected root CA PEM"
+  }
+}
+
+# --- default: root NOT pinned -> step-ca self-inits (no pin runcmd) ----------
+run "pin_ca_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = !strcontains(local_file.ca_ci.content, "/opt/pki/pinned/root_ca.crt")
+    error_message = "with no pinned material, ca cloud-init must NOT render the pin block (ephemeral self-init)"
+  }
+}
+
+# --- pinned root: material dropped + swapped into step-ca after init ----------
+run "pin_ca_on_renders" {
+  command = plan
+
+  variables {
+    root_ca_cert         = "-----BEGIN CERTIFICATE-----\nMIIPINNEDROOT\n-----END CERTIFICATE-----"
+    intermediate_ca_cert = "-----BEGIN CERTIFICATE-----\nMIIPINNEDINT\n-----END CERTIFICATE-----"
+    intermediate_ca_key  = "-----BEGIN EC PRIVATE KEY-----\nPINNEDKEY\n-----END EC PRIVATE KEY-----"
+  }
+
+  assert {
+    condition     = strcontains(local_file.ca_ci.content, "/opt/pki/pinned/root_ca.crt")
+    error_message = "ca cloud-init must drop the pinned root when the material is set"
+  }
+  assert {
+    condition     = strcontains(local_file.ca_ci.content, "docker cp /opt/pki/pinned/intermediate_ca_key step-ca:/home/step/secrets/intermediate_ca_key")
+    error_message = "ca cloud-init must swap the pinned intermediate key into step-ca after init"
+  }
+  assert {
+    condition     = strcontains(local_file.ca_ci.content, "MIIPINNEDROOT")
+    error_message = "pinned root file must carry the injected root PEM"
+  }
+}

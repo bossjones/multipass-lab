@@ -35,6 +35,12 @@ variable "dns_server" {
   default     = ""
 }
 
+variable "internal_ca_cert" {
+  description = "PEM of the internal root CA to trust on every VM. Non-empty -> each VM drops it into /usr/local/share/ca-certificates and runs update-ca-certificates at first boot. Empty (default) = no fleet trust. `just up-connected` injects it from centralized_pki. See specs/internal-ca.md."
+  type        = string
+  default     = ""
+}
+
 # --- Fidelity model ----------------------------------------------------------
 # `exact` (default): run the appliances' ACTUAL Debian packages in containers —
 #   syslog-ng 3.28.1 (bullseye, native arm64) + rsyslog 5.8.11 (wheezy, emulated amd64),

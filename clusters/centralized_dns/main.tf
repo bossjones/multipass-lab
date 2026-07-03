@@ -78,6 +78,7 @@ resource "local_file" "server_ci" {
 
     dns_server           = var.dns_server
     dns_resolved_conf    = local.dns_resolved_conf
+    internal_ca_cert     = var.internal_ca_cert
     log_shipping_target  = var.log_shipping_target
     openobserve_endpoint = var.openobserve_endpoint
     syslog_client_conf   = local.syslog_client_conf

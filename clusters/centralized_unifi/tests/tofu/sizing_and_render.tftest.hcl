@@ -295,3 +295,39 @@ run "outputs_expose_versions_and_targets" {
     error_message = "enabled_exporters must list node + syslogng by default"
   }
 }
+
+# --- Fleet-wide CA trust (opt-in) — off by default, installs root CA when set --------
+
+run "internal_ca_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = !strcontains(local_file.controller_ci.content, "internal-root-ca.crt")
+    error_message = "with internal_ca_cert unset, controller cloud-init must NOT render the trust block"
+  }
+  assert {
+    condition     = !strcontains(local_file.usg_ci.content, "internal-root-ca.crt")
+    error_message = "with internal_ca_cert unset, usg cloud-init must NOT render the trust block"
+  }
+}
+
+run "internal_ca_on_renders_trust" {
+  command = plan
+
+  variables {
+    internal_ca_cert = "-----BEGIN CERTIFICATE-----\nMIITESTROOTCA\n-----END CERTIFICATE-----"
+  }
+
+  assert {
+    condition     = strcontains(local_file.controller_ci.content, "/usr/local/share/ca-certificates/internal-root-ca.crt") && strcontains(local_file.controller_ci.content, "update-ca-certificates")
+    error_message = "controller cloud-init must drop the internal root CA + run update-ca-certificates when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.usg_ci.content, "/usr/local/share/ca-certificates/internal-root-ca.crt") && strcontains(local_file.usg_ci.content, "update-ca-certificates")
+    error_message = "usg cloud-init must drop the internal root CA + run update-ca-certificates when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.controller_ci.content, "MIITESTROOTCA")
+    error_message = "controller trust block must carry the injected root CA PEM"
+  }
+}

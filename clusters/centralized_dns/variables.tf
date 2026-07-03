@@ -130,6 +130,12 @@ variable "dns_server" {
   default     = ""
 }
 
+variable "internal_ca_cert" {
+  description = "PEM of the internal root CA to trust on every VM. Non-empty -> each VM drops it into /usr/local/share/ca-certificates and runs update-ca-certificates at first boot. Empty (default) = no fleet trust. `just up-connected` injects it from centralized_pki. See specs/internal-ca.md."
+  type        = string
+  default     = ""
+}
+
 variable "log_shipping_target" {
   description = "host:port of the centralized_logging syslog-ng collector. Non-empty -> the VM renders the syslog-ng client drop-in shipping to it. Empty (default) = disabled."
   type        = string

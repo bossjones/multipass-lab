@@ -104,6 +104,7 @@ resource "local_file" "controller_ci" {
     # Cross-cluster DNS (opt-in): point systemd-resolved at the centralized_dns hub at first boot.
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
+    internal_ca_cert  = var.internal_ca_cert
   }))
 }
 
@@ -134,6 +135,7 @@ resource "local_file" "usg_ci" {
     # Cross-cluster DNS (opt-in): point systemd-resolved at the centralized_dns hub at first boot.
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
+    internal_ca_cert  = var.internal_ca_cert
   }))
 }
 

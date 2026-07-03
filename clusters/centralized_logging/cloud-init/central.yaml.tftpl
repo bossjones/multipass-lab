@@ -37,6 +37,14 @@ write_files:
     content: |
       ${indent(6, dns_resolved_conf)}
 %{ endif ~}
+%{ if internal_ca_cert != "" ~}
+
+  # Fleet-wide trust — the internal root CA, installed into the OS trust store by a runcmd. See specs/internal-ca.md.
+  - path: /usr/local/share/ca-certificates/internal-root-ca.crt
+    permissions: '0644'
+    content: |
+      ${indent(6, internal_ca_cert)}
+%{ endif ~}
 
   # Generic exporter installer (copied from the centralized_monitoring cluster): download a
   # GitHub release (tar.gz or raw binary), drop the binary in /usr/local/bin, install + enable
@@ -145,6 +153,10 @@ runcmd:
 %{ if dns_server != "" ~}
   # Cross-cluster DNS — point this VM's resolver at the centralized_dns AdGuard Home hub.
   - systemctl restart systemd-resolved
+%{ endif ~}
+%{ if internal_ca_cert != "" ~}
+  # Fleet-wide trust — install the internal root CA into the OS trust store. See specs/internal-ca.md.
+  - update-ca-certificates
 %{ endif ~}
   - mkdir -p /var/log/remote
   - grep -q 'conf.d/\*.conf' /etc/syslog-ng/syslog-ng.conf || echo '@include "/etc/syslog-ng/conf.d/*.conf"' >> /etc/syslog-ng/syslog-ng.conf

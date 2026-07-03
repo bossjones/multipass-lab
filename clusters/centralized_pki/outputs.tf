@@ -22,6 +22,15 @@ output "domain" {
   value       = var.domain
 }
 
+# The pinned root CA PEM — the fleet-wide trust anchor. Static (known at apply time) whenever a
+# persisted root is configured (scripts/init_ca.py); `just up-connected` reads this and injects it
+# as internal_ca_cert into every cluster. Empty when the root is ephemeral (self-init at boot), in
+# which case fleet distribution must fall back to fetching /roots.pem. See specs/internal-ca.md.
+output "root_ca_pem" {
+  description = "PEM of the pinned internal root CA (empty when using an ephemeral self-init root)."
+  value       = var.root_ca_cert
+}
+
 output "acme_directory_url" {
   description = "step-ca ACME directory URL Traefik uses in the default (internal-ACME) mode."
   value       = local.acme_directory_url

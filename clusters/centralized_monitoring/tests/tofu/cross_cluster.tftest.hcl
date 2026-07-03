@@ -129,3 +129,47 @@ run "dns_on_renders_resolved_conf" {
     error_message = "k0s DNS drop-in must point at the injected centralized_dns IP"
   }
 }
+
+# --- default: no fleet-wide internal-CA trust -------------------------------
+run "internal_ca_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "internal-root-ca.crt")
+    error_message = "with internal_ca_cert unset, server cloud-init must NOT drop the internal root CA"
+  }
+  assert {
+    condition     = !strcontains(local_file.k0s_ci.content, "internal-root-ca.crt")
+    error_message = "with internal_ca_cert unset, k0s cloud-init must NOT drop the internal root CA"
+  }
+}
+
+# --- internal CA on: every VM installs the root into the OS trust store ------
+run "internal_ca_on_renders_trust" {
+  command = plan
+
+  variables {
+    internal_ca_cert = "-----BEGIN CERTIFICATE-----\nMIITESTROOTCA\n-----END CERTIFICATE-----"
+  }
+
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/usr/local/share/ca-certificates/internal-root-ca.crt")
+    error_message = "server cloud-init must drop the internal root CA into the OS trust store when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "update-ca-certificates")
+    error_message = "server cloud-init must run update-ca-certificates when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "/usr/local/share/ca-certificates/internal-root-ca.crt")
+    error_message = "k0s cloud-init must drop the internal root CA into the OS trust store when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "update-ca-certificates")
+    error_message = "k0s cloud-init must run update-ca-certificates when internal_ca_cert is set"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "MIITESTROOTCA")
+    error_message = "server cloud-init must embed the injected internal root CA PEM"
+  }
+}

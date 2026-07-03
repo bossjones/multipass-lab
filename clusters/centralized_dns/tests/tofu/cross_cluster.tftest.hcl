@@ -101,3 +101,35 @@ run "dns_server_renders_resolved_conf" {
     error_message = "external resolver drop-in must carry the injected DNS IP"
   }
 }
+
+# --- default: internal CA trust off -> no CA cert dropped into the trust store ----
+run "internal_ca_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "internal-root-ca.crt")
+    error_message = "with internal_ca_cert unset, cloud-init must NOT drop a root CA into the trust store"
+  }
+}
+
+# --- internal CA set: root CA rendered into the OS trust store + update-ca-certificates ----
+run "internal_ca_on_renders_trust" {
+  command = plan
+
+  variables {
+    internal_ca_cert = "-----BEGIN CERTIFICATE-----\nMIITESTROOTCA\n-----END CERTIFICATE-----"
+  }
+
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "/usr/local/share/ca-certificates/internal-root-ca.crt")
+    error_message = "internal_ca_cert set must drop the root CA into /usr/local/share/ca-certificates"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "update-ca-certificates")
+    error_message = "internal_ca_cert set must run update-ca-certificates to install the trust"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "MIITESTROOTCA")
+    error_message = "the rendered CA cert must carry the injected PEM body"
+  }
+}
