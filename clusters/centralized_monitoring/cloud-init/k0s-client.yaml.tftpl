@@ -213,6 +213,10 @@ runcmd:
   # Standalone/local-only: no --claim-token (no Netdata Cloud), telemetry disabled, updates pinned.
   - mkdir -p /etc/netdata && touch /etc/netdata/.opt-out-from-anonymous-statistics
   - curl -sSLf https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh && DO_NOT_TRACK=1 sh /tmp/netdata-kickstart.sh --non-interactive --stable-channel --disable-telemetry --no-updates --dont-wait || true
+  # netdata's built-in StatsD collector is on by default and binds :8125 (UDP+TCP);
+  # disabled here for consistency with the server VM (see server.yaml.tftpl), even
+  # though this node doesn't run statsd_exporter itself today.
+  - printf '\n[plugins]\n\tstatsd = no\n' >> /etc/netdata/netdata.conf && systemctl restart netdata || true
 %{ endif ~}
 %{ if enable_kube_state_metrics ~}
   # kube-state-metrics — wait for the API, drop the admin kubeconfig next to the manifest, then

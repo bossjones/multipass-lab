@@ -22,6 +22,12 @@ EXPECTED_TITLES = {
     "Container Logs",
     "Kubernetes Pod Logs",
     "Cause & Effect",
+    "Prometheus Health",
+    "Uptime",
+    "Traces Overview",
+    "Traces By Service",
+    "Host Metrics",
+    "Container Metrics",
 }
 
 
