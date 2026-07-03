@@ -102,12 +102,12 @@ resource "multipass_instance" "server" {
 # for scp onto the running VM. count=0 (empty files absent) keeps a plain `just up` clean.
 resource "local_file" "ship_conf" {
   count    = local.ship_logs ? 1 : 0
-  filename = "${local.render_dir}/10-ship.conf"
+  filename = "${local.render_dir}/server-ship.conf"
   content  = local.syslog_client_conf
 }
 
 resource "local_file" "otel_conf" {
   count    = local.push_otlp ? 1 : 0
-  filename = "${local.render_dir}/otel-config.yaml"
+  filename = "${local.render_dir}/server-otel.yaml"
   content  = local.otel_agent_conf
 }

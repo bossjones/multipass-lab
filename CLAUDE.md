@@ -207,6 +207,16 @@ The active machinery here is a Claude Code hook + skill system, not application 
   `activating` with no new output. SSH in, `sudo journalctl -u <svc>`, patch the `/opt/...` files or
   `/usr/local/sbin/<svc>.sh`, then `sudo systemctl restart --no-block <svc>` — far faster than
   destroy→up. Fold the fix back into the `.tftpl` afterward.
+- **Triage provisioning problems fast with `/system-debug <cluster> [role]`** (or `just system-debug
+  <cluster> [role]` / `uv run tools/system_debug.py <cluster> [role]`). It SSHes into the VM(s),
+  sweeps `cloud-init status` + `otelcol-contrib` + any `systemctl --failed` unit + a `journalctl -p
+  err` boot sweep, and **highlights** the smoking-gun lines (e.g. otelcol's `permission denied` /
+  missing `EnvironmentFile`), retrying up to 3× with exponential backoff and early-exiting once
+  healthy. Exit `0` healthy / `2` issues / `3` unreachable / `4` not-up. It **shells out to `ssh`**
+  (never a Python socket), so it sidesteps the macOS Local-Network block that hits the HTTP CLIs
+  (`[[macos-local-network-blocks-uv-cli]]`). Pure parsing/policy lives in `tools/_system_debug_core.py`
+  (stdlib-only, hermetically tested in `tools/tests/`); the manual fallback is
+  `just ssh <cluster> <role>` → `sudo journalctl -u <svc> -b -p err`.
 - **The `pre_tool_use` hook matches on substrings**, so it blocks otherwise-fine commands containing
   `rm ` or `.env`: `docker run --rm`, `grep .env`, `rm -f` all get denied. Use `docker run` (+
   `docker container prune -f`), avoid the literal `.env` token, and `mv` to the scratchpad, not `rm`.

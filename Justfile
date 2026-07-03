@@ -195,7 +195,7 @@ up-connected:
             {job:"centralized-dns-adguard",ip:$ip,port:9618},
             {job:"centralized-dns-unbound",ip:$ip,port:9167}]')"
 
-    # 4. DNS-hub self-telemetry HOT-PUSH (mirrors the Prometheus scrape hot-push; no recreate):
+    # 4. DNS-hub self-telemetry HOT-PUSH (mirrors _hot-push-cross-cluster; no recreate):
     #    the DNS VM booted before the hubs, so wire its log shipping now. A targeted re-apply
     #    (content-only change — never recreates the VM) materializes the rendered drop-ins for scp.
     echo "=== up-connected: wiring DNS hub self-telemetry ==="
@@ -203,24 +203,7 @@ up-connected:
       '{log_shipping_target: $log, openobserve_endpoint: $oo}' \
       > {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json
     tofu -chdir={{cluster_root}}/$dns apply -auto-approve   # re-renders .rendered/ drop-ins only
-    scp {{ssh_opts}} -i {{ssh_key}} \
-      {{cluster_root}}/$dns/.rendered/10-ship.conf ubuntu@"$dns_ip":/tmp/10-ship.conf
-    scp {{ssh_opts}} -i {{ssh_key}} \
-      {{cluster_root}}/$dns/.rendered/otel-config.yaml ubuntu@"$dns_ip":/tmp/otel-config.yaml
-    ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$dns_ip" \
-      'set -e; \
-       sudo DEBIAN_FRONTEND=noninteractive apt-get install -y syslog-ng >/dev/null; \
-       sudo mkdir -p /var/lib/syslog-ng /etc/syslog-ng/conf.d /var/lib/otelcol-contrib/storage; \
-       sudo cp /tmp/10-ship.conf /etc/syslog-ng/conf.d/10-ship.conf; \
-       grep -q "conf.d/\*.conf" /etc/syslog-ng/syslog-ng.conf || echo "@include \"/etc/syslog-ng/conf.d/*.conf\"" | sudo tee -a /etc/syslog-ng/syslog-ng.conf >/dev/null; \
-       sudo systemctl enable syslog-ng >/dev/null 2>&1 || true; sudo systemctl restart syslog-ng; \
-       if ! command -v otelcol-contrib >/dev/null 2>&1; then \
-         V=0.109.0; A="$(dpkg --print-architecture)"; \
-         curl -sSLf "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v${V}/otelcol-contrib_${V}_linux_${A}.deb" -o /tmp/otelcol.deb; \
-         sudo dpkg -i /tmp/otelcol.deb || sudo DEBIAN_FRONTEND=noninteractive apt-get install -f -y; \
-       fi; \
-       sudo cp /tmp/otel-config.yaml /etc/otelcol-contrib/config.yaml; \
-       sudo systemctl enable otelcol-contrib >/dev/null 2>&1 || true; sudo systemctl restart otelcol-contrib'
+    just _hot-push-cross-cluster "$dns"
 
     # 5. hot-push the discovered scrape targets into the RUNNING monitoring server (no recreate).
     #    Keep log_shipping_target + dns_server so the re-apply preserves the hub's wiring in state.
@@ -318,6 +301,144 @@ verify-dns:
     [ "$rc" -eq 0 ] && echo "verify-dns: all records resolve via $dns_ip" || echo "verify-dns: MISMATCHES above" >&2
     exit "$rc"
 
+# generic hot-push: pushes whichever of {resolved.conf, ship.conf, otel.yaml} exist under
+# CLUSTER's .rendered/ onto EVERY currently-running VM of that cluster (per `hosts` output),
+# keyed by role name (<role>-resolved.conf / <role>-ship.conf / <role>-otel.yaml). Content-only;
+# never touches tofu state, never recreates a VM. Skips silently if CLUSTER isn't up.
+_hot-push-cross-cluster CLUSTER:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    dir="{{cluster_root}}/{{CLUSTER}}"
+    hosts_json="$(tofu -chdir="$dir" output -json hosts 2>/dev/null)" || { echo "    ({{CLUSTER}} not up — skip hot-push)"; exit 0; }
+    [ -n "$hosts_json" ] && [ "$hosts_json" != "null" ] || exit 0
+    while IFS=$'\t' read -r role ip; do
+      [ -n "$role" ] && [ -n "$ip" ] || continue
+
+      if [ -f "$dir/.rendered/${role}-resolved.conf" ]; then
+        echo "    [{{CLUSTER}}/$role] dns resolver -> $ip"
+        scp {{ssh_opts}} -i {{ssh_key}} "$dir/.rendered/${role}-resolved.conf" ubuntu@"$ip":/tmp/99-centralized-dns.conf
+        ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" \
+          'sudo cp /tmp/99-centralized-dns.conf /etc/systemd/resolved.conf.d/99-centralized-dns.conf && sudo systemctl restart systemd-resolved'
+      fi
+
+      if [ -f "$dir/.rendered/${role}-ship.conf" ]; then
+        echo "    [{{CLUSTER}}/$role] syslog-ng shipper -> $ip"
+        scp {{ssh_opts}} -i {{ssh_key}} "$dir/.rendered/${role}-ship.conf" ubuntu@"$ip":/tmp/10-ship.conf
+        ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" '
+          set -e
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y syslog-ng >/dev/null
+          sudo mkdir -p /var/lib/syslog-ng /etc/syslog-ng/conf.d
+          sudo cp /tmp/10-ship.conf /etc/syslog-ng/conf.d/10-ship.conf
+          grep -q "conf.d/\*.conf" /etc/syslog-ng/syslog-ng.conf || echo "@include \"/etc/syslog-ng/conf.d/*.conf\"" | sudo tee -a /etc/syslog-ng/syslog-ng.conf >/dev/null
+          sudo systemctl enable syslog-ng >/dev/null 2>&1 || true
+          sudo systemctl restart syslog-ng'
+      fi
+
+      if [ -f "$dir/.rendered/${role}-otel.yaml" ]; then
+        echo "    [{{CLUSTER}}/$role] otelcol-contrib -> $ip"
+        scp {{ssh_opts}} -i {{ssh_key}} "$dir/.rendered/${role}-otel.yaml" ubuntu@"$ip":/tmp/otel-config.yaml
+        ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" '
+          set -e
+          sudo mkdir -p /var/lib/otelcol-contrib/storage
+          if ! command -v otelcol-contrib >/dev/null 2>&1; then
+            V=0.109.0; A="$(dpkg --print-architecture)"
+            curl -sSLf "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v${V}/otelcol-contrib_${V}_linux_${A}.deb" -o /tmp/otelcol.deb
+            sudo DEBIAN_FRONTEND=noninteractive dpkg --force-confdef --force-confold -i /tmp/otelcol.deb || sudo DEBIAN_FRONTEND=noninteractive apt-get install -f -y
+          fi
+          sudo cp /tmp/otel-config.yaml /etc/otelcol-contrib/config.yaml
+          sudo chown -R otelcol-contrib:otelcol-contrib /var/lib/otelcol-contrib/storage
+          sudo systemctl enable otelcol-contrib >/dev/null 2>&1 || true
+          sudo systemctl restart otelcol-contrib'
+      fi
+    done < <(echo "$hosts_json" | jq -r 'to_entries[] | "\(.key)\t\(.value.ipv4)"')
+
+# re-discover the 3 hub IPs, rewrite every ALREADY-WIRED cluster's .cross-cluster.auto.tfvars.json,
+# content-only `tofu apply`, then hot-push. Run after recreating a hub (see `recreate`), or any
+# time you suspect wiring has drifted.  just refresh-cross-cluster
+refresh-cross-cluster:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=0
+    dns=centralized_dns; logging=centralized_logging; monitoring=centralized_monitoring
+
+    dns_ip="$(tofu -chdir={{cluster_root}}/$dns output -raw server_ipv4 2>/dev/null || true)"
+    log_ip="$(tofu -chdir={{cluster_root}}/$logging output -raw central_ipv4 2>/dev/null || true)"
+    mon_ip="$(tofu -chdir={{cluster_root}}/$monitoring output -raw server_ipv4 2>/dev/null || true)"
+    log_target=""; [ -n "$log_ip" ] && log_target="$log_ip:514"
+    oo_target="";  [ -n "$mon_ip" ] && oo_target="$mon_ip:5080"
+    echo "=== refresh-cross-cluster: dns=$dns_ip logging=$log_ip monitoring=$mon_ip ==="
+
+    # recompute extra_scrape_targets from every currently-up, already-wired cluster
+    targets='[]'
+    for dir in {{cluster_root}}/*/; do
+      c="$(basename "$dir")"
+      [ -f "$dir/main.tf" ] || continue
+      case "$c" in "$dns"|"$logging"|"$monitoring") continue ;; esac
+      [ -f "$dir/.cross-cluster.auto.tfvars.json" ] || continue
+      new_targets="$(tofu -chdir="$dir" output -json hosts 2>/dev/null \
+        | jq --argjson acc "$targets" '$acc + [to_entries[] | {job: .value.name, ip: .value.ipv4, port: 9100}]' \
+        2>/dev/null)" && targets="$new_targets"
+    done
+    if [ -n "$dns_ip" ]; then
+      targets="$(echo "$targets" | jq --arg ip "$dns_ip" \
+        '. + [{job:"centralized-dns-server",ip:$ip,port:9100},
+              {job:"centralized-dns-adguard",ip:$ip,port:9618},
+              {job:"centralized-dns-unbound",ip:$ip,port:9167}]')"
+    fi
+
+    if [ -f {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json ]; then
+      echo "=== refresh: $dns (self-telemetry) ==="
+      jq -n --arg log "$log_target" --arg oo "$oo_target" \
+        '{log_shipping_target: $log, openobserve_endpoint: $oo}' \
+        > {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json
+      tofu -chdir={{cluster_root}}/$dns apply -auto-approve || { echo "FAILED apply: $dns"; rc=1; }
+      just _hot-push-cross-cluster "$dns" || rc=1
+    fi
+
+    if [ -f {{cluster_root}}/$logging/.cross-cluster.auto.tfvars.json ]; then
+      echo "=== refresh: $logging ==="
+      jq -n --arg dns "$dns_ip" '{dns_server: $dns, enable_coroot: true}' \
+        > {{cluster_root}}/$logging/.cross-cluster.auto.tfvars.json
+      tofu -chdir={{cluster_root}}/$logging apply -auto-approve || { echo "FAILED apply: $logging"; rc=1; }
+      just _hot-push-cross-cluster "$logging" || rc=1
+    fi
+
+    if [ -f {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json ]; then
+      echo "=== refresh: $monitoring ==="
+      echo "$targets" | jq -c --arg dns "$dns_ip" --arg log "$log_target" \
+        '{dns_server: $dns, log_shipping_target: $log, extra_scrape_targets: .}' \
+        > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
+      tofu -chdir={{cluster_root}}/$monitoring apply -auto-approve || { echo "FAILED apply: $monitoring"; rc=1; }
+      just _hot-push-cross-cluster "$monitoring" || rc=1
+      mon_ip_now="$(tofu -chdir={{cluster_root}}/$monitoring output -raw server_ipv4 2>/dev/null || true)"
+      if [ -n "$mon_ip_now" ]; then
+        scp {{ssh_opts}} -i {{ssh_key}} {{cluster_root}}/$monitoring/.rendered/prometheus.yml ubuntu@"$mon_ip_now":/tmp/prometheus.yml
+        ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$mon_ip_now" \
+          'sudo cp /tmp/prometheus.yml /opt/stack/prometheus/prometheus.yml && sudo docker compose -f /opt/stack/compose.yaml restart prometheus'
+      fi
+    fi
+
+    for dir in {{cluster_root}}/*/; do
+      c="$(basename "$dir")"
+      [ -f "$dir/main.tf" ] || continue
+      case "$c" in "$dns"|"$logging"|"$monitoring") continue ;; esac
+      if [ ! -f "$dir/.cross-cluster.auto.tfvars.json" ]; then
+        echo "=== skip $c (never opted into cross-cluster wiring) ==="; continue
+      fi
+      echo "=== refresh: $c ==="
+      extra='{}'
+      [ "$c" = "centralized_netbox" ] && extra='{"enable_discovery": true}'
+      jq -n --arg dns "$dns_ip" --arg log "$log_target" --arg oo "$oo_target" --argjson extra "$extra" \
+        '{dns_server: $dns, log_shipping_target: $log, openobserve_endpoint: $oo} + $extra' \
+        > "$dir/.cross-cluster.auto.tfvars.json"
+      tofu -chdir="$dir" apply -auto-approve || { echo "FAILED apply: $c"; rc=1; continue; }
+      just _hot-push-cross-cluster "$c" || rc=1
+    done
+
+    echo "=== refresh-cross-cluster: re-registering fleet DNS records ==="
+    just set-dns-all || { echo "FAILED: set-dns-all"; rc=1; }
+    exit "$rc"
+
 # delete + purge Multipass VMs for this cluster that OpenTofu no longer tracks.
 # A failed `up` (e.g. a launch timeout) leaves a VM behind that `tofu destroy` can't
 # see, which then collides with the next `up` ("instance already exists"). Safe to run
@@ -336,8 +457,20 @@ prune CLUSTER:
     done
     if [ "$found" -eq 1 ]; then multipass purge; else echo "no orphaned VMs for {{CLUSTER}}"; fi
 
-# destroy (incl. orphan cleanup) then bring the cluster back up:  just recreate centralized_logging
+# destroy (incl. orphan cleanup) then bring the cluster back up. If CLUSTER is one of the 3
+# cross-cluster hubs, its IP just churned — automatically refresh every dependent cluster's
+# wiring afterward. Plain consumer recreates are unaffected (their own recreate never stales
+# anyone else's config).  just recreate centralized_logging
 recreate CLUSTER: (destroy CLUSTER) (up CLUSTER)
+    #!/usr/bin/env bash
+    set -uo pipefail
+    case "{{CLUSTER}}" in
+      centralized_dns|centralized_logging|centralized_monitoring)
+        echo "=== {{CLUSTER}} is a cross-cluster hub — refreshing dependent wiring ==="
+        just refresh-cross-cluster
+        ;;
+      *) ;;
+    esac
 
 # hermetic: fmt + validate + tofu test (no VMs):  just check (centralized_logging|centralized_monitoring)
 check CLUSTER: (init CLUSTER)
@@ -619,6 +752,12 @@ alias down := stop
 ssh CLUSTER ROLE:
     @ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.{{ROLE}}.ipv4'); \
      ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip"
+
+# triage provisioning problems: sweep journals & highlight the root cause (3 tries, exp backoff):  just system-debug centralized_pki [services]
+# interactive wrapper — "issues found" (exit 2) is the normal case here, so it doesn't fail the recipe.
+# For the meaningful exit code (CI / the /system-debug command) call `uv run tools/system_debug.py ... --json` directly.
+system-debug CLUSTER ROLE="":
+    @uv run tools/system_debug.py {{CLUSTER}} {{ROLE}} || true
 
 # no flag -> core human dashboards;  --full (or --all) -> + every enabled /metrics endpoint.
 # Override the browser with BROWSER_APP=...; falls back to the macOS default browser.

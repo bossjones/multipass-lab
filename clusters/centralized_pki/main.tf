@@ -184,3 +184,42 @@ resource "multipass_instance" "services" {
   disk           = var.services.disk
   cloudinit_file = local_file.services_ci.filename
 }
+
+# --- Hot-push artifacts (see specs/cross-cluster.md; `just refresh-cross-cluster`) ---
+# Discrete per-VM renders of the cross-cluster drop-ins, so a hub IP change can be scp'd onto an
+# already-running VM (content-only tofu apply, no recreate) instead of requiring a full reprovision.
+resource "local_file" "ca_resolved_conf" {
+  count    = local.use_dns ? 1 : 0
+  filename = "${local.render_dir}/ca-resolved.conf"
+  content  = local.dns_resolved_conf
+}
+
+resource "local_file" "services_resolved_conf" {
+  count    = local.use_dns ? 1 : 0
+  filename = "${local.render_dir}/services-resolved.conf"
+  content  = local.dns_resolved_conf
+}
+
+resource "local_file" "ca_ship_conf" {
+  count    = local.ship_logs ? 1 : 0
+  filename = "${local.render_dir}/ca-ship.conf"
+  content  = local.syslog_client_conf
+}
+
+resource "local_file" "services_ship_conf" {
+  count    = local.ship_logs ? 1 : 0
+  filename = "${local.render_dir}/services-ship.conf"
+  content  = local.syslog_client_conf
+}
+
+resource "local_file" "ca_otel_conf" {
+  count    = local.push_otlp ? 1 : 0
+  filename = "${local.render_dir}/ca-otel.yaml"
+  content  = local.otel_agent_conf_ca
+}
+
+resource "local_file" "services_otel_conf" {
+  count    = local.push_otlp ? 1 : 0
+  filename = "${local.render_dir}/services-otel.yaml"
+  content  = local.otel_agent_conf_services
+}
