@@ -88,11 +88,30 @@ output "diode_ingest_client_id" {
   value       = "diode-ingest"
 }
 
+# Sorted list of active enable_* flags. tests/testinfra parametrizes over this so the live
+# suite asserts only the exporters that are on.
+output "enabled_exporters" {
+  description = "Sorted list of enabled exporter flags (the active exporter set)."
+  value       = local.enabled_exporters
+}
+
 # Browser URLs for `just open centralized_netbox [--full]`. core = the NetBox UI; all folds in
-# the API root (handy for a quick token-less 200 check in the browser) plus, when discovery is on,
-# the Diode ingress URL (the only host-published Diode port).
+# the API root plus every enabled exporter /metrics endpoint (server + client) and, when discovery
+# is on, the Diode ingress URL (the only host-published Diode port).
+locals {
+  _web_urls_metrics_candidates = [
+    { url = "http://${multipass_instance.server.ipv4}:9100/metrics", on = var.enable_node_exporter },
+    { url = "http://${multipass_instance.server.ipv4}:9256/metrics", on = var.enable_process_exporter },
+    { url = "http://${multipass_instance.server.ipv4}:9558/metrics", on = var.enable_systemd_exporter },
+    { url = "http://${multipass_instance.client.ipv4}:9100/metrics", on = var.enable_node_exporter },
+    { url = "http://${multipass_instance.client.ipv4}:9256/metrics", on = var.enable_process_exporter },
+    { url = "http://${multipass_instance.client.ipv4}:9558/metrics", on = var.enable_systemd_exporter },
+  ]
+  _web_urls_metrics = [for c in local._web_urls_metrics_candidates : c.url if c.on]
+}
+
 output "web_urls" {
-  description = "Browser URLs. core = NetBox UI; all = core + the REST API root (+ the Diode ingress URL when enable_discovery). Consumed by `just open <cluster> [--full]`."
+  description = "Browser URLs. core = NetBox UI; all = core + the REST API root + enabled /metrics endpoints (+ the Diode ingress URL when enable_discovery). Consumed by `just open <cluster> [--full]`."
   value = {
     core = ["http://${multipass_instance.server.ipv4}:${var.netbox_port}/"]
     all = concat(
@@ -100,6 +119,7 @@ output "web_urls" {
         "http://${multipass_instance.server.ipv4}:${var.netbox_port}/",
         "http://${multipass_instance.server.ipv4}:${var.netbox_port}/api/",
       ],
+      local._web_urls_metrics,
       var.enable_discovery ? ["http://${multipass_instance.server.ipv4}:${var.diode_port}"] : [],
     )
   }

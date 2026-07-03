@@ -97,11 +97,21 @@ write_files:
       WantedBy=timers.target
 %{ endif ~}
 %{ if enable_process_exporter ~}
-  # process-exporter config: a catch-all group keyed on the process basename.
+  # process-exporter config: curated groups so multi-process apps aggregate; a final
+  # {{.Comm}} catch-all keeps the long tail as one bounded group per command (empty
+  # groups pruned at runtime via -remove-empty-groups). exe matches the argv[0] basename.
   - path: /etc/process-exporter/all.yaml
     permissions: '0644'
     content: |
       process_names:
+        - name: syslog-ng
+          exe: [ syslog-ng ]
+        - name: container-runtime
+          exe: [ dockerd, containerd, containerd-shim-runc-v2, runc ]
+        - name: kubernetes
+          exe: [ k0s, kubelet, kube-router, etcd ]
+        - name: observability
+          exe: [ prometheus, grafana, grafana-server, alertmanager, traefik ]
         - name: "{{.Comm}}"
           cmdline:
             - '.+'
@@ -140,7 +150,7 @@ runcmd:
 %{ endif ~}
 %{ if enable_systemd_exporter ~}
   # systemd_exporter — per-unit health/resource metrics (:9558)
-  - /usr/local/sbin/install-exporter.sh systemd_exporter https://github.com/prometheus-community/systemd_exporter/releases/download/v0.7.0/systemd_exporter-0.7.0.linux-{ARCH}.tar.gz systemd_exporter --web.listen-address=:9558
+  - /usr/local/sbin/install-exporter.sh systemd_exporter https://github.com/prometheus-community/systemd_exporter/releases/download/v0.7.0/systemd_exporter-0.7.0.linux-{ARCH}.tar.gz systemd_exporter --web.listen-address=:9558 --systemd.collector.unit-include='(ssh|syslog-ng|docker|containerd|k0s.*|kube.*|.*[-_]exporter|cadvisor|prometheus|grafana|alertmanager|traefik|heimdall)[.]service' --systemd.collector.enable-restart-count
 %{ endif ~}
 %{ if enable_journald_exporter ~}
   # journald-exporter — journald entry/field counters (:12345). NOTE: upstream ships an
@@ -151,7 +161,7 @@ runcmd:
 %{ endif ~}
 %{ if enable_process_exporter ~}
   # process-exporter — per-process metrics (:9256)
-  - /usr/local/sbin/install-exporter.sh process-exporter https://github.com/ncabatoff/process-exporter/releases/download/v0.8.4/process-exporter-0.8.4.linux-{ARCH}.tar.gz process-exporter --config.path=/etc/process-exporter/all.yaml
+  - /usr/local/sbin/install-exporter.sh process-exporter https://github.com/ncabatoff/process-exporter/releases/download/v0.8.7/process-exporter-0.8.7.linux-{ARCH}.tar.gz process-exporter --config.path=/etc/process-exporter/all.yaml -threads=false -gather-smaps=false -remove-empty-groups
 %{ endif ~}
 %{ if enable_filestat_exporter ~}
   # filestat_exporter — size/mtime/stat metrics over /var/log/remote (:9943)

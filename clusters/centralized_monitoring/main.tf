@@ -38,6 +38,7 @@ locals {
     enable_node_exporter    = var.enable_node_exporter
     enable_cadvisor         = var.enable_cadvisor
     enable_process_exporter = var.enable_process_exporter
+    enable_systemd_exporter = var.enable_systemd_exporter
     enable_netdata          = var.enable_netdata
     # Reach
     enable_kube_state_metrics = var.enable_kube_state_metrics

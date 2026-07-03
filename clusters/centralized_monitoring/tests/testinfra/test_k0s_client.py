@@ -13,6 +13,7 @@ CLIENT_FLAG_PORTS = {
     "enable_node_exporter": 9100,
     "enable_cadvisor": 8080,
     "enable_process_exporter": 9256,
+    "enable_systemd_exporter": 9558,
     "enable_netdata": 19999,
     "enable_nut_exporter": 9199,
     "enable_nftables_exporter": 9630,

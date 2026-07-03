@@ -113,6 +113,12 @@ variable "enable_process_exporter" {
   default     = true
 }
 
+variable "enable_systemd_exporter" {
+  description = "systemd_exporter (:9558) on the client + systemd job — per-unit health/resource metrics."
+  type        = bool
+  default     = true
+}
+
 variable "enable_netdata" {
   description = "netdata real-time agent on the client + netdata job."
   type        = bool

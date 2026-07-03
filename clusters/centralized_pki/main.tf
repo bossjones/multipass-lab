@@ -13,6 +13,8 @@ locals {
   # template renders its own %{ if enable_x ~}…%{ endif ~} blocks (mirrors the other clusters).
   flags = {
     enable_node_exporter       = var.enable_node_exporter
+    enable_process_exporter    = var.enable_process_exporter
+    enable_systemd_exporter    = var.enable_systemd_exporter
     enable_letsencrypt_staging = var.enable_letsencrypt_staging
   }
 
