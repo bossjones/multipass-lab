@@ -180,6 +180,23 @@ write_files:
     content: |
       ${indent(6, otel_agent_conf)}
 %{ endif ~}
+%{ if enable_process_exporter ~}
+  # process-exporter config: curated groups + a bounded {{.Comm}} catch-all (empty groups
+  # pruned at runtime via -remove-empty-groups). exe matches the argv[0] basename.
+  - path: /etc/process-exporter/all.yaml
+    permissions: '0644'
+    content: |
+      process_names:
+        - name: step-ca
+          exe: [ step-ca ]
+        - name: container-runtime
+          exe: [ dockerd, containerd, containerd-shim-runc-v2, runc ]
+        - name: proxy-auth
+          exe: [ traefik, authelia, vaultwarden ]
+        - name: "{{.Comm}}"
+          cmdline:
+            - '.+'
+%{ endif ~}
 
 runcmd:
   - timedatectl set-timezone Etc/UTC
@@ -220,6 +237,14 @@ runcmd:
     DEBIAN_FRONTEND=noninteractive dpkg -i /tmp/otelcol.deb || DEBIAN_FRONTEND=noninteractive apt-get install -f -y
   - systemctl enable otelcol-contrib
   - systemctl restart otelcol-contrib
+%{ endif ~}
+%{ if enable_systemd_exporter ~}
+  # systemd_exporter — per-unit health/resource metrics (:9558)
+  - /usr/local/sbin/install-exporter.sh systemd_exporter https://github.com/prometheus-community/systemd_exporter/releases/download/v0.7.0/systemd_exporter-0.7.0.linux-{ARCH}.tar.gz systemd_exporter --web.listen-address=:9558 --systemd.collector.unit-include='(ssh|docker|containerd|node_exporter|systemd_exporter|process-exporter|pki-cert-renew)[.]service' --systemd.collector.enable-restart-count
+%{ endif ~}
+%{ if enable_process_exporter ~}
+  # process-exporter — per-process metrics (:9256)
+  - /usr/local/sbin/install-exporter.sh process-exporter https://github.com/ncabatoff/process-exporter/releases/download/v0.8.7/process-exporter-0.8.7.linux-{ARCH}.tar.gz process-exporter --config.path=/etc/process-exporter/all.yaml -threads=false -gather-smaps=false -remove-empty-groups
 %{ endif ~}
 
 final_message: "services ready — Traefik on :80/:443/:8080; auth.${domain} (Authelia) + vault.${domain} (Vaultwarden)"

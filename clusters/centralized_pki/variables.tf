@@ -45,6 +45,18 @@ variable "enable_node_exporter" {
   default     = true
 }
 
+variable "enable_process_exporter" {
+  description = "process-exporter (:9256) on both VMs — per-process metrics for step-ca, Traefik, Authelia."
+  type        = bool
+  default     = true
+}
+
+variable "enable_systemd_exporter" {
+  description = "systemd_exporter (:9558) on both VMs — per-unit health/resource metrics."
+  type        = bool
+  default     = true
+}
+
 # --- Cross-cluster telemetry (opt-in; see specs/cross-cluster.md) ------------
 # Empty defaults keep `just up centralized_pki` turnkey and isolated. `just up-connected`
 # populates these via a gitignored .cross-cluster.auto.tfvars.json so this cluster's VMs ship

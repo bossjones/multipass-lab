@@ -138,10 +138,24 @@ run "defaults_sizing_names_and_render" {
   # --- k0s cloud-init installs the default-on exporter bundle + SSH key ----
   assert {
     condition = alltrue([for marker in [
-      "node_exporter", "process-exporter", "netdata", "cadvisor",
+      "node_exporter", "process-exporter", "systemd_exporter", "netdata", "cadvisor",
       "filestat_exporter", "kube-state-metrics",
     ] : strcontains(local_file.k0s_ci.content, marker)])
     error_message = "k0s cloud-init must install the default-on exporter bundle"
+  }
+  # systemd_exporter (:9558) + its curated unit-include, tuned process-exporter, and the
+  # matching `systemd` scrape job in the server's rendered prometheus.yml.
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "--web.listen-address=:9558") && strcontains(local_file.k0s_ci.content, "--systemd.collector.unit-include=")
+    error_message = "k0s must install systemd_exporter on :9558 with a curated unit-include"
+  }
+  assert {
+    condition     = strcontains(local_file.k0s_ci.content, "process-exporter-0.8.7") && strcontains(local_file.k0s_ci.content, "-threads=false -gather-smaps=false -remove-empty-groups")
+    error_message = "k0s must install process-exporter v0.8.7 with the low-cardinality perf flags"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "job_name: systemd")
+    error_message = "server prometheus.yml must scrape the systemd job"
   }
   assert {
     condition     = strcontains(local_file.k0s_ci.content, "ssh-ed25519 AAAATESTKEY")
@@ -226,6 +240,24 @@ run "ebpf_toggle_on_renders_install_and_job" {
   assert {
     condition     = strcontains(local_file.server_ci.content, "job_name: ebpf")
     error_message = "enabling ebpf must render its scrape job"
+  }
+}
+
+run "systemd_exporter_off_omits_install_and_job" {
+  command = plan
+
+  variables {
+    ssh_pubkey              = "ssh-ed25519 AAAATESTKEY centralized-monitoring-tests"
+    enable_systemd_exporter = false
+  }
+
+  assert {
+    condition     = !strcontains(local_file.k0s_ci.content, "--web.listen-address=:9558")
+    error_message = "disabling systemd_exporter must omit its install block on k0s"
+  }
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "job_name: systemd")
+    error_message = "disabling systemd_exporter must omit its scrape job"
   }
 }
 

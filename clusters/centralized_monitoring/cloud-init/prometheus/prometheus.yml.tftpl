@@ -35,6 +35,11 @@ scrape_configs:
     static_configs:
       - targets: ["${k0s_ip}:9256"]
 %{ endif ~}
+%{ if enable_systemd_exporter ~}
+  - job_name: systemd
+    static_configs:
+      - targets: ["${k0s_ip}:9558"]
+%{ endif ~}
 %{ if enable_netdata ~}
   - job_name: netdata
     metrics_path: /api/v1/allmetrics

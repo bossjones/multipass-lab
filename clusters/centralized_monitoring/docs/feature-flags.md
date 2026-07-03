@@ -62,7 +62,8 @@ Legend: **Default** ✅ on / ⬜ off · **Host** = where it runs.
 | `enable_blackbox` | ✅ | server | 9115 | HTTP/TCP/ICMP endpoint probes |
 | `enable_node_exporter` | ✅ | both | 9100 | OS host + systemd-unit metrics |
 | `enable_cadvisor` | ✅ | both | 8080 (server) / 8089 (k0s) | container metrics |
-| `enable_process_exporter` | ✅ | k0s | 9256 | per-process metrics |
+| `enable_process_exporter` | ✅ | k0s | 9256 | per-process metrics (v0.8.7; curated groups, `-threads=false -gather-smaps=false -remove-empty-groups`) |
+| `enable_systemd_exporter` | ✅ | k0s | 9558 | per-unit health/resource metrics (curated `--unit-include` + `--enable-restart-count`) |
 | `enable_netdata` | ✅ | k0s | 19999 | real-time agent (Prometheus output) |
 
 ### Reach (default ON)
