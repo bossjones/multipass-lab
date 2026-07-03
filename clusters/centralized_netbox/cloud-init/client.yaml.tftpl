@@ -127,3 +127,9 @@ runcmd:
   # up, which would otherwise block cloud-init past Multipass's 300s launch window.
   - systemctl enable netbox-register.service
   - systemctl start --no-block netbox-register.service
+%{ if enable_netdata ~}
+  # netdata — real-time agent (:19999, /api/v1/allmetrics?format=prometheus).
+  # Standalone/local-only: no --claim-token (no Netdata Cloud), telemetry disabled, updates pinned.
+  - mkdir -p /etc/netdata && touch /etc/netdata/.opt-out-from-anonymous-statistics
+  - curl -sSLf https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh && DO_NOT_TRACK=1 sh /tmp/netdata-kickstart.sh --non-interactive --stable-channel --disable-telemetry --no-updates --dont-wait || true
+%{ endif ~}

@@ -330,3 +330,11 @@ coroot-status CLUSTER:
 coroot-deploy CLUSTER:
     @ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.k0s.ipv4'); \
      ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" 'sudo /usr/local/sbin/coroot-install.sh'
+
+# report the Netdata agent (:19999) status on every VM in the cluster:  just netdata-status centralized_logging
+netdata-status CLUSTER:
+    @tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r 'to_entries[] | "\(.key) \(.value.ipv4)"' | \
+     while read role ip; do \
+       state=$(ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" 'systemctl is-active netdata 2>/dev/null' || echo unreachable); \
+       printf '%-10s %-16s netdata=%s\n' "$role" "$ip" "$state"; \
+     done

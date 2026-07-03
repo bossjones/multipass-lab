@@ -109,6 +109,10 @@ locals {
     { url = "http://${multipass_instance.k0s.ipv4}:10249/metrics", on = var.enable_kube_metrics },
     { url = "http://${multipass_instance.k0s.ipv4}:10255/metrics/cadvisor", on = var.enable_kube_metrics },
     { url = "http://${multipass_instance.k0s.ipv4}:8081/metrics", on = var.enable_kube_state_metrics },
+    # netdata built-in dashboard on every VM (real-time agent)
+    { url = "http://${multipass_instance.central.ipv4}:19999", on = var.enable_netdata },
+    { url = "http://${local._docker_ip}:19999", on = var.enable_netdata },
+    { url = "http://${multipass_instance.k0s.ipv4}:19999", on = var.enable_netdata },
   ]
   web_urls_metrics = [for c in local.web_urls_metrics_candidates : c.url if c.on]
 }

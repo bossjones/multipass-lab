@@ -26,13 +26,24 @@ locals {
   override_conf = templatefile("${path.module}/cloud-init/netbox/docker-compose.override.yml.tftpl", {
     netbox_port = var.netbox_port
   })
+
+  # Opt-in feature flags, merged into every templatefile() call so each cloud-init template
+  # renders its own %{ if enable_x ~}…%{ endif ~} blocks. Mirrors the centralized_logging /
+  # centralized_monitoring clusters. Surfaced via the enabled_features output so the live
+  # suite skips (not fails) a disabled feature. No local Prometheus here — dashboard-only.
+  flags = {
+    enable_netdata = var.enable_netdata
+  }
+
+  # tests/testinfra/conftest.py reads this so a disabled feature is skipped, not failed.
+  enabled_features = { for k, v in local.flags : replace(k, "enable_", "") => v }
 }
 
 # --- NetBox server VM (netbox-docker stack) ---------------------------------
 
 resource "local_file" "server_ci" {
   filename = "${local.render_dir}/server.yaml"
-  content = templatefile("${path.module}/cloud-init/server.yaml.tftpl", {
+  content = templatefile("${path.module}/cloud-init/server.yaml.tftpl", merge(local.flags, {
     ssh_pubkey         = local.ssh_pubkey
     override_conf      = local.override_conf
     netbox_port        = var.netbox_port
@@ -61,7 +72,7 @@ resource "local_file" "server_ci" {
     host_manufacturer_slug = local.host_manufacturer_slug
     host_model             = var.netbox_host_model
     host_model_slug        = local.host_model_slug
-  })
+  }))
 }
 
 resource "multipass_instance" "server" {
@@ -80,14 +91,14 @@ resource "multipass_instance" "server" {
 
 resource "local_file" "client_ci" {
   filename = "${local.render_dir}/client.yaml"
-  content = templatefile("${path.module}/cloud-init/client.yaml.tftpl", {
+  content = templatefile("${path.module}/cloud-init/client.yaml.tftpl", merge(local.flags, {
     ssh_pubkey       = local.ssh_pubkey
     netbox_ip        = multipass_instance.server.ipv4
     netbox_port      = var.netbox_port
     netbox_api_token = var.netbox_api_token
     cluster_name     = var.cluster_name
     host_device_name = var.netbox_host_device_name
-  })
+  }))
 }
 
 resource "multipass_instance" "client" {

@@ -65,16 +65,27 @@ output "netbox_prefix" {
   value       = try("${join(".", slice(split(".", multipass_instance.server.ipv4), 0, 3))}.0/24", "")
 }
 
+# Opt-in feature flags. tests/testinfra/conftest.py reads this so the live Netdata suite is
+# *skipped* (not failed) when the feature is off — mirrors the other clusters' pattern.
+output "enabled_features" {
+  description = "Opt-in feature flags: { netdata }."
+  value       = local.enabled_features
+}
+
 # Browser URLs for `just open centralized_netbox [--full]`. core = the NetBox UI; all folds in
-# the API root (handy for a quick token-less 200 check in the browser).
+# the API root (handy for a quick token-less 200 check in the browser) + each VM's Netdata
+# dashboard when enabled.
 output "web_urls" {
-  description = "Browser URLs. core = NetBox UI; all = core + the REST API root. Consumed by `just open <cluster> [--full]`."
+  description = "Browser URLs. core = NetBox UI; all = core + the REST API root + enabled Netdata dashboards. Consumed by `just open <cluster> [--full]`."
   value = {
     core = ["http://${multipass_instance.server.ipv4}:${var.netbox_port}/"]
-    all = [
+    all = concat([
       "http://${multipass_instance.server.ipv4}:${var.netbox_port}/",
       "http://${multipass_instance.server.ipv4}:${var.netbox_port}/api/",
-    ]
+      ], var.enable_netdata ? [
+      "http://${multipass_instance.server.ipv4}:19999",
+      "http://${multipass_instance.client.ipv4}:19999",
+    ] : [])
   }
 }
 

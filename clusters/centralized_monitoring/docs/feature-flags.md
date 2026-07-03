@@ -63,7 +63,7 @@ Legend: **Default** ✅ on / ⬜ off · **Host** = where it runs.
 | `enable_node_exporter` | ✅ | both | 9100 | OS host + systemd-unit metrics |
 | `enable_cadvisor` | ✅ | both | 8080 (server) / 8089 (k0s) | container metrics |
 | `enable_process_exporter` | ✅ | k0s | 9256 | per-process metrics |
-| `enable_netdata` | ✅ | k0s | 19999 | real-time agent (Prometheus output) |
+| `enable_netdata` | ✅ | both | 19999 | real-time agent (per-second host/container metrics + built-in dashboard; Prometheus export at `/api/v1/allmetrics?format=prometheus`). Server agent is host-installed and reached by Prometheus via `host.docker.internal`; k0s over its DHCP IP |
 
 ### Reach (default ON)
 

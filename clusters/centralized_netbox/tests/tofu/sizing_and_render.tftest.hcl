@@ -305,3 +305,53 @@ run "web_urls_core_and_all" {
     error_message = "registered_vm_name must be the client VM name"
   }
 }
+
+# --- Netdata (real-time agent on both VMs, dashboard-only — no local Prometheus) -------
+
+run "netdata_renders_by_default" {
+  command = plan
+
+  # Installs on BOTH VMs, telemetry opted out, and surfaced in enabled_features.
+  assert {
+    condition = alltrue([for c in [
+      local_file.server_ci.content, local_file.client_ci.content,
+    ] : strcontains(c, "netdata-kickstart.sh")])
+    error_message = "netdata kickstart install block must render on both VMs by default"
+  }
+  assert {
+    condition = alltrue([for c in [
+      local_file.server_ci.content, local_file.client_ci.content,
+    ] : strcontains(c, ".opt-out-from-anonymous-statistics")])
+    error_message = "netdata install must drop the anonymous-statistics opt-out file on both VMs"
+  }
+  assert {
+    condition     = output.enabled_features.netdata == true
+    error_message = "enabled_features.netdata must be true by default"
+  }
+  # The gated install block must keep the cloud-init valid YAML.
+  assert {
+    condition = alltrue([for c in [
+      local_file.server_ci.content, local_file.client_ci.content,
+    ] : can(yamldecode(c))])
+    error_message = "rendered cloud-init must stay valid YAML with netdata enabled"
+  }
+}
+
+run "netdata_off_omits_install" {
+  command = plan
+
+  variables {
+    enable_netdata = false
+  }
+
+  assert {
+    condition = alltrue([for c in [
+      local_file.server_ci.content, local_file.client_ci.content,
+    ] : !strcontains(c, "netdata-kickstart.sh")])
+    error_message = "disabling netdata must omit the kickstart install block from both VMs"
+  }
+  assert {
+    condition     = output.enabled_features.netdata == false
+    error_message = "enabled_features.netdata must be false when disabled"
+  }
+}

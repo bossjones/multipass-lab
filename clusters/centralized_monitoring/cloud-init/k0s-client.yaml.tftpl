@@ -168,8 +168,10 @@ runcmd:
   - /usr/local/sbin/install-exporter.sh cadvisor https://github.com/google/cadvisor/releases/download/v0.49.1/cadvisor-v0.49.1-linux-{ARCH} cadvisor --port=8089
 %{ endif ~}
 %{ if enable_netdata ~}
-  # netdata — real-time agent (:19999, /api/v1/allmetrics?format=prometheus)
-  - curl -sSLf https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh && sh /tmp/netdata-kickstart.sh --dont-wait --disable-telemetry || true
+  # netdata — real-time agent (:19999, /api/v1/allmetrics?format=prometheus).
+  # Standalone/local-only: no --claim-token (no Netdata Cloud), telemetry disabled, updates pinned.
+  - mkdir -p /etc/netdata && touch /etc/netdata/.opt-out-from-anonymous-statistics
+  - curl -sSLf https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh && DO_NOT_TRACK=1 sh /tmp/netdata-kickstart.sh --non-interactive --stable-channel --disable-telemetry --no-updates --dont-wait || true
 %{ endif ~}
 %{ if enable_kube_state_metrics ~}
   # kube-state-metrics — wait for the API, drop the admin kubeconfig next to the manifest, then

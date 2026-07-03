@@ -48,6 +48,12 @@ def hosts(tofu_output):
 
 
 @pytest.fixture(scope="session")
+def enabled_features(tofu_output):
+    """Opt-in feature flags ({netdata: bool}) — drives skip-not-fail in the live suite."""
+    return tofu_output["enabled_features"]["value"]
+
+
+@pytest.fixture(scope="session")
 def netbox(tofu_output):
     """NetBox API coordinates for host-side cross-checks.
 
@@ -107,7 +113,9 @@ def _wait_for_marker(host, path, timeout=READY_TIMEOUT):
         if host.run(f"test -f {path}").rc == 0:
             return
         time.sleep(10)
-    raise TimeoutError(f"marker {path} not present after {timeout}s (provisioning failed?)")
+    raise TimeoutError(
+        f"marker {path} not present after {timeout}s (provisioning failed?)"
+    )
 
 
 @pytest.fixture(scope="session")

@@ -10,6 +10,12 @@ services:
       - /opt/stack/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - /opt/stack/prometheus/alert.rules.yml:/etc/prometheus/alert.rules.yml:ro
       - prometheus_data:/prometheus
+%{ if enable_netdata ~}
+    # server netdata is host-installed (not a compose service); this maps host.docker.internal
+    # to the host gateway so the netdata scrape job can reach the host's :19999 from the container.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+%{ endif ~}
     restart: unless-stopped
 
   alertmanager:

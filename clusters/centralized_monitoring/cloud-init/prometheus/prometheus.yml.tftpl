@@ -40,8 +40,11 @@ scrape_configs:
     metrics_path: /api/v1/allmetrics
     params:
       format: ["prometheus"]
+    honor_labels: true
     static_configs:
-      - targets: ["${k0s_ip}:19999"]
+      # server netdata is host-installed (not compose) — reach it via the docker host gateway;
+      # k0s netdata over its DHCP IP. See compose.yaml prometheus extra_hosts.
+      - targets: ["host.docker.internal:19999", "${k0s_ip}:19999"]
 %{ endif ~}
 %{ if enable_kube_state_metrics ~}
   - job_name: kube-state-metrics
