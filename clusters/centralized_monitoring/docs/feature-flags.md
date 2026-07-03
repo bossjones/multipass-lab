@@ -64,7 +64,7 @@ Legend: **Default** ✅ on / ⬜ off · **Host** = where it runs.
 | `enable_cadvisor` | ✅ | both | 8080 (server) / 8089 (k0s) | container metrics |
 | `enable_process_exporter` | ✅ | k0s | 9256 | per-process metrics (v0.8.7; curated groups, `-threads=false -gather-smaps=false -remove-empty-groups`) |
 | `enable_systemd_exporter` | ✅ | k0s | 9558 | per-unit health/resource metrics (curated `--unit-include` + `--enable-restart-count`) |
-| `enable_netdata` | ✅ | both | 19999 | real-time agent (per-second host/container metrics + built-in dashboard; Prometheus export at `/api/v1/allmetrics?format=prometheus`). Server agent is host-installed and reached by Prometheus via `host.docker.internal`; k0s over its DHCP IP |
+| `enable_netdata` | ✅ | both | 19999 | real-time agent (per-second host/container metrics + built-in dashboard; Prometheus export at `/api/v1/allmetrics?format=prometheus`). Server agent is host-installed and reached by Prometheus via `host.docker.internal`; k0s over its DHCP IP. Scraped series are surfaced in Grafana's `Netdata/` folder (fleet/instance/containers); targets carry friendly `instance` labels (`monitoring-server`/`monitoring-k0s`). See `specs/dashboard-update.md` |
 
 ### Reach (default ON)
 

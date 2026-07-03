@@ -47,9 +47,15 @@ scrape_configs:
       format: ["prometheus"]
     honor_labels: true
     static_configs:
+      # Friendly `instance` labels so the Netdata dashboards' $instance picker reads a
+      # hostname, not host.docker.internal:19999 / a DHCP IP. netdata emits no `instance`
+      # label of its own, so honor_labels:true leaves these target labels intact.
       # server netdata is host-installed (not compose) — reach it via the docker host gateway;
       # k0s netdata over its DHCP IP. See compose.yaml prometheus extra_hosts.
-      - targets: ["host.docker.internal:19999", "${k0s_ip}:19999"]
+      - targets: ["host.docker.internal:19999"]
+        labels: { instance: "monitoring-server" }
+      - targets: ["${k0s_ip}:19999"]
+        labels: { instance: "monitoring-k0s" }
 %{ endif ~}
 %{ if enable_kube_state_metrics ~}
   - job_name: kube-state-metrics

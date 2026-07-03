@@ -57,4 +57,10 @@
     format: ["prometheus"]
   honor_labels: true
   static_configs:
-    - targets: ["<central_ip>:19999", "<docker_ip>:19999", "<k0s_ip>:19999"]
+    # Friendly `instance` labels for the Netdata dashboards' $instance picker.
+    - targets: ["<central_ip>:19999"]
+      labels: { instance: "logging-central" }
+    - targets: ["<docker_ip>:19999"]
+      labels: { instance: "logging-docker" }
+    - targets: ["<k0s_ip>:19999"]
+      labels: { instance: "logging-k0s" }

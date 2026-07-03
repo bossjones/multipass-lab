@@ -177,6 +177,12 @@ run "defaults_sizing_names_and_render" {
     condition     = strcontains(local_file.server_ci.content, "host.docker.internal:19999")
     error_message = "netdata scrape job must reach the host-installed server agent via host.docker.internal"
   }
+  # Friendly `instance` labels so the Netdata dashboards' $instance picker reads a hostname.
+  assert {
+    condition = alltrue([for l in ["monitoring-server", "monitoring-k0s"] :
+    strcontains(local_file.server_ci.content, l)])
+    error_message = "netdata scrape targets must carry friendly instance labels (monitoring-server / monitoring-k0s)"
+  }
 
   # --- k0s log shipping: otelcol-contrib agent installs (endpoint injected post-apply) ---
   assert {
@@ -499,6 +505,9 @@ run "grafana_dashboards_render" {
       "/opt/stack/grafana/dashboards/Infrastructure/node-exporter-full.json",
       "/opt/stack/grafana/dashboards/Platform/alertmanager.json",
       "/opt/stack/grafana/dashboards/Kubernetes/kubernetes.json",
+      "/opt/stack/grafana/dashboards/Netdata/netdata-fleet.json",
+      "/opt/stack/grafana/dashboards/Netdata/netdata-instance.json",
+      "/opt/stack/grafana/dashboards/Netdata/netdata-containers.json",
     ] : strcontains(local_file.server_ci.content, p)])
     error_message = "every dashboard JSON must be spliced into the server cloud-init under its folder subdir"
   }

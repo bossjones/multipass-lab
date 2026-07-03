@@ -76,6 +76,28 @@ def test_grafana_dashboards_provisioned(docker):
         "processes-systemd",
         "node-exporter-full",
         "logging-pipeline",
+        "netdata-fleet",
+        "netdata-instance",
+        "netdata-containers",
     }
     missing = expected - have
     assert not missing, f"dashboards not provisioned: {missing} (have {have})"
+
+
+def test_netdata_cgroup_series_have_readable_names(docker, enabled_exporters):
+    """The Containers dashboard keys on netdata's resolved cgroup_name (never an id).
+
+    Proves the series the Netdata/netdata-containers dashboard queries exist and carry
+    a human-readable cgroup_name label — the whole point of the container de-ID work.
+    """
+    if "enable_netdata" not in enabled_exporters:
+        pytest.skip("enable_netdata disabled")
+    data = _curl_json(
+        docker,
+        "http://localhost:9090/api/v1/query?query=netdata_cgroup_cpu_percentage_average",
+    )
+    results = data.get("data", {}).get("result", [])
+    assert results, "no netdata cgroup CPU series in Prometheus"
+    assert any(r["metric"].get("cgroup_name") for r in results), (
+        "netdata cgroup series carry no cgroup_name label (container identity broken)"
+    )
