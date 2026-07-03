@@ -72,9 +72,20 @@ consumer is `centralized_pki`; full design in `specs/cross-cluster.md`.
 root+intermediate (pinned into a gitignored `ca-material.auto.tfvars`; needs `just recreate
 centralized_pki`) so the root survives rebuilds and is static — hence `just up-connected` injects it
 fleet-wide with no hub ordering. `just trust-ca <cluster>`/`trust-ca-all` hot-push trust to running
-VMs; `just trust-ca-macos` trusts it on the Mac (System keychain + Firefox NSS via `certutil`). Only
-`centralized_pki`'s Traefik serves internal-CA TLS today (Phase 2 = other services). Design:
-`specs/internal-ca.md`; runbook: `docs/internal-ca-tutorial.md`.
+VMs; `just trust-ca-macos` trusts it on the Mac (System keychain + Firefox NSS via `certutil`).
+
+**Internal-CA TLS (Phase 2, opt-in).** Beyond `centralized_pki`, `centralized_monitoring` now serves
+its stack over internal-CA TLS: `use_internal_tls` (default off) makes the server issue a Traefik
+leaf from step-ca at first boot (via the shared, parameterized `clusters/_shared/cloud-init/
+issue-cert.sh.tftpl` + the JWK `admin` provisioner + a 12h renew timer) and front Grafana/Prometheus/
+Alertmanager/OpenObserve/Uptime-Kuma on `:443` at `<svc>.<domain>` — **additive**, the plain
+`http://IP:port` publishes stay up. It needs `ca_ip` + `stepca_ca_password` (must match
+`centralized_pki`'s) wired in, so it's off for a plain `just up`. `INTERNAL_TLS=1 just up-connected`
+wires it fleet-wide **when the CA VM is up** (reads `ca_ipv4`) and calls `just dns-register <cluster>`
+to hot-push `<svc>.<domain>→VM-IP` rewrites into the running AdGuard hub (new `dns_rewrites` var on
+`centralized_dns`; no recreate). Verify with `just tls-check-monitoring` (leaf chains to the root).
+Other clusters are still Phase 2 TODO. Design: `specs/internal-ca.md`; runbook:
+`docs/internal-ca-tutorial.md`.
 
 **Coroot (opt-in eBPF observability on k0s).** `enable_coroot` deploys the self-hosted
 [Coroot](https://github.com/coroot/coroot) stack (server + eBPF node-agent + cluster-agent +
