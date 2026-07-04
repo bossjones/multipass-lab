@@ -54,6 +54,16 @@ challenge/reachback** — the correct DNS-free primitive. A 12-hour host timer r
 Traefik's file-provider `watch` reloads it. (The opt-in LE-staging path keeps ACME because
 **DNS-01** needs no inbound reachback.)
 
+**Fleet-edge Traefik (see `specs/dynamic-traefik.md`).** The same Traefik instance is also the
+fleet-wide reverse-proxy edge: its file provider runs in `directory` mode
+(`/etc/traefik/dynamic/`), merging pki's own untouched `dynamic.yaml` (auth./warden.) with a
+`fleet.yaml` that `scripts/traefik_cli.py` renders from every cluster's `reverse_proxy_routes`
+output and hot-pushes onto the running VM (`just traefik-sync` — scp + `cp`, no restart; the
+file-watch reloads it). `just up-connected`/`refresh-cross-cluster` run this automatically, and
+fold the resulting hostname → pki-edge-IP mapping into `just set-dns-all` (`traefik_cli.py
+dns-rewrites`) so a fleet-fronted hostname (e.g. `netbox.<domain>`) resolves to the edge instead
+of the service's own IP.
+
 ### Conventions (shared with the other clusters)
 
 - **Runtime IP injection.** `local_file.services_ci` interpolates `multipass_instance.ca.ipv4`,
@@ -77,13 +87,13 @@ clusters/centralized_pki/
 │   ├── ca.yaml.tftpl services.yaml.tftpl
 │   ├── step-ca/compose.yaml.tftpl
 │   ├── docker/compose.yaml.tftpl
-│   ├── traefik/{traefik.yaml.tftpl,dynamic.yaml.tftpl}
+│   ├── traefik/{traefik.yaml.tftpl,dynamic.yaml.tftpl,fleet.yaml.seed}
 │   └── authelia/{configuration.yaml.tftpl,users_database.yaml.tftpl}
-├── scripts/{_pki_common.py,stepca_cli.py,authelia_cli.py,vaultwarden_cli.py,tls_cli.py}
+├── scripts/{_pki_common.py,stepca_cli.py,authelia_cli.py,vaultwarden_cli.py,tls_cli.py,traefik_cli.py}
 └── tests/
     ├── tofu/sizing_and_render.tftest.hcl                 # hermetic
-    ├── testinfra/{conftest.py,test_ca.py,test_services.py,test_certs.py}  # live
-    └── {pki_common,stepca,authelia,vaultwarden,tls}/     # hermetic CLI suites
+    ├── testinfra/{conftest.py,test_ca.py,test_services.py,test_certs.py,test_fleet_edge.py}  # live
+    └── {pki_common,stepca,authelia,vaultwarden,tls,traefik}/     # hermetic CLI suites
 ```
 
 ## Testing
@@ -92,13 +102,19 @@ clusters/centralized_pki/
   `mock_provider "multipass" {}` + `command = plan`: VM sizing/names, step-ca + ACME render on
   `ca`, Traefik/Authelia/Vaultwarden + direct issuance + `defaultCertificate` on `services`,
   LE-staging block present only with the flag, NTP/UTC, `yamldecode` validity, `web_urls`.
-- **Hermetic CLI suites** — `tests/{pki_common,stepca,authelia,vaultwarden,tls}/`:
-  `pytest-httpserver` + `CliRunner` (and a real `ssl` fixture server for `tls`), no VM.
+- **Hermetic CLI suites** — `tests/{pki_common,stepca,authelia,vaultwarden,tls,traefik}/`:
+  `pytest-httpserver`/stdlib `http.server` + `CliRunner` (and a real `ssl` fixture server for
+  `tls`), no VM. `traefik`'s suite covers `render_fleet` (routers/services/SSO middleware/k0s
+  NodePort-vs-ingress Host-rewrite/duplicate-host detection) and `probe_route` pure functions.
 - **Layer 2 live** (`just verify centralized_pki`) — testinfra over SSH: step-ca healthy +
   provisioners, Traefik/Authelia/Vaultwarden up + reachable through Traefik, and `test_certs`
   proves the served leaf **chains to the step-ca root**.
 - **Live API/TLS** (`just verify-pki centralized_pki`) — the host-side `*_cli.py` checks +
   `tls-check` for `auth.`/`warden.<domain>`.
+- **Fleet edge** (`just traefik-check`, `tests/testinfra/test_fleet_edge.py`) — probes every
+  discovered route through the edge (`traefik-check`) and, live, asserts a synced route (e.g.
+  `netbox.<domain>`) actually reaches its backend via `curl --resolve` on the services VM
+  (auto-skips if `just traefik-sync` hasn't run yet). See `specs/dynamic-traefik.md`.
 
 ## Quickstart
 

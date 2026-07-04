@@ -319,3 +319,20 @@ run "docker_tools_absent_when_disabled" {
     error_message = "disabled enable_docker_tools must omit the installer from both VMs"
   }
 }
+
+# --- reverse_proxy_routes contract (fleet-edge Traefik; see specs/dynamic-traefik.md) -----------
+# pki declares its OWN base routes (auth./warden.) too, so the CLI is the single source of truth,
+# even though Traefik already serves them directly from dynamic.yaml (unchanged by this contract).
+
+run "reverse_proxy_routes_contract" {
+  command = plan
+
+  assert {
+    condition     = length(output.reverse_proxy_routes) == 2
+    error_message = "pki must publish its auth./warden. routes"
+  }
+  assert {
+    condition     = contains([for r in output.reverse_proxy_routes : r.host], "auth") && contains([for r in output.reverse_proxy_routes : r.host], "warden")
+    error_message = "pki's reverse_proxy_routes must include auth and warden"
+  }
+}

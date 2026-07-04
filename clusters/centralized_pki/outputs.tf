@@ -35,6 +35,18 @@ output "domain" {
   value       = var.domain
 }
 
+# Routes the fleet-edge Traefik should publish for THIS cluster. Consumed by
+# scripts/traefik_cli.py (see specs/dynamic-traefik.md). pki declares its own base routes here too
+# so the CLI is the single source of truth — Traefik keeps serving them from the untouched
+# dynamic.yaml (this output does not change what's routed today, only what's discoverable).
+output "reverse_proxy_routes" {
+  description = "Routes the fleet-edge Traefik should publish for this cluster. Consumed by scripts/traefik_cli.py."
+  value = [
+    { host = "auth", ip = multipass_instance.services.ipv4, port = 443, scheme = "https", sso = false, k0s = false },
+    { host = "warden", ip = multipass_instance.services.ipv4, port = 443, scheme = "https", sso = false, k0s = false },
+  ]
+}
+
 # The pinned root CA PEM — the fleet-wide trust anchor. Static (known at apply time) whenever a
 # persisted root is configured (scripts/init_ca.py); `just up-connected` reads this and injects it
 # as internal_ca_cert into every cluster. Empty when the root is ephemeral (self-init at boot), in

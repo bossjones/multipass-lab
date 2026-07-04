@@ -82,10 +82,17 @@ write_files:
     content: |
       ${indent(6, traefik_static)}
 
-  - path: /opt/stack/traefik/dynamic.yaml
+  - path: /opt/stack/traefik/dynamic/dynamic.yaml
     permissions: '0644'
     content: |
       ${indent(6, traefik_dynamic)}
+
+  # Seed doc for the fleet-wide routing table (specs/dynamic-traefik.md) — kept valid so the
+  # directory provider is happy before the first `just traefik-sync`; traefik_cli.py overwrites it.
+  - path: /opt/stack/traefik/dynamic/fleet.yaml
+    permissions: '0644'
+    content: |
+      ${indent(6, traefik_fleet_seed)}
 
   - path: /opt/stack/authelia/configuration.yml
     permissions: '0644'
@@ -250,7 +257,7 @@ runcmd:
   # Fleet-wide trust — install the internal root CA into the OS trust store. See specs/internal-ca.md.
   - update-ca-certificates
 %{ endif ~}
-  - mkdir -p /opt/stack/traefik/certs /opt/stack/traefik/acme /opt/stack/secrets
+  - mkdir -p /opt/stack/traefik/certs /opt/stack/traefik/acme /opt/stack/traefik/dynamic /opt/stack/secrets
   # Resolve ca.<domain> to the CA's IP on the host (a convenience for manual `step`/curl use).
   - grep -q "ca.${domain}" /etc/hosts || echo "${ca_ip} ca.${domain}" >> /etc/hosts
   # Docker first (the cert issuance uses `docker run smallstep/step-cli`).

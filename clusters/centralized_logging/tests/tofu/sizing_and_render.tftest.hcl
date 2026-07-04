@@ -682,3 +682,35 @@ run "internal_ca_on_renders_trust" {
     error_message = "internal_ca_cert set must splice the CA PEM body into the rendered cloud-init"
   }
 }
+
+# --- reverse_proxy_routes contract (fleet-edge Traefik; see specs/dynamic-traefik.md) ----------
+
+run "reverse_proxy_routes_absent_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(output.reverse_proxy_routes) == 0
+    error_message = "no fleet-edge route when enable_coroot is off (nothing to front)"
+  }
+}
+
+run "reverse_proxy_routes_render_when_coroot_enabled" {
+  command = plan
+
+  variables {
+    enable_coroot = true
+  }
+
+  assert {
+    condition     = length(output.reverse_proxy_routes) == 1
+    error_message = "enable_coroot must publish exactly one fleet-edge route"
+  }
+  assert {
+    condition     = output.reverse_proxy_routes[0].host == "coroot" && output.reverse_proxy_routes[0].k0s == true
+    error_message = "the coroot route must use host=coroot and k0s=true"
+  }
+  assert {
+    condition     = output.reverse_proxy_routes[0].port == var.coroot_nodeport
+    error_message = "the coroot route must use the configured NodePort"
+  }
+}

@@ -7,6 +7,10 @@
 #
 # enable_letsencrypt_staging mode: an ACME resolver named "stepca" points at Let's Encrypt
 # STAGING via DNS-01 (GoDaddy) — DNS-01 needs no inbound reachback, so it works from the lab.
+#
+# providers.file.directory (not filename): pki's own base routes live in dynamic.yaml, and the
+# fleet-wide routes traefik_cli.py hot-pushes land in a separate fleet.yaml — Traefik merges every
+# *.yaml under the watched dir and hot-reloads on any change (no restart). See specs/dynamic-traefik.md.
 api:
   dashboard: true
   insecure: true # dashboard on :8080 — lab only
@@ -19,7 +23,7 @@ entryPoints:
 
 providers:
   file:
-    filename: /etc/traefik/dynamic.yaml
+    directory: /etc/traefik/dynamic
     watch: true
 %{ if enable_letsencrypt_staging ~}
 

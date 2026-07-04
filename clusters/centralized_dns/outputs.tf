@@ -26,6 +26,15 @@ output "adguard_url" {
   value       = "http://${multipass_instance.server.ipv4}:${var.adguard_web_port}"
 }
 
+# Routes the fleet-edge Traefik (centralized_pki) should publish for this cluster. Consumed by
+# scripts/traefik_cli.py (see specs/dynamic-traefik.md).
+output "reverse_proxy_routes" {
+  description = "Routes the fleet-edge Traefik should publish for this cluster. Consumed by scripts/traefik_cli.py."
+  value = [
+    { host = "adguard", ip = multipass_instance.server.ipv4, port = var.adguard_web_port, scheme = "http", sso = false, k0s = false },
+  ]
+}
+
 output "adguard_credentials" {
   description = "Dev-throwaway AdGuard Home admin credentials (lab only — do NOT reuse). Consumed by the CLIs."
   sensitive   = true

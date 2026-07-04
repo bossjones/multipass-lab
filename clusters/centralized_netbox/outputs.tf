@@ -67,6 +67,16 @@ output "netbox_region" {
   value       = var.netbox_region
 }
 
+# Routes the fleet-edge Traefik (centralized_pki) should publish for this cluster. Consumed by
+# scripts/traefik_cli.py (see specs/dynamic-traefik.md). NetBox has no TLS/hostname routing of its
+# own yet (unlike centralized_monitoring's Phase 2 Traefik), so it's a fleet-edge candidate.
+output "reverse_proxy_routes" {
+  description = "Routes the fleet-edge Traefik should publish for this cluster. Consumed by scripts/traefik_cli.py."
+  value = [
+    { host = "netbox", ip = multipass_instance.server.ipv4, port = var.netbox_port, scheme = "http", sso = false, k0s = false },
+  ]
+}
+
 output "netbox_rack_name" {
   description = "DCIM Rack the bootstrap seeds and mounts the host device in."
   value       = var.netbox_rack_name
