@@ -39,13 +39,17 @@ groups:
           description: "Netdata reports >85% CPU (non-idle) on {{ $labels.instance }} for >10m."
 
       - alert: NetdataHostLowMemory
-        expr: netdata_system_ram_MiB_average{dimension="free"} / ignoring(dimension) sum without (dimension) (netdata_system_ram_MiB_average) < 0.10
+        # Use *available* memory (free + reclaimable cache/buffers), not the raw "free"
+        # dimension — on Linux "free" excludes page cache and sits near-zero on healthy
+        # hosts, so a free/total ratio tripped this alert fleet-wide. mem.available mirrors
+        # `free -m`'s "available" column and only drops under genuine memory pressure.
+        expr: netdata_mem_available_MiB_average / on(instance) group_left sum by (instance) (netdata_system_ram_MiB_average) < 0.10
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "Low free memory on {{ $labels.instance }}"
-          description: "Netdata reports <10% free RAM on {{ $labels.instance }} for >10m."
+          summary: "Low available memory on {{ $labels.instance }}"
+          description: "Netdata reports <10% available RAM on {{ $labels.instance }} for >10m."
 
       - alert: NetdataHostRootDiskLow
         expr: netdata_disk_space_GiB_average{family="/",dimension="avail"} < 3

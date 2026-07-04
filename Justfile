@@ -299,9 +299,10 @@ up-connected:
     tofu -chdir={{cluster_root}}/$monitoring apply -auto-approve   # re-renders .rendered/prometheus.yml only
     scp {{ssh_opts}} -i {{ssh_key}} \
       {{cluster_root}}/$monitoring/.rendered/prometheus.yml \
-      ubuntu@"$mon_ip":/tmp/prometheus.yml
+      {{cluster_root}}/$monitoring/cloud-init/prometheus/alert.rules.yml \
+      ubuntu@"$mon_ip":/tmp/
     ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$mon_ip" \
-      'sudo cp /tmp/prometheus.yml /opt/stack/prometheus/prometheus.yml && sudo docker compose -f /opt/stack/compose.yaml restart prometheus'
+      'sudo cp /tmp/prometheus.yml /opt/stack/prometheus/prometheus.yml && sudo cp /tmp/alert.rules.yml /opt/stack/prometheus/alert.rules.yml && sudo docker compose -f /opt/stack/compose.yaml restart prometheus'
     echo "up-connected: $(echo "$targets" | jq 'length') cross-cluster scrape targets + $(echo "$ndtargets" | jq 'length') Netdata targets wired; fleet resolving via $dns_ip."
 
     # 5b. Fleet-edge Traefik (see specs/dynamic-traefik.md): hot-push every cluster's
@@ -550,9 +551,9 @@ refresh-cross-cluster:
       just _hot-push-cross-cluster "$monitoring" || rc=1
       mon_ip_now="$(tofu -chdir={{cluster_root}}/$monitoring output -raw server_ipv4 2>/dev/null || true)"
       if [ -n "$mon_ip_now" ]; then
-        scp {{ssh_opts}} -i {{ssh_key}} {{cluster_root}}/$monitoring/.rendered/prometheus.yml ubuntu@"$mon_ip_now":/tmp/prometheus.yml
+        scp {{ssh_opts}} -i {{ssh_key}} {{cluster_root}}/$monitoring/.rendered/prometheus.yml {{cluster_root}}/$monitoring/cloud-init/prometheus/alert.rules.yml ubuntu@"$mon_ip_now":/tmp/
         ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$mon_ip_now" \
-          'sudo cp /tmp/prometheus.yml /opt/stack/prometheus/prometheus.yml && sudo docker compose -f /opt/stack/compose.yaml restart prometheus'
+          'sudo cp /tmp/prometheus.yml /opt/stack/prometheus/prometheus.yml && sudo cp /tmp/alert.rules.yml /opt/stack/prometheus/alert.rules.yml && sudo docker compose -f /opt/stack/compose.yaml restart prometheus'
       fi
     fi
 
