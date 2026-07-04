@@ -182,18 +182,31 @@ run "exporters_render_with_defaults" {
     error_message = "filestat_exporter must only render on central"
   }
 
-  # netdata: installs on ALL three VMs by default, telemetry opted out.
+  # netdata: the shared installer snippet renders on ALL three VMs by default.
   assert {
     condition = alltrue([for c in [
       local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
-    ] : strcontains(c, "netdata-kickstart.sh")])
-    error_message = "netdata kickstart install block must render on all three VMs by default"
+    ] : strcontains(c, "install-netdata.sh")])
+    error_message = "the shared Netdata installer must render on all three VMs by default"
   }
+  # The kickstart download + the max-stats tuning block ride inside the shared snippet.
   assert {
     condition = alltrue([for c in [
       local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
-    ] : strcontains(c, ".opt-out-from-anonymous-statistics")])
-    error_message = "netdata install must drop the anonymous-statistics opt-out file on every VM"
+    ] : strcontains(c, "get.netdata.cloud/kickstart.sh") && strcontains(c, "lab-managed max-stats")])
+    error_message = "the shared Netdata snippet must carry the kickstart install + the max-stats tuning block on every VM"
+  }
+  # Each VM's Netdata [host labels] must carry its own role.
+  assert {
+    condition     = strcontains(local_file.central_ci.content, "role = central") && strcontains(local_file.k0s_ci.content, "role = k0s") && strcontains(local_file.docker_ci.content, "role = docker")
+    error_message = "each VM's Netdata [host labels] must carry its own role"
+  }
+  # The spliced installer script must keep every cloud-init valid YAML.
+  assert {
+    condition = alltrue([for c in [
+      local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
+    ] : can(yamldecode(c))])
+    error_message = "rendered cloud-init must stay valid YAML after adding the Netdata installer"
   }
 }
 
@@ -227,12 +240,12 @@ run "netdata_off_omits_install_and_job" {
     enable_netdata = false
   }
 
-  # No install block on any VM and no scrape job in the docker VM's inline Prometheus.
+  # No installer on any VM and no scrape job in the docker VM's inline Prometheus.
   assert {
     condition = alltrue([for c in [
       local_file.central_ci.content, local_file.k0s_ci.content, local_file.docker_ci.content,
-    ] : !strcontains(c, "netdata-kickstart.sh")])
-    error_message = "disabling netdata must omit the kickstart install block from every VM"
+    ] : !strcontains(c, "install-netdata.sh")])
+    error_message = "disabling netdata must omit the shared installer from every VM"
   }
   assert {
     condition     = !strcontains(local_file.docker_ci.content, "job_name: logging-netdata")

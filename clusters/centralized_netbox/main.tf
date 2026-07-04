@@ -128,6 +128,22 @@ locals {
   # tests/testinfra/conftest.py reads this so a disabled feature is skipped, not failed.
   enabled_features = { netdata = var.enable_netdata }
 
+  # Netdata agent installer (shared snippet), rendered per-VM so [host labels] carry this VM's
+  # cluster+role (they ride on netdata_info{...}). Empty when disabled -> the %{ if enable_netdata }
+  # write_files/runcmd guards drop the block. See specs/shared-netdata.md.
+  netdata_installer_server = var.enable_netdata ? templatefile("${path.module}/../_shared/cloud-init/install-netdata.sh.tftpl", {
+    host_labels = { cluster = var.name_prefix, role = "server", environment = "lab" }
+    enable_ebpf = var.enable_netdata_ebpf
+  }) : ""
+  netdata_installer_client = var.enable_netdata ? templatefile("${path.module}/../_shared/cloud-init/install-netdata.sh.tftpl", {
+    host_labels = { cluster = var.name_prefix, role = "client", environment = "lab" }
+    enable_ebpf = var.enable_netdata_ebpf
+  }) : ""
+  netdata_installer_agent = var.enable_netdata ? templatefile("${path.module}/../_shared/cloud-init/install-netdata.sh.tftpl", {
+    host_labels = { cluster = var.name_prefix, role = "agent", environment = "lab" }
+    enable_ebpf = var.enable_netdata_ebpf
+  }) : ""
+
   # Sorted list of active exporter flags — exported as enabled_exporters and consumed by
   # tests/testinfra. Kept disjoint from enabled_features so this doesn't also list netdata.
   enabled_exporters = sort([
@@ -196,6 +212,8 @@ resource "local_file" "server_ci" {
     # Docker operator TUIs (wharf/oxker/dive) — the server runs the netbox-docker stack.
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
+    # Netdata agent (:19999) — installed by the shared snippet. enable_netdata rides in local.flags.
+    netdata_installer = local.netdata_installer_server
   }))
 }
 
@@ -229,6 +247,8 @@ resource "local_file" "client_ci" {
     ntp_timesync      = local.ntp_timesync
     ntp_server        = var.ntp_server
     ntp_conf          = local.ntp_conf
+    # Netdata agent (:19999) — installed by the shared snippet. enable_netdata rides in local.flags.
+    netdata_installer = local.netdata_installer_client
   }))
 }
 
@@ -267,6 +287,10 @@ resource "local_file" "agent_ci" {
     # Docker operator TUIs (wharf/oxker/dive) — the agent runs orb-agent via docker.
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
+    # Netdata agent (:19999) — installed by the shared snippet (this VM's templatefile does not
+    # merge local.flags, so enable_netdata is threaded in explicitly alongside the installer).
+    enable_netdata    = var.enable_netdata
+    netdata_installer = local.netdata_installer_agent
   })
 }
 

@@ -21,3 +21,46 @@ groups:
         annotations:
           summary: "Blackbox probe failed: {{ $labels.instance }}"
           description: "The blackbox probe of {{ $labels.instance }} has been failing for >1m."
+
+  # Netdata host health (job="netdata"). Uses the `average` source (gauges in real units) that the
+  # scrape job + Grafana dashboards standardize on. Agent-down is already covered by TargetDown
+  # above. Verify exact metric/dimension names against a live endpoint before tightening thresholds:
+  #   curl -s 'http://<vm>:19999/api/v1/allmetrics?format=prometheus' | grep _average
+  # See specs/shared-netdata.md.
+  - name: netdata
+    rules:
+      - alert: NetdataHostHighCPU
+        expr: 100 - avg by (instance) (netdata_system_cpu_percentage_average{dimension="idle"}) > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU on {{ $labels.instance }}"
+          description: "Netdata reports >85% CPU (non-idle) on {{ $labels.instance }} for >10m."
+
+      - alert: NetdataHostLowMemory
+        expr: netdata_system_ram_MiB_average{dimension="free"} / ignoring(dimension) sum without (dimension) (netdata_system_ram_MiB_average) < 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low free memory on {{ $labels.instance }}"
+          description: "Netdata reports <10% free RAM on {{ $labels.instance }} for >10m."
+
+      - alert: NetdataHostRootDiskLow
+        expr: netdata_disk_space_GiB_average{family="/",dimension="avail"} < 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low root disk space on {{ $labels.instance }}"
+          description: "Netdata reports <3 GiB available on / for {{ $labels.instance }} for >10m."
+
+      - alert: NetdataHostRootDiskWillFill
+        expr: predict_linear(netdata_disk_space_GiB_average{family="/",dimension="avail"}[1h], 24 * 3600) < 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Root disk will fill within 24h on {{ $labels.instance }}"
+          description: "Linear projection of / available space on {{ $labels.instance }} reaches 0 within 24h."

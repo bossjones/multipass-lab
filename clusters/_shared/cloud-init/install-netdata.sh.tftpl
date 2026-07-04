@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Managed by OpenTofu — SHARED cross-cluster snippet (clusters/_shared/cloud-init). See specs/shared-netdata.md.
+# Fleet-wide Netdata agent installer, tuned for maximum host coverage and a Prometheus-scrapable
+# endpoint (http://<vm>:19999/api/v1/allmetrics?format=prometheus). Rendered by templatefile(): bare
+# $VAR is literal shell, and dollar-brace sequences are injected OpenTofu vars — a braced SHELL
+# expansion would need doubling, but this script avoids braces entirely and uses plain $VAR.
+#
+# Local-only: NO --claim-* flags are passed, so the node never connects to Netdata Cloud. Idempotent:
+# re-running upgrades in place, re-applies the tuning block once (marker-guarded), and restarts.
+#
+# Injected vars:
+#   host_labels.{cluster,role,environment}  -> Netdata [host labels] (ride on netdata_info{...} 1)
+#   enable_ebpf (bool)                       -> toggles the heaviest kernel collector
+set -uo pipefail
+
+# 1. Install via the official kickstart. Guarded so a re-run is a fast no-op once installed.
+#    DNS-race-safe: cloud-init runcmd is /bin/sh with no `set -e`, and a first-boot resolver warm-up
+#    race silently fails the curl; gate on name resolution, then retry the download a few times.
+if ! command -v netdata >/dev/null 2>&1; then
+  until getent hosts get.netdata.cloud >/dev/null 2>&1; do sleep 2; done
+  for i in 1 2 3 4 5; do
+    if curl -sSLf https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh; then break; fi
+    sleep 5
+  done
+  # --non-interactive: automation. --stable-channel: reproducible IaC. --disable-telemetry +
+  # DO_NOT_TRACK=1: no anonymous stats. --no-updates: no daily auto-update cron (deterministic).
+  # --dont-wait: return immediately (netdata finishes coming up in the background).
+  DO_NOT_TRACK=1 sh /tmp/netdata-kickstart.sh \
+    --non-interactive --stable-channel --disable-telemetry --no-updates --dont-wait || true
+fi
+
+# 2. Max-stats tuning + host labels, appended once (marker-guarded for idempotent re-runs). Netdata
+#    merges duplicate sections, so this augments the generated netdata.conf without replacing it.
+#    Keeps 1s resolution + the default 5-tier dbengine retention; go.d default_run:yes already runs
+#    every auto-detecting collector. statsd/otel internal plugins are disabled to avoid the :8125 /
+#    OTLP port clashes with the monitoring hub's statsd_exporter + OTel collector.
+if [ -f /etc/netdata/netdata.conf ] && ! grep -qF 'lab-managed max-stats' /etc/netdata/netdata.conf; then
+  cat >>/etc/netdata/netdata.conf <<'CONF'
+
+# lab-managed max-stats (specs/shared-netdata.md)
+[db]
+	update every = 1
+[plugins]
+	statsd = no
+	otel = no
+	ebpf = ${enable_ebpf ? "yes" : "no"}
+[host labels]
+	cluster = ${host_labels.cluster}
+	role = ${host_labels.role}
+	environment = ${host_labels.environment}
+CONF
+fi
+
+# 3. Let go.d's docker service-discovery read the socket (auto-configures per-container collectors).
+if getent group docker >/dev/null 2>&1; then usermod -aG docker netdata >/dev/null 2>&1 || true; fi
+
+# 4. scripts.d must exist or netdata's external-plugins scanner logs a repeating warning every cycle.
+mkdir -p /etc/netdata/scripts.d && chown -R netdata:netdata /etc/netdata/scripts.d 2>/dev/null || true
+
+# 5. Apply the config (no-op-safe if netdata is still starting from --dont-wait).
+systemctl restart netdata >/dev/null 2>&1 || true

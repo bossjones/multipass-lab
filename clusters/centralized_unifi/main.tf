@@ -48,7 +48,19 @@ locals {
     usg_base_image           = var.usg_base_image
     usg_platform             = var.usg_platform
     syslog_port              = var.syslog_port
+    enable_netdata           = var.enable_netdata
   }
+
+  # Netdata agent (shared snippet) — rendered per-role so each VM's [host labels] carry its own
+  # role. Empty when disabled so the write_files/runcmd blocks drop out. See specs/shared-netdata.md.
+  netdata_installer_controller = var.enable_netdata ? templatefile("${path.module}/../_shared/cloud-init/install-netdata.sh.tftpl", {
+    host_labels = { cluster = var.name_prefix, role = "controller", environment = "lab" }
+    enable_ebpf = var.enable_netdata_ebpf
+  }) : ""
+  netdata_installer_usg = var.enable_netdata ? templatefile("${path.module}/../_shared/cloud-init/install-netdata.sh.tftpl", {
+    host_labels = { cluster = var.name_prefix, role = "usg", environment = "lab" }
+    enable_ebpf = var.enable_netdata_ebpf
+  }) : ""
 
   # Sorted list of active exporter flags — exported as enabled_exporters and consumed by
   # tests/testinfra/conftest.py so the live suite asserts only what is on.
@@ -111,6 +123,8 @@ resource "local_file" "controller_ci" {
     # Docker operator TUIs (wharf/oxker/dive) — only installed in `exact` mode (docker present).
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
+    enable_netdata         = var.enable_netdata
+    netdata_installer      = local.netdata_installer_controller
     ntp_timesync           = local.ntp_timesync
     ntp_server             = var.ntp_server
     ntp_conf               = local.ntp_conf
@@ -145,6 +159,8 @@ resource "local_file" "usg_ci" {
     # Docker operator TUIs (wharf/oxker/dive) — only installed in `exact` mode (docker present).
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
+    enable_netdata         = var.enable_netdata
+    netdata_installer      = local.netdata_installer_usg
     ntp_timesync           = local.ntp_timesync
     ntp_server             = var.ntp_server
     ntp_conf               = local.ntp_conf

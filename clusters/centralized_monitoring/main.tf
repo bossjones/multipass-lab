@@ -104,6 +104,20 @@ locals {
   ntp_conf = local.use_ntp ? templatefile("${path.module}/../_shared/cloud-init/use-ntp.conf.tftpl", {
     ntp_ip = split(":", var.ntp_server)[0]
   }) : ""
+
+  # Netdata agent installer (shared snippet), rendered per-VM so [host labels] carry this VM's
+  # cluster+role (they ride on netdata_info{...}). Replaces the former inline kickstart runcmd;
+  # the shared snippet also disables the statsd/otel internal plugins (port clashes). Empty when
+  # disabled -> the %{ if enable_netdata } write_files/runcmd guards drop the block. See
+  # specs/shared-netdata.md.
+  netdata_installer_server = var.enable_netdata ? templatefile("${path.module}/../_shared/cloud-init/install-netdata.sh.tftpl", {
+    host_labels = { cluster = var.name_prefix, role = "server", environment = "lab" }
+    enable_ebpf = var.enable_netdata_ebpf
+  }) : ""
+  netdata_installer_k0s = var.enable_netdata ? templatefile("${path.module}/../_shared/cloud-init/install-netdata.sh.tftpl", {
+    host_labels = { cluster = var.name_prefix, role = "k0s", environment = "lab" }
+    enable_ebpf = var.enable_netdata_ebpf
+  }) : ""
 }
 
 # --- k0s-client (the monitored host) — created FIRST ------------------------
@@ -122,6 +136,7 @@ resource "local_file" "k0s_ci" {
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
     internal_ca_cert  = var.internal_ca_cert
+    netdata_installer = local.netdata_installer_k0s
   }))
 }
 
@@ -148,6 +163,10 @@ locals {
     # Cross-cluster scrape targets (VMs in OTHER clusters). Populated by `just up-connected`
     # via .cross-cluster.auto.tfvars.json; empty by default. See specs/cross-cluster.md.
     extra_scrape_targets = var.extra_scrape_targets
+    # Per-VM Netdata targets, folded into the single job="netdata" (so the dashboards' $instance
+    # picker + health check keep working). Populated by `just up-connected`; empty by default.
+    # See specs/shared-netdata.md.
+    netdata_scrape_targets = var.netdata_scrape_targets
   }))
 
   compose_conf = templatefile("${path.module}/cloud-init/docker/compose.yaml.tftpl", merge(local.flags, {
@@ -276,6 +295,7 @@ resource "local_file" "server_ci" {
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
     internal_ca_cert  = var.internal_ca_cert
+    netdata_installer = local.netdata_installer_server
     # Internal-CA TLS (Phase 2) — issue a leaf at first boot + serve it via Traefik :443, gated on
     # use_internal_tls so the default `just up` stays plain-HTTP/turnkey. See specs/internal-ca.md.
     use_internal_tls   = var.use_internal_tls

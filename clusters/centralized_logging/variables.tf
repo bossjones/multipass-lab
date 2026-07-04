@@ -149,6 +149,12 @@ variable "enable_netdata" {
   default     = true
 }
 
+variable "enable_netdata_ebpf" {
+  description = "Enable Netdata's eBPF collector (deepest kernel metrics; heaviest, arm64-stable availability varies). Default off — base install still runs all standard collectors. See specs/shared-netdata.md."
+  type        = bool
+  default     = false
+}
+
 # --- Coroot (self-hosted eBPF observability) + ingress ----------------------
 # Coroot is deployed declaratively onto the single-node k0s cluster (operator + coroot-ce
 # Helm charts) in the k0s cloud-init — no cloud account, no secrets. Heavy (bundles

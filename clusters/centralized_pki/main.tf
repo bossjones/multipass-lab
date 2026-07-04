@@ -21,7 +21,21 @@ locals {
     enable_process_exporter    = var.enable_process_exporter
     enable_systemd_exporter    = var.enable_systemd_exporter
     enable_letsencrypt_staging = var.enable_letsencrypt_staging
+    enable_netdata             = var.enable_netdata
   }
+
+  # Netdata agent installer (shared snippet), rendered per-VM so [host labels] carry this VM's
+  # cluster+role (they ride on netdata_info{...}). Empty when disabled -> the %{ if enable_netdata }
+  # write_files/runcmd guards drop the block. See specs/shared-netdata.md.
+  netdata_installer_ca = var.enable_netdata ? templatefile("${path.module}/../_shared/cloud-init/install-netdata.sh.tftpl", {
+    host_labels = { cluster = var.name_prefix, role = "ca", environment = "lab" }
+    enable_ebpf = var.enable_netdata_ebpf
+  }) : ""
+
+  netdata_installer_services = var.enable_netdata ? templatefile("${path.module}/../_shared/cloud-init/install-netdata.sh.tftpl", {
+    host_labels = { cluster = var.name_prefix, role = "services", environment = "lab" }
+    enable_ebpf = var.enable_netdata_ebpf
+  }) : ""
 
   # Sorted list of active flags — exported as enabled_flags and consumed by the CLIs
   # (tls_cli picks the expected root from enable_letsencrypt_staging) and by
@@ -161,6 +175,8 @@ resource "local_file" "ca_ci" {
     # Docker operator TUIs (wharf/oxker/dive) — the CA VM runs docker (step-ca).
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
+    # Netdata agent (:19999) — installed by the shared snippet. enable_netdata rides in local.flags.
+    netdata_installer = local.netdata_installer_ca
   }))
 }
 
@@ -208,6 +224,8 @@ resource "local_file" "services_ci" {
     # Docker operator TUIs (wharf/oxker/dive) — the services VM runs docker (Traefik/Authelia/etc).
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
+    # Netdata agent (:19999) — installed by the shared snippet. enable_netdata rides in local.flags.
+    netdata_installer = local.netdata_installer_services
   }))
 }
 

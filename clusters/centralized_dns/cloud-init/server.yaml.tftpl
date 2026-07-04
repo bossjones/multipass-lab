@@ -36,6 +36,15 @@ write_files:
     permissions: '0644'
     content: |
       ${indent(6, unbound_conf)}
+%{ if enable_netdata ~}
+
+  # Netdata agent (shared snippet) — installed by a runcmd below; serves the Prometheus endpoint
+  # on :19999 (/api/v1/allmetrics?format=prometheus). See specs/shared-netdata.md.
+  - path: /usr/local/sbin/install-netdata.sh
+    permissions: '0755'
+    content: |
+      ${indent(6, netdata_installer)}
+%{ endif ~}
 
   # Pre-seeded AdGuard Home config, staged OUTSIDE the install dir. The official installer refuses
   # to run if /opt/AdGuardHome already exists, so we install first (clean), then copy this seed in
@@ -254,6 +263,11 @@ runcmd:
 %{ if enable_node_exporter ~}
   # node_exporter — OS host metrics (:9100).
   - /usr/local/sbin/install-exporter.sh node_exporter https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-{ARCH}.tar.gz node_exporter
+%{ endif ~}
+%{ if enable_netdata ~}
+  # Netdata agent — install + tune for max stats (best-effort; idempotent re-run:
+  # `sudo /usr/local/sbin/install-netdata.sh`). Serves :19999. See specs/shared-netdata.md.
+  - /usr/local/sbin/install-netdata.sh || true
 %{ endif ~}
 %{ if enable_adguard_exporter || enable_unbound_exporter ~}
   # Go toolchain — used to build the DNS exporters from source (pinned, arch-native). The runcmd

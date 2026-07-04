@@ -70,6 +70,15 @@ variable "extra_scrape_targets" {
   default = []
 }
 
+variable "netdata_scrape_targets" {
+  description = "Per-VM Netdata targets in OTHER clusters: list of {name, ip}. Folded into the single job=\"netdata\" (scraped at :19999 /api/v1/allmetrics?format=prometheus, honor_labels) with `name` as the instance label. Populated by `just up-connected`; empty by default. See specs/shared-netdata.md."
+  type = list(object({
+    name = string
+    ip   = string
+  }))
+  default = []
+}
+
 # --- Cross-cluster log shipping (opt-in; see specs/cross-cluster.md) ---------
 # host:port of the centralized_logging syslog-ng collector. Non-empty => the hub renders the
 # shared syslog-ng client drop-in and ships its OWN OS logs there (the monitoring hub as a
@@ -203,6 +212,12 @@ variable "enable_netdata" {
   description = "netdata real-time agent on the client + netdata job."
   type        = bool
   default     = true
+}
+
+variable "enable_netdata_ebpf" {
+  description = "Enable Netdata's eBPF collector (deepest kernel metrics; heaviest, arm64-stable availability varies). Default off — base install still runs all standard collectors. See specs/shared-netdata.md."
+  type        = bool
+  default     = false
 }
 
 # --- Reach (default on) -----------------------------------------------------

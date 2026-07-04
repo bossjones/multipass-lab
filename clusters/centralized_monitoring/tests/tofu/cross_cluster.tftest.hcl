@@ -21,6 +21,9 @@ variables {
   internal_ca_cert     = ""
   log_shipping_target  = ""
   extra_scrape_targets = []
+  # Pinned OFF too — a leftover .cross-cluster.auto.tfvars.json could otherwise inject Netdata
+  # targets into the netdata job during the *_off_by_default run. See specs/shared-netdata.md.
+  netdata_scrape_targets = []
   # Phase 2 internal-CA TLS opt-in — pinned OFF here too (a leftover .cross-cluster.auto.tfvars.json
   # from `just up-connected --INTERNAL_TLS` would otherwise flip use_internal_tls on during tests).
   use_internal_tls   = false
@@ -60,6 +63,29 @@ run "extra_targets_render_jobs" {
   assert {
     condition     = strcontains(local_file.server_ci.content, "\"10.20.0.6:9256\"")
     error_message = "cross-cluster target must honor an explicit port"
+  }
+}
+
+# --- Netdata targets fold into the single job="netdata" with instance labels ----------------
+run "netdata_targets_fold_into_job" {
+  command = plan
+
+  variables {
+    netdata_scrape_targets = [
+      { name = "centralized-dns-server", ip = "10.20.0.9" },
+      { name = "centralized-pki-ca", ip = "10.20.0.5" },
+    ]
+  }
+
+  # Each fleet VM's Netdata endpoint (:19999) is scraped under the existing job="netdata"...
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "\"10.20.0.9:19999\"") && strcontains(local_file.server_ci.content, "\"10.20.0.5:19999\"")
+    error_message = "netdata_scrape_targets must render :19999 targets in prometheus.yml"
+  }
+  # ...with a friendly instance label, and NOT as a separate job_name.
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "instance: \"centralized-dns-server\"") && !strcontains(local_file.server_ci.content, "job_name: centralized-dns-server")
+    error_message = "netdata targets must fold into job=netdata with an instance label, not spawn a new job"
   }
 }
 
