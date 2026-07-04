@@ -36,6 +36,15 @@ write_files:
     permissions: '0644'
     content: |
       ${indent(6, override_conf)}
+%{ if enable_netdata ~}
+
+  # Netdata agent (shared snippet) — installed by a runcmd below; serves the Prometheus endpoint
+  # on :19999 (/api/v1/allmetrics?format=prometheus). See specs/shared-netdata.md.
+  - path: /usr/local/sbin/install-netdata.sh
+    permissions: '0755'
+    content: |
+      ${indent(6, netdata_installer)}
+%{ endif ~}
 %{ if dns_server != "" ~}
 
   # Cross-cluster DNS — resolve through the centralized_dns AdGuard Home hub. See specs/cross-cluster.md.
@@ -461,10 +470,7 @@ runcmd:
   - /usr/local/sbin/install-exporter.sh process-exporter https://github.com/ncabatoff/process-exporter/releases/download/v0.8.7/process-exporter-0.8.7.linux-{ARCH}.tar.gz process-exporter --config.path=/etc/process-exporter/all.yaml -threads=false -gather-smaps=false -remove-empty-groups
 %{ endif ~}
 %{ if enable_netdata ~}
-  # netdata — real-time agent (:19999, /api/v1/allmetrics?format=prometheus).
-  # Standalone/local-only: no --claim-token (no Netdata Cloud), telemetry disabled, updates pinned.
-  - mkdir -p /etc/netdata && touch /etc/netdata/.opt-out-from-anonymous-statistics
-  - curl -sSLf https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh && DO_NOT_TRACK=1 sh /tmp/netdata-kickstart.sh --non-interactive --stable-channel --disable-telemetry --no-updates --dont-wait || true
-  # scripts.d must exist or netdata's external-plugins scanner logs a repeating warning
-  - mkdir -p /etc/netdata/scripts.d && chown -R netdata:netdata /etc/netdata/scripts.d && systemctl restart netdata || true
+  # Netdata agent — install + tune for max stats (best-effort; idempotent re-run:
+  # `sudo /usr/local/sbin/install-netdata.sh`). Serves :19999. See specs/shared-netdata.md.
+  - /usr/local/sbin/install-netdata.sh || true
 %{ endif ~}

@@ -177,16 +177,20 @@ run "defaults_sizing_names_and_render" {
     error_message = "k0s cloud-init must install ccze/k9s/stern and drop the ubuntu kubeconfig"
   }
 
-  # --- netdata: installs on BOTH VMs, telemetry opted out, server scraped via host gateway ---
+  # --- netdata: shared installer on BOTH VMs, max-stats tuning, server scraped via host gateway ---
   assert {
     condition = alltrue([for c in [local_file.server_ci.content, local_file.k0s_ci.content] :
-    strcontains(c, "netdata-kickstart.sh")])
-    error_message = "netdata kickstart install block must render on both the server and k0s VMs by default"
+    strcontains(c, "/usr/local/sbin/install-netdata.sh") && strcontains(c, "netdata-kickstart.sh")])
+    error_message = "the shared Netdata installer (kickstart) must render on both the server and k0s VMs by default"
   }
   assert {
     condition = alltrue([for c in [local_file.server_ci.content, local_file.k0s_ci.content] :
-    strcontains(c, ".opt-out-from-anonymous-statistics")])
-    error_message = "netdata install must drop the anonymous-statistics opt-out file on both VMs"
+    strcontains(c, "lab-managed max-stats")])
+    error_message = "the shared installer's max-stats netdata.conf tuning block must render on both VMs"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "role = server") && strcontains(local_file.k0s_ci.content, "role = k0s")
+    error_message = "each VM's Netdata [host labels] must carry its own role"
   }
   assert {
     condition     = strcontains(local_file.server_ci.content, "host.docker.internal:19999")

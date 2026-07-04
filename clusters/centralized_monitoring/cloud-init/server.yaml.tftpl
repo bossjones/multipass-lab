@@ -109,6 +109,16 @@ write_files:
     content: |
       ${indent(6, docker_tools_installer)}
 %{ endif ~}
+%{ if enable_netdata ~}
+
+  # Netdata agent (shared snippet) — installed by a runcmd below; host-installed (not compose),
+  # Prometheus reaches it via host.docker.internal:19999 (see compose.yaml). The snippet disables
+  # the statsd/otel internal plugins (port clashes). See specs/shared-netdata.md.
+  - path: /usr/local/sbin/install-netdata.sh
+    permissions: '0755'
+    content: |
+      ${indent(6, netdata_installer)}
+%{ endif ~}
 %{ if enable_heimdall && enable_heimdall_seed ~}
 
   # --- heimdall seed tool (uv single-file CLI) ------------------------------
@@ -253,20 +263,12 @@ runcmd:
   - /usr/local/sbin/install-docker-tools.sh || true
 %{ endif ~}
 %{ if enable_netdata ~}
-  # netdata — real-time agent (:19999, /api/v1/allmetrics?format=prometheus).
-  # Standalone/local-only: no --claim-token (no Netdata Cloud), telemetry disabled, updates pinned.
-  # Host-installed (not compose); Prometheus reaches it via host.docker.internal (see compose.yaml).
-  - mkdir -p /etc/netdata && touch /etc/netdata/.opt-out-from-anonymous-statistics
-  - curl -sSLf https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh && DO_NOT_TRACK=1 sh /tmp/netdata-kickstart.sh --non-interactive --stable-channel --disable-telemetry --no-updates --dont-wait || true
-  # scripts.d must exist or netdata's external-plugins scanner logs a repeating warning
-  - mkdir -p /etc/netdata/scripts.d && chown -R netdata:netdata /etc/netdata/scripts.d || true
-  # netdata's built-in StatsD collector is on by default and binds :8125 (UDP+TCP),
-  # colliding with this cluster's own statsd_exporter container (used for Locust
-  # StatsD load testing) — disable it so statsd_exporter can claim the port.
-  # Disable Netdata's statsd AND otel plugins: otel-plugin binds 127.0.0.1:4317 (OTLP gRPC) and would
-  # beat the stack's otel-collector container to the port, leaving the collector down. The stack
-  # collector owns OTLP ingest here. See specs/cross-cluster.md.
-  - printf '\n[plugins]\n\tstatsd = no\n\totel = no\n' >> /etc/netdata/netdata.conf && systemctl restart netdata || true
+  # Netdata agent (shared snippet) — install + tune for max stats (best-effort; idempotent re-run:
+  # `sudo /usr/local/sbin/install-netdata.sh`). Host-installed on :19999; Prometheus reaches it via
+  # host.docker.internal (see compose.yaml). The snippet's max-stats netdata.conf disables the
+  # built-in statsd plugin (:8125 clashes with this cluster's statsd_exporter, used for Locust) and
+  # the otel plugin (:4317 clashes with the stack's otel-collector). See specs/shared-netdata.md.
+  - /usr/local/sbin/install-netdata.sh || true
 %{ endif ~}
 %{ if enable_heimdall && enable_heimdall_seed ~}
   # --- auto-seed Heimdall tiles (best-effort; never fails the boot) ----------

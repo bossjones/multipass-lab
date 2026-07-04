@@ -15,6 +15,7 @@ locals {
     enable_adguard_exporter = var.enable_adguard_exporter
     enable_process_exporter = var.enable_process_exporter
     enable_systemd_exporter = var.enable_systemd_exporter
+    enable_netdata          = var.enable_netdata
   }
 
   # Sorted list of active flags — exported as enabled_flags and consumed by the CLIs +
@@ -34,6 +35,13 @@ locals {
   })
 
   unbound_conf = file("${path.module}/cloud-init/unbound/unbound.conf")
+
+  # --- Netdata agent (shared snippet; opt-in default on, see specs/shared-netdata.md) ---
+  # Rendered per-role from the shared installer and dropped in via cloud-init; empty when off.
+  netdata_installer_server = var.enable_netdata ? templatefile("${path.module}/../_shared/cloud-init/install-netdata.sh.tftpl", {
+    host_labels = { cluster = var.name_prefix, role = "server", environment = "lab" }
+    enable_ebpf = var.enable_netdata_ebpf
+  }) : ""
 
   # --- Cross-cluster telemetry snippets (opt-in; see specs/cross-cluster.md) ---
   # Rendered from the SHARED clusters/_shared/cloud-init/ snippets only when the matching
@@ -87,6 +95,7 @@ resource "local_file" "server_ci" {
     adguard_web_port     = var.adguard_web_port
     adguard_exporter_ver = var.adguard_exporter_version
     unbound_conf         = local.unbound_conf
+    netdata_installer    = local.netdata_installer_server
 
     ntp_timesync         = local.ntp_timesync
     ntp_server           = var.ntp_server

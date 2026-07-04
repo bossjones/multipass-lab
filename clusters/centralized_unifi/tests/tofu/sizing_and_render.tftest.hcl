@@ -361,3 +361,34 @@ run "ntp_server_on_renders_dropin" {
     error_message = "the drop-in must point at the injected NTP IP"
   }
 }
+
+# --- Netdata agent (shared snippet) — default ON on every VM --------
+
+run "netdata_render_by_default" {
+  command = plan
+  assert {
+    condition     = strcontains(local_file.controller_ci.content, "install-netdata.sh") && strcontains(local_file.usg_ci.content, "install-netdata.sh")
+    error_message = "both VMs must install Netdata by default"
+  }
+  assert {
+    condition     = strcontains(local_file.controller_ci.content, "get.netdata.cloud/kickstart.sh") && strcontains(local_file.controller_ci.content, "lab-managed max-stats")
+    error_message = "controller cloud-init must render the kickstart install + max-stats tuning block"
+  }
+  assert {
+    condition     = strcontains(local_file.controller_ci.content, "role = controller") && strcontains(local_file.usg_ci.content, "role = usg")
+    error_message = "each VM's Netdata [host labels] must carry its own role"
+  }
+  assert {
+    condition     = can(yamldecode(local_file.controller_ci.content)) && can(yamldecode(local_file.usg_ci.content))
+    error_message = "both cloud-inits must stay valid YAML after adding the Netdata installer"
+  }
+}
+
+run "netdata_absent_when_disabled" {
+  command = plan
+  variables { enable_netdata = false }
+  assert {
+    condition     = !strcontains(local_file.controller_ci.content, "install-netdata.sh") && !strcontains(local_file.usg_ci.content, "install-netdata.sh")
+    error_message = "disabled enable_netdata must omit the installer from both VMs"
+  }
+}

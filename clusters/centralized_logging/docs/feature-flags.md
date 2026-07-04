@@ -48,7 +48,8 @@ which avoids a dependency cycle and any need for peer-IP injection in this layer
 | `enable_traefik_metrics` | ✅ | docker only | `8082` | Traefik's Prometheus metrics endpoint |
 | `enable_kube_metrics` | ✅ | k0s only | `10249` / `10255` | kubelet read-only port, so kube-proxy and kubelet/cAdvisor are scrapable without a token |
 | `enable_kube_state_metrics` | ✅ | k0s only | `8081` | hostNetwork Deployment |
-| `enable_netdata` | ✅ | all VMs | `19999` | Netdata real-time agent — per-second host/container/systemd metrics + a built-in dashboard; Prometheus export at `/api/v1/allmetrics?format=prometheus` |
+| `enable_netdata` | ✅ | all VMs | `19999` | Netdata real-time agent — per-second host/container/systemd metrics + a built-in dashboard; Prometheus export at `/api/v1/allmetrics?format=prometheus`. Installed via the shared `clusters/_shared/cloud-init/install-netdata.sh.tftpl` (fleet-wide; see `specs/shared-netdata.md`) |
+| `enable_netdata_ebpf` | ❌ | all VMs | — | Opt-in Netdata eBPF collector (deepest kernel metrics; heaviest, arm64-stable availability varies). Off by default; the base install still runs all standard collectors |
 
 All eleven flags default **on** except `enable_journald_exporter` — the lab is small enough to run
 the full set, with that single exception carved out for an architecture incompatibility (not a
@@ -57,9 +58,10 @@ the full set, with that single exception carved out for an architecture incompat
 ### Netdata (real-time agent, all VMs)
 
 `enable_netdata` is the one flag that is **both** install-gated *and* scraped locally: the agent
-is installed on all three VMs (via the upstream `kickstart.sh`, standalone — no Netdata Cloud
-claim, telemetry disabled, updates pinned), **and** the docker VM's own Prometheus renders a
-`logging-netdata` job (`central`/`__SELF_IP__`/`k0s` on `:19999`). It overlaps `node_exporter`
+is installed on all three VMs (via the shared `clusters/_shared/cloud-init/install-netdata.sh.tftpl`
+snippet — upstream `kickstart.sh`, standalone with no Netdata Cloud claim, telemetry disabled,
+updates pinned, plus a max-stats `netdata.conf` and per-VM `[host labels]`), **and** the docker VM's
+own Prometheus renders a `logging-netdata` job (`central`/`__SELF_IP__`/`k0s` on `:19999`). It overlaps `node_exporter`
 and `cAdvisor` on purpose — Netdata adds per-second resolution and a zero-config built-in
 dashboard on `:19999`. Live coverage: [`test_netdata.py`](../tests/testinfra/test_netdata.py)
 (service running + `:19999` listening + Prometheus endpoint + the `logging-netdata` target `up`).

@@ -145,6 +145,7 @@ on the flat subnet — also opts into `log_shipping_target` to ship its **own** 
 | Variable | Type | Default | Effect |
 |---|---|---|---|
 | `extra_scrape_targets` | `list(object({ job=string, ip=string, port=optional(number,9100) }))` | `[]` | Each entry becomes one static-config Prometheus job scraping a cross-cluster VM. |
+| `netdata_scrape_targets` | `list(object({ name=string, ip=string }))` | `[]` | Each entry is folded into the single `job="netdata"` (scraped at `:19999` `/api/v1/allmetrics?format=prometheus`, `honor_labels`) with `name` as the instance label. See `specs/shared-netdata.md`. |
 | `log_shipping_target` | string | `""` | `host:port` of the syslog-ng collector. Non-empty → the server VM ships its own OS logs there (hub-as-log-shipper; logging is applied first so the IP is known). |
 
 ## Shared snippets: `clusters/_shared/cloud-init/`
@@ -161,6 +162,7 @@ as a non-cluster directory; Justfile recipes that iterate `clusters/*/` (`up-all
 | `syslog-client.conf.tftpl` | `central_ip`, `syslog_port` | `centralized_logging/cloud-init/syslog-ng/client.conf.tftpl` |
 | `otel-agent-config.yaml.tftpl` | `openobserve_ip`, `openobserve_port`, `openobserve_org`, `openobserve_password`, `stream_name` | `centralized_monitoring/cloud-init/otel/k0s-collector-config.yaml.tftpl` |
 | `install-node-exporter.sh` | — (arch-aware) | `centralized_monitoring`'s `install-exporter.sh` |
+| `install-netdata.sh.tftpl` | `host_labels` (`{cluster,role,environment}`), `enable_ebpf` | new — fleet-wide Netdata agent installer (`:19999`, Prometheus endpoint) tuned for max stats; replaced the per-cluster inline kickstart. Gated by `enable_netdata` (default on). See `specs/shared-netdata.md`. |
 
 ## Orchestration
 

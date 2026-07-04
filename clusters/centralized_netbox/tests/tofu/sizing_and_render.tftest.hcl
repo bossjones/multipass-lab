@@ -583,32 +583,52 @@ run "docker_tools_absent_when_disabled" {
   }
 }
 
-# --- Netdata (real-time agent on both VMs, dashboard-only — no local Prometheus) -------
+# --- Netdata (shared installer snippet on EVERY VM, dashboard-only — no local Prometheus) -------
 
 run "netdata_renders_by_default" {
   command = plan
 
-  # Installs on BOTH VMs, telemetry opted out, and surfaced in enabled_features.
+  variables {
+    # enable_discovery so the agent VM (count-gated) also renders and is asserted alongside
+    # server + client — every VM must run the shared Netdata installer.
+    enable_discovery = true
+  }
+
+  # The shared installer snippet is embedded on server + client + agent.
   assert {
     condition = alltrue([for c in [
-      local_file.server_ci.content, local_file.client_ci.content,
-    ] : strcontains(c, "netdata-kickstart.sh")])
-    error_message = "netdata kickstart install block must render on both VMs by default"
+      local_file.server_ci.content, local_file.client_ci.content, local_file.agent_ci[0].content,
+    ] : strcontains(c, "install-netdata.sh")])
+    error_message = "the shared Netdata installer must render on every VM by default"
+  }
+  # The shared snippet's max-stats tuning block is present (proves the snippet, not a stub, rendered).
+  assert {
+    condition = alltrue([for c in [
+      local_file.server_ci.content, local_file.client_ci.content, local_file.agent_ci[0].content,
+    ] : strcontains(c, "lab-managed max-stats")])
+    error_message = "the shared Netdata installer's max-stats tuning block must render on every VM"
+  }
+  # Each VM carries its own [host labels] role (server/client/agent), rendered from the per-VM local.
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "role = server")
+    error_message = "server Netdata installer must carry host label role = server"
   }
   assert {
-    condition = alltrue([for c in [
-      local_file.server_ci.content, local_file.client_ci.content,
-    ] : strcontains(c, ".opt-out-from-anonymous-statistics")])
-    error_message = "netdata install must drop the anonymous-statistics opt-out file on both VMs"
+    condition     = strcontains(local_file.client_ci.content, "role = client")
+    error_message = "client Netdata installer must carry host label role = client"
+  }
+  assert {
+    condition     = strcontains(local_file.agent_ci[0].content, "role = agent")
+    error_message = "agent Netdata installer must carry host label role = agent"
   }
   assert {
     condition     = output.enabled_features.netdata == true
     error_message = "enabled_features.netdata must be true by default"
   }
-  # The gated install block must keep the cloud-init valid YAML.
+  # The gated install block must keep every cloud-init valid YAML.
   assert {
     condition = alltrue([for c in [
-      local_file.server_ci.content, local_file.client_ci.content,
+      local_file.server_ci.content, local_file.client_ci.content, local_file.agent_ci[0].content,
     ] : can(yamldecode(c))])
     error_message = "rendered cloud-init must stay valid YAML with netdata enabled"
   }
@@ -619,13 +639,15 @@ run "netdata_off_omits_install" {
 
   variables {
     enable_netdata = false
+    # enable_discovery so the agent VM is present and can be asserted absent-of-netdata too.
+    enable_discovery = true
   }
 
   assert {
     condition = alltrue([for c in [
-      local_file.server_ci.content, local_file.client_ci.content,
-    ] : !strcontains(c, "netdata-kickstart.sh")])
-    error_message = "disabling netdata must omit the kickstart install block from both VMs"
+      local_file.server_ci.content, local_file.client_ci.content, local_file.agent_ci[0].content,
+    ] : !strcontains(c, "install-netdata.sh")])
+    error_message = "disabling netdata must omit the shared installer from every VM"
   }
   assert {
     condition     = output.enabled_features.netdata == false

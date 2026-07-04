@@ -336,3 +336,40 @@ run "reverse_proxy_routes_contract" {
     error_message = "pki's reverse_proxy_routes must include auth and warden"
   }
 }
+
+# --- Netdata agent (fleet-wide, default on; see specs/shared-netdata.md) -------------------------
+
+run "netdata_render_by_default" {
+  command = plan
+
+  # Both VMs carry the shared installer + kickstart + this VM's host labels.
+  assert {
+    condition     = strcontains(local_file.ca_ci.content, "install-netdata.sh") && strcontains(local_file.services_ci.content, "install-netdata.sh")
+    error_message = "both VMs must install Netdata by default"
+  }
+  assert {
+    condition     = strcontains(local_file.ca_ci.content, "get.netdata.cloud/kickstart.sh") && strcontains(local_file.ca_ci.content, "lab-managed max-stats")
+    error_message = "ca cloud-init must render the kickstart install + the max-stats tuning block"
+  }
+  assert {
+    condition     = strcontains(local_file.ca_ci.content, "role = ca") && strcontains(local_file.services_ci.content, "role = services")
+    error_message = "each VM's Netdata [host labels] must carry its own role"
+  }
+  assert {
+    condition     = can(yamldecode(local_file.ca_ci.content)) && can(yamldecode(local_file.services_ci.content))
+    error_message = "both cloud-inits must stay valid YAML after adding the Netdata installer"
+  }
+}
+
+run "netdata_absent_when_disabled" {
+  command = plan
+
+  variables {
+    enable_netdata = false
+  }
+
+  assert {
+    condition     = !strcontains(local_file.ca_ci.content, "install-netdata.sh") && !strcontains(local_file.services_ci.content, "install-netdata.sh")
+    error_message = "disabled enable_netdata must omit the installer from both VMs"
+  }
+}

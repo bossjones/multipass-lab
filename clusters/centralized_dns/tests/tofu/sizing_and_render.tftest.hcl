@@ -225,6 +225,37 @@ run "web_urls_core_and_flag_aware" {
   }
 }
 
+# --- Netdata agent (shared snippet; opt-in default on, see specs/shared-netdata.md) -----------
+
+run "netdata_render_by_default" {
+  command = plan
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "install-netdata.sh")
+    error_message = "the server VM must install Netdata by default"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "get.netdata.cloud/kickstart.sh") && strcontains(local_file.server_ci.content, "lab-managed max-stats")
+    error_message = "server cloud-init must render the kickstart install + the max-stats tuning block"
+  }
+  assert {
+    condition     = strcontains(local_file.server_ci.content, "role = server")
+    error_message = "Netdata [host labels] must carry the server role"
+  }
+  assert {
+    condition     = can(yamldecode(local_file.server_ci.content))
+    error_message = "server cloud-init must stay valid YAML after adding the Netdata installer"
+  }
+}
+
+run "netdata_absent_when_disabled" {
+  command = plan
+  variables { enable_netdata = false }
+  assert {
+    condition     = !strcontains(local_file.server_ci.content, "install-netdata.sh")
+    error_message = "disabled enable_netdata must omit the installer"
+  }
+}
+
 # --- reverse_proxy_routes contract (fleet-edge Traefik; see specs/dynamic-traefik.md) ----------
 
 run "reverse_proxy_routes_contract" {

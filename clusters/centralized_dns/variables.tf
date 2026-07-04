@@ -127,6 +127,20 @@ variable "enable_ntp_server" {
   default     = false
 }
 
+# --- Netdata agent (opt-in, default on; shared snippet, see specs/shared-netdata.md) ---
+
+variable "enable_netdata" {
+  description = "Install the Netdata agent (:19999, Prometheus endpoint) on every VM. Default on."
+  type        = bool
+  default     = true
+}
+
+variable "enable_netdata_ebpf" {
+  description = "Enable Netdata's eBPF collector (deepest kernel metrics; heaviest, arm64-stable availability varies). Default off — base install still runs all standard collectors. See specs/shared-netdata.md."
+  type        = bool
+  default     = false
+}
+
 # --- Cross-cluster telemetry (opt-in; see specs/cross-cluster.md) ------------
 # Empty defaults keep `just up centralized_dns` turnkey and isolated. `just up-connected`
 # hot-pushes these once the logging/monitoring hubs exist (this cluster boots FIRST).

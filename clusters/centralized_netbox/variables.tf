@@ -339,7 +339,7 @@ variable "client" {
 
 # --- Prometheus exporters (both VMs; verified locally, scraped cross-cluster later) -----------
 variable "enable_node_exporter" {
-  description = "node_exporter (:9100) on both VMs — host metrics; parity with the other clusters."
+  description = "node_exporter (:9100) on the server/client/agent VMs — host metrics; parity with the other clusters."
   type        = bool
   default     = true
 }
@@ -368,7 +368,13 @@ variable "enable_systemd_exporter" {
 
 # --- Opt-in observability ----------------------------------------------------
 variable "enable_netdata" {
-  description = "Netdata real-time agent (:19999, /api/v1/allmetrics?format=prometheus) on both VMs — per-second host/container metrics + built-in dashboards. Standalone (no Netdata Cloud), telemetry off. No local Prometheus here, so dashboard-only."
+  description = "Netdata real-time agent (:19999, /api/v1/allmetrics?format=prometheus) on every VM — per-second host/container metrics + built-in dashboards. Standalone (no Netdata Cloud), telemetry off. No local Prometheus here, so dashboard-only."
   type        = bool
   default     = true
+}
+
+variable "enable_netdata_ebpf" {
+  description = "Enable Netdata's eBPF collector (deepest kernel metrics; heaviest, arm64-stable availability varies). Default off — base install still runs all standard collectors. See specs/shared-netdata.md."
+  type        = bool
+  default     = false
 }

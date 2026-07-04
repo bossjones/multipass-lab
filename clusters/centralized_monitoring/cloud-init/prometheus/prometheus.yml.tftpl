@@ -56,6 +56,12 @@ scrape_configs:
         labels: { instance: "monitoring-server" }
       - targets: ["${k0s_ip}:19999"]
         labels: { instance: "monitoring-k0s" }
+%{ for t in netdata_scrape_targets ~}
+      # cross-cluster: a fleet VM's Netdata (populated by `just up-connected`). Folded into
+      # job="netdata" with a friendly instance label. See specs/shared-netdata.md.
+      - targets: ["${t.ip}:19999"]
+        labels: { instance: "${t.name}" }
+%{ endfor ~}
 %{ endif ~}
 %{ if enable_kube_state_metrics ~}
   - job_name: kube-state-metrics

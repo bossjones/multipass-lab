@@ -244,6 +244,7 @@ up-connected:
     # 3. consumers — everything except the three hubs and non-cluster dirs. Single boot with all
     #    hub IPs known: DNS resolver + syslog shipping + OTLP push + node_exporter, all at first boot.
     targets='[]'
+    ndtargets='[]'   # Netdata (:19999) targets: {name, ip} per fleet VM (specs/shared-netdata.md)
     for dir in {{cluster_root}}/*/; do
       c="$(basename "$dir")"
       [ -f "$dir/main.tf" ] || continue
@@ -260,12 +261,22 @@ up-connected:
       targets="$(tofu -chdir={{cluster_root}}/$c output -json hosts 2>/dev/null \
         | jq --argjson acc "$targets" \
             '$acc + [to_entries[] | {job: .value.name, ip: .value.ipv4, port: 9100}]')"
+      # ...and as Netdata (:19999) targets, folded into job="netdata" (specs/shared-netdata.md)
+      ndtargets="$(tofu -chdir={{cluster_root}}/$c output -json hosts 2>/dev/null \
+        | jq --argjson acc "$ndtargets" \
+            '$acc + [to_entries[] | {name: .value.name, ip: .value.ipv4}]')"
     done
     # add the DNS hub's OWN exporters (node :9100, adguard :9618, unbound :9167).
     targets="$(echo "$targets" | jq --arg ip "$dns_ip" \
       '. + [{job:"centralized-dns-server",ip:$ip,port:9100},
             {job:"centralized-dns-adguard",ip:$ip,port:9618},
             {job:"centralized-dns-unbound",ip:$ip,port:9167}]')"
+    # Netdata targets for the hubs the monitoring job doesn't already carry statically: the DNS
+    # server VM + all of the logging hub's VMs (the monitoring hub's own server+k0s are static in
+    # the netdata job). See specs/shared-netdata.md.
+    ndtargets="$(echo "$ndtargets" | jq --arg ip "$dns_ip" '. + [{name:"centralized-dns-server", ip:$ip}]')"
+    ndtargets="$(tofu -chdir={{cluster_root}}/$logging output -json hosts 2>/dev/null \
+      | jq --argjson acc "$ndtargets" '$acc + [to_entries[] | {name: .value.name, ip: .value.ipv4}]' 2>/dev/null || echo "$ndtargets")"
 
     # 4. DNS-hub self-telemetry HOT-PUSH (mirrors _hot-push-cross-cluster; no recreate):
     #    the DNS VM booted before the hubs, so wire its log shipping now. A targeted re-apply
@@ -282,16 +293,17 @@ up-connected:
     echo "=== up-connected: wiring Prometheus scrape targets ==="
     # Preserve tls_json here too so the content-only re-apply keeps use_internal_tls in state/render
     # (it does NOT recreate the VM — the leaf was already issued at the step-2 boot).
-    echo "$targets" | jq -c --arg dns "$dns_ip" --arg log "$log_ip:514" --arg ca "$ca_pem" --argjson tls "$tls_json" --argjson ntp "$ntp_json" \
-      '{dns_server: $dns, log_shipping_target: $log, internal_ca_cert: $ca, extra_scrape_targets: .} + $tls + $ntp' \
+    echo "$targets" | jq -c --arg dns "$dns_ip" --arg log "$log_ip:514" --arg ca "$ca_pem" --argjson tls "$tls_json" --argjson ntp "$ntp_json" --argjson nd "$ndtargets" \
+      '{dns_server: $dns, log_shipping_target: $log, internal_ca_cert: $ca, extra_scrape_targets: ., netdata_scrape_targets: $nd} + $tls + $ntp' \
       > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
     tofu -chdir={{cluster_root}}/$monitoring apply -auto-approve   # re-renders .rendered/prometheus.yml only
     scp {{ssh_opts}} -i {{ssh_key}} \
       {{cluster_root}}/$monitoring/.rendered/prometheus.yml \
-      ubuntu@"$mon_ip":/tmp/prometheus.yml
+      {{cluster_root}}/$monitoring/cloud-init/prometheus/alert.rules.yml \
+      ubuntu@"$mon_ip":/tmp/
     ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$mon_ip" \
-      'sudo cp /tmp/prometheus.yml /opt/stack/prometheus/prometheus.yml && sudo docker compose -f /opt/stack/compose.yaml restart prometheus'
-    echo "up-connected: $(echo "$targets" | jq 'length') cross-cluster scrape targets wired; fleet resolving via $dns_ip."
+      'sudo cp /tmp/prometheus.yml /opt/stack/prometheus/prometheus.yml && sudo cp /tmp/alert.rules.yml /opt/stack/prometheus/alert.rules.yml && sudo docker compose -f /opt/stack/compose.yaml restart prometheus'
+    echo "up-connected: $(echo "$targets" | jq 'length') cross-cluster scrape targets + $(echo "$ndtargets" | jq 'length') Netdata targets wired; fleet resolving via $dns_ip."
 
     # 5b. Fleet-edge Traefik (see specs/dynamic-traefik.md): hot-push every cluster's
     #     reverse_proxy_routes into centralized_pki's Traefik (directory file provider, no
@@ -486,8 +498,9 @@ refresh-cross-cluster:
       echo "    internal NTP: preserving chrony hub + fleet ntp_server=$dns_ip"
     fi
 
-    # recompute extra_scrape_targets from every currently-up, already-wired cluster
+    # recompute extra_scrape_targets (+ Netdata targets) from every currently-up, already-wired cluster
     targets='[]'
+    ndtargets='[]'
     for dir in {{cluster_root}}/*/; do
       c="$(basename "$dir")"
       [ -f "$dir/main.tf" ] || continue
@@ -496,13 +509,21 @@ refresh-cross-cluster:
       new_targets="$(tofu -chdir="$dir" output -json hosts 2>/dev/null \
         | jq --argjson acc "$targets" '$acc + [to_entries[] | {job: .value.name, ip: .value.ipv4, port: 9100}]' \
         2>/dev/null)" && targets="$new_targets"
+      new_nd="$(tofu -chdir="$dir" output -json hosts 2>/dev/null \
+        | jq --argjson acc "$ndtargets" '$acc + [to_entries[] | {name: .value.name, ip: .value.ipv4}]' \
+        2>/dev/null)" && ndtargets="$new_nd"
     done
     if [ -n "$dns_ip" ]; then
       targets="$(echo "$targets" | jq --arg ip "$dns_ip" \
         '. + [{job:"centralized-dns-server",ip:$ip,port:9100},
               {job:"centralized-dns-adguard",ip:$ip,port:9618},
               {job:"centralized-dns-unbound",ip:$ip,port:9167}]')"
+      ndtargets="$(echo "$ndtargets" | jq --arg ip "$dns_ip" '. + [{name:"centralized-dns-server", ip:$ip}]')"
     fi
+    # logging hub's VMs run Netdata too (monitoring's own server+k0s stay static in the job).
+    new_nd="$(tofu -chdir={{cluster_root}}/$logging output -json hosts 2>/dev/null \
+      | jq --argjson acc "$ndtargets" '$acc + [to_entries[] | {name: .value.name, ip: .value.ipv4}]' \
+      2>/dev/null)" && ndtargets="$new_nd"
 
     if [ -f {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json ]; then
       echo "=== refresh: $dns (self-telemetry) ==="
@@ -523,16 +544,16 @@ refresh-cross-cluster:
 
     if [ -f {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json ]; then
       echo "=== refresh: $monitoring ==="
-      echo "$targets" | jq -c --arg dns "$dns_ip" --arg log "$log_target" --argjson ntp "$ntp_json" \
-        '{dns_server: $dns, log_shipping_target: $log, extra_scrape_targets: .} + $ntp' \
+      echo "$targets" | jq -c --arg dns "$dns_ip" --arg log "$log_target" --argjson ntp "$ntp_json" --argjson nd "$ndtargets" \
+        '{dns_server: $dns, log_shipping_target: $log, extra_scrape_targets: ., netdata_scrape_targets: $nd} + $ntp' \
         > {{cluster_root}}/$monitoring/.cross-cluster.auto.tfvars.json
       tofu -chdir={{cluster_root}}/$monitoring apply -auto-approve || { echo "FAILED apply: $monitoring"; rc=1; }
       just _hot-push-cross-cluster "$monitoring" || rc=1
       mon_ip_now="$(tofu -chdir={{cluster_root}}/$monitoring output -raw server_ipv4 2>/dev/null || true)"
       if [ -n "$mon_ip_now" ]; then
-        scp {{ssh_opts}} -i {{ssh_key}} {{cluster_root}}/$monitoring/.rendered/prometheus.yml ubuntu@"$mon_ip_now":/tmp/prometheus.yml
+        scp {{ssh_opts}} -i {{ssh_key}} {{cluster_root}}/$monitoring/.rendered/prometheus.yml {{cluster_root}}/$monitoring/cloud-init/prometheus/alert.rules.yml ubuntu@"$mon_ip_now":/tmp/
         ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$mon_ip_now" \
-          'sudo cp /tmp/prometheus.yml /opt/stack/prometheus/prometheus.yml && sudo docker compose -f /opt/stack/compose.yaml restart prometheus'
+          'sudo cp /tmp/prometheus.yml /opt/stack/prometheus/prometheus.yml && sudo cp /tmp/alert.rules.yml /opt/stack/prometheus/alert.rules.yml && sudo docker compose -f /opt/stack/compose.yaml restart prometheus'
       fi
     fi
 

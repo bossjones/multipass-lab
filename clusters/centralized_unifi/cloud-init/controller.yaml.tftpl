@@ -65,6 +65,15 @@ write_files:
       UNIT
       systemctl daemon-reload
       systemctl enable --now "$name"
+%{ if enable_netdata ~}
+
+  # Netdata agent (shared snippet) — installed by a runcmd below; serves the Prometheus endpoint
+  # on :19999 (/api/v1/allmetrics?format=prometheus). See specs/shared-netdata.md.
+  - path: /usr/local/sbin/install-netdata.sh
+    permissions: '0755'
+    content: |
+      ${indent(6, netdata_installer)}
+%{ endif ~}
 
 %{ if exact ~}
   # --- exact mode: the syslog-ng 3.28.1 container + exporter sidecar --------
@@ -197,6 +206,11 @@ runcmd:
   - grep -q 'conf.d/\*.conf' /etc/syslog-ng/syslog-ng.conf || echo '@include "/etc/syslog-ng/conf.d/*.conf"' >> /etc/syslog-ng/syslog-ng.conf
   - systemctl enable syslog-ng
   - systemctl restart syslog-ng
+%{ endif ~}
+%{ if enable_netdata ~}
+  # Netdata agent — install + tune for max stats (best-effort; idempotent re-run:
+  # `sudo /usr/local/sbin/install-netdata.sh`). Serves :19999. See specs/shared-netdata.md.
+  - /usr/local/sbin/install-netdata.sh || true
 %{ endif ~}
 %{ if enable_node_exporter ~}
   - mkdir -p /var/lib/node_exporter/textfile_collector

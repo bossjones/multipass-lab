@@ -131,6 +131,21 @@ variable "enable_docker_tools" {
   default     = true
 }
 
+# Netdata agent (:19999) on every VM — zero-config auto-discovery + a Prometheus-scrapable
+# /api/v1/allmetrics endpoint. Shared installer at clusters/_shared/cloud-init/install-netdata.sh.tftpl;
+# default ON fleet-wide. See specs/shared-netdata.md.
+variable "enable_netdata" {
+  description = "Install the Netdata agent (:19999, Prometheus endpoint) on every VM. Default on."
+  type        = bool
+  default     = true
+}
+
+variable "enable_netdata_ebpf" {
+  description = "Enable Netdata's eBPF collector (deepest kernel metrics; heaviest, arm64-stable availability varies). Default off — base install still runs all standard collectors. See specs/shared-netdata.md."
+  type        = bool
+  default     = false
+}
+
 # --- Resource sizing ---------------------------------------------------------
 variable "controller" {
   description = "Resource sizing for the controller VM (Ubuntu host + native-arm64 syslog-ng container + exporter)."

@@ -38,6 +38,24 @@ locals {
   # tests/testinfra/conftest.py so the live suite asserts only what is on.
   enabled_exporters = sort([for k, v in local.flags : k if v])
 
+  # Netdata agent installer (shared snippet), rendered per-VM so [host labels] carry this VM's
+  # cluster+role (they ride on netdata_info{...}). Empty when disabled -> the %{ if enable_netdata }
+  # write_files/runcmd guards drop the block. See specs/shared-netdata.md.
+  netdata_installer_central = var.enable_netdata ? templatefile("${path.module}/../_shared/cloud-init/install-netdata.sh.tftpl", {
+    host_labels = { cluster = var.name_prefix, role = "central", environment = "lab" }
+    enable_ebpf = var.enable_netdata_ebpf
+  }) : ""
+
+  netdata_installer_k0s = var.enable_netdata ? templatefile("${path.module}/../_shared/cloud-init/install-netdata.sh.tftpl", {
+    host_labels = { cluster = var.name_prefix, role = "k0s", environment = "lab" }
+    enable_ebpf = var.enable_netdata_ebpf
+  }) : ""
+
+  netdata_installer_docker = var.enable_netdata ? templatefile("${path.module}/../_shared/cloud-init/install-netdata.sh.tftpl", {
+    host_labels = { cluster = var.name_prefix, role = "docker", environment = "lab" }
+    enable_ebpf = var.enable_netdata_ebpf
+  }) : ""
+
   # Coroot (opt-in, k0s only). Kept out of local.flags on purpose so enabled_exporters stays
   # the metrics-exporter set; enable_coroot/enable_ingress are threaded straight into the k0s
   # templatefile below and surfaced separately via the enabled_features output. See specs/coroot.md.
@@ -139,6 +157,8 @@ resource "local_file" "central_ci" {
     dns_server        = var.dns_server
     dns_resolved_conf = local.dns_resolved_conf
     internal_ca_cert  = var.internal_ca_cert
+    # Netdata agent (:19999) — installed by the shared snippet. enable_netdata rides in local.flags.
+    netdata_installer = local.netdata_installer_central
   }))
 }
 
@@ -171,6 +191,8 @@ resource "local_file" "k0s_ci" {
     coroot_values                = local.coroot_values
     coroot_operator_version_flag = local.coroot_operator_version_flag
     coroot_ce_version_flag       = local.coroot_ce_version_flag
+    # Netdata agent (:19999) — installed by the shared snippet. enable_netdata rides in local.flags.
+    netdata_installer = local.netdata_installer_k0s
   }))
 }
 
@@ -208,6 +230,8 @@ resource "local_file" "docker_ci" {
     # Docker operator TUIs (wharf/oxker/dive) — this is the only docker VM in the cluster.
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
+    # Netdata agent (:19999) — installed by the shared snippet. enable_netdata rides in local.flags.
+    netdata_installer = local.netdata_installer_docker
   }))
 }
 
