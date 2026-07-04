@@ -41,6 +41,17 @@ output "dns_records" {
   )
 }
 
+# Routes the fleet-edge Traefik (centralized_pki) should publish for this cluster. Consumed by
+# scripts/traefik_cli.py (see specs/dynamic-traefik.md). k0s = true tells the CLI this backend is
+# a Kubernetes NodePort — Traefik treats the k0s node as an opaque upstream and does not
+# re-implement its ingress. Empty (not var.enable_coroot) -> no route (nothing to front).
+output "reverse_proxy_routes" {
+  description = "Routes the fleet-edge Traefik should publish for this cluster. Consumed by scripts/traefik_cli.py."
+  value = var.enable_coroot ? [
+    { host = "coroot", ip = multipass_instance.k0s.ipv4, port = var.coroot_nodeport, scheme = "http", sso = false, k0s = true, k0s_ingress_host = var.coroot_host },
+  ] : []
+}
+
 output "hostname_source" {
   description = "Active $HOST foldering strategy on central (keep | dns | ip)."
   value       = var.hostname_source

@@ -293,9 +293,17 @@ up-connected:
       'sudo cp /tmp/prometheus.yml /opt/stack/prometheus/prometheus.yml && sudo docker compose -f /opt/stack/compose.yaml restart prometheus'
     echo "up-connected: $(echo "$targets" | jq 'length') cross-cluster scrape targets wired; fleet resolving via $dns_ip."
 
+    # 5b. Fleet-edge Traefik (see specs/dynamic-traefik.md): hot-push every cluster's
+    #     reverse_proxy_routes into centralized_pki's Traefik (directory file provider, no
+    #     restart). Best-effort — pki not being up yet is not fatal to the rest of up-connected.
+    echo "=== up-connected: syncing fleet-edge Traefik routes (traefik-sync) ==="
+    just traefik-sync || echo "    (traefik-sync skipped/failed — is centralized_pki up?)"
+
     # 6. DEAD LAST — register every up cluster's service hostnames as AdGuard rewrites, so
     #    grafana.<domain>/netbox.<domain>/auth.<domain>/... resolve fleet-wide. Only meaningful
-    #    once the whole fleet is up (each cluster's dns_records needs its VM IPs).
+    #    once the whole fleet is up (each cluster's dns_records needs its VM IPs). Hosts the fleet
+    #    Traefik fronts are overridden to pki's edge IP (set-dns-all folds in traefik_cli.py
+    #    dns-rewrites) so e.g. https://netbox.<domain> reaches Traefik, not netbox's raw IP.
     echo "=== up-connected: registering fleet DNS records (set-dns-all) ==="
     just set-dns-all || { echo "FAILED: set-dns-all"; rc=1; }
 
@@ -339,8 +347,10 @@ set-dns CLUSTER:
       --cluster centralized_dns rewrite-sync --file -
 
 # register EVERY up cluster's `dns_records` into AdGuard in one idempotent sync. Clusters that
-# aren't up contribute nothing (their `tofu output` errors -> {}). Run after the fleet is up
-# (up-connected does this automatically as its last step).  just set-dns-all
+# aren't up contribute nothing (their `tofu output` errors -> {}). A host claimed by the fleet-edge
+# Traefik (its cluster's `reverse_proxy_routes`) is OVERRIDDEN to resolve to pki's edge IP instead
+# of its own — see specs/dynamic-traefik.md. Run after the fleet is up (up-connected does this
+# automatically as its last step).  just set-dns-all
 set-dns-all:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -352,6 +362,10 @@ set-dns-all:
       docs+=("$records")
     done
     merged="$(printf '%s\n' "${docs[@]}" | jq -s 'reduce .[] as $x ({}; . * $x)')"
+    # Fleet-edge override: hosts the pki Traefik fronts win over their cluster's own direct IP.
+    # {} (not an error) when centralized_pki isn't up yet — merge is then a no-op.
+    fleet="$(uv run {{cluster_root}}/centralized_pki/scripts/traefik_cli.py --json dns-rewrites 2>/dev/null || echo '{}')"
+    merged="$(echo "$merged" | jq --argjson fleet "$fleet" '. * $fleet')"
     echo "$merged" | jq .
     if [ "$merged" = "{}" ] || [ -z "$merged" ]; then
       echo "no dns_records found across clusters — nothing to register (is the fleet up?)"
@@ -378,6 +392,9 @@ verify-dns:
       docs+=("$records")
     done
     merged="$(printf '%s\n' "${docs[@]}" | jq -s 'reduce .[] as $x ({}; . * $x)')"
+    # Same fleet-edge override as set-dns-all, so expectations match what was actually registered.
+    fleet="$(uv run {{cluster_root}}/centralized_pki/scripts/traefik_cli.py --json dns-rewrites 2>/dev/null || echo '{}')"
+    merged="$(echo "$merged" | jq --argjson fleet "$fleet" '. * $fleet')"
     rc=0
     while IFS=$'\t' read -r host ip; do
       [ -n "$host" ] || continue
@@ -535,6 +552,9 @@ refresh-cross-cluster:
       tofu -chdir="$dir" apply -auto-approve || { echo "FAILED apply: $c"; rc=1; continue; }
       just _hot-push-cross-cluster "$c" || rc=1
     done
+
+    echo "=== refresh-cross-cluster: re-syncing fleet-edge Traefik routes ==="
+    just traefik-sync || echo "    (traefik-sync skipped/failed — is centralized_pki up?)"
 
     echo "=== refresh-cross-cluster: re-registering fleet DNS records ==="
     just set-dns-all || { echo "FAILED: set-dns-all"; rc=1; }
@@ -773,6 +793,31 @@ vaultwarden-check CLUSTER:
 # assert a Traefik-served host's cert (chains to step-ca root, or is LE staging):  just tls-check centralized_pki <services-ip> --sni warden.<domain>
 tls-check CLUSTER HOST *ARGS:
     uv run {{cluster_root}}/{{CLUSTER}}/scripts/tls_cli.py --cluster {{CLUSTER}} check {{HOST}} {{ARGS}}
+
+# --- Fleet-edge Traefik (see specs/dynamic-traefik.md) -------------------------
+# centralized_pki's Traefik is the fleet-wide reverse-proxy edge. Every cluster with a
+# `reverse_proxy_routes` output is discovered, aggregated, and hot-pushed into Traefik's watched
+# dynamic dir (no VM recreate, no container restart — the file provider reloads on change).
+
+# print the resolved fleet routes (no push):  just traefik-targets
+traefik-targets:
+    uv run {{cluster_root}}/centralized_pki/scripts/traefik_cli.py targets
+
+# render fleet.yaml locally, no push (eyeball before syncing):  just traefik-render
+traefik-render:
+    uv run {{cluster_root}}/centralized_pki/scripts/traefik_cli.py render
+
+# render + scp + install fleet.yaml onto the running pki services VM, no restart:  just traefik-sync
+traefik-sync:
+    uv run {{cluster_root}}/centralized_pki/scripts/traefik_cli.py sync
+
+# probe every fleet route's backend through the edge, exit nonzero on failure:  just traefik-check
+traefik-check:
+    uv run {{cluster_root}}/centralized_pki/scripts/traefik_cli.py check
+
+# print an /etc/hosts block for every fleet route (laptops not using AdGuard as resolver):  just traefik-hosts
+traefik-hosts:
+    uv run {{cluster_root}}/centralized_pki/scripts/traefik_cli.py hosts
 
 # --- Internal-CA trust distribution (see specs/internal-ca.md) ----------------
 # Fleet-wide trust of the internal root CA is normally baked in at first boot by `just up-connected`

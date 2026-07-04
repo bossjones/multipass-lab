@@ -1,0 +1,6 @@
+# Placeholder fleet routing table so Traefik's directory file provider has a valid second
+# document from first boot, before the first `just traefik-sync` populates real routes.
+# traefik_cli.py overwrites this file in place; content-only, never templated (no .tftpl).
+http:
+  routers: {}
+  services: {}

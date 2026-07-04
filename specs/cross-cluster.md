@@ -216,3 +216,11 @@ blocks into their VM cloud-init.
   provisioner is the precedent.
 - **NetBox as source of truth** — have every VM self-register into `centralized_netbox` (its "Future
   work" note) and drive `http_sd` from the NetBox API, eliminating the `.auto.tfvars.json` handoff.
+
+## See also
+
+`specs/dynamic-traefik.md` applies this same discover-render-hot-push shape to reverse-proxy
+routing: `traefik_cli.py` aggregates a `reverse_proxy_routes` output (mirroring this doc's
+`metrics_targets`/`hosts` outputs) across clusters and hot-pushes a Traefik `fleet.yaml` onto
+`centralized_pki`'s services VM — same `scp` + `ssh cp`, no restart, no recreate idiom as the
+`prometheus.yml` push in `up-connected` §5.

@@ -754,3 +754,22 @@ run "ntp_server_on_renders_dropin" {
     error_message = "the drop-in must point at the injected NTP IP"
   }
 }
+
+# --- reverse_proxy_routes contract (fleet-edge Traefik; see specs/dynamic-traefik.md) ----------
+
+run "reverse_proxy_routes_contract" {
+  command = plan
+
+  assert {
+    condition     = length(output.reverse_proxy_routes) == 1
+    error_message = "netbox must publish exactly one fleet-edge route"
+  }
+  assert {
+    condition     = output.reverse_proxy_routes[0].host == "netbox" && output.reverse_proxy_routes[0].port == var.netbox_port
+    error_message = "the netbox route must use host=netbox and the configured netbox_port"
+  }
+  assert {
+    condition     = output.reverse_proxy_routes[0].k0s == false
+    error_message = "netbox is not a k0s backend"
+  }
+}

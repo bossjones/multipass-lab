@@ -224,3 +224,18 @@ run "web_urls_core_and_flag_aware" {
     error_message = "enabled_flags must reflect the default exporter set"
   }
 }
+
+# --- reverse_proxy_routes contract (fleet-edge Traefik; see specs/dynamic-traefik.md) ----------
+
+run "reverse_proxy_routes_contract" {
+  command = plan
+
+  assert {
+    condition     = length(output.reverse_proxy_routes) == 1
+    error_message = "dns must publish exactly one fleet-edge route (AdGuard UI)"
+  }
+  assert {
+    condition     = output.reverse_proxy_routes[0].host == "adguard" && output.reverse_proxy_routes[0].port == var.adguard_web_port
+    error_message = "the adguard route must use host=adguard and the configured adguard_web_port"
+  }
+}

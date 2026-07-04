@@ -88,6 +88,20 @@ see the DNS auto-registration note below). Verify with `just tls-check-monitorin
 the root). Other clusters are still Phase 2 TODO. Combined design: `specs/pki-and-dns.md`; runbook:
 `docs/internal-ca-tutorial.md`.
 
+**Fleet-edge Traefik (opt-in via sync, not a flag).** `centralized_pki`'s existing Traefik doubles
+as the **fleet-wide reverse-proxy edge** for clusters that don't have their own hostname+TLS story
+(`centralized_netbox`, `centralized_dns`'s AdGuard UI, `centralized_logging`'s Coroot when
+`enable_coroot`; `centralized_monitoring` already solved this for itself via Phase 2 above, so it's
+excluded). Each participating cluster declares a `reverse_proxy_routes` output; `scripts/
+traefik_cli.py` (in `centralized_pki`) aggregates them and hot-pushes a `fleet.yaml` into Traefik's
+watched dynamic directory (`just traefik-sync` — scp + `cp`, no restart; Traefik's file-provider
+`watch` reloads it). `just up-connected`/`refresh-cross-cluster` run this automatically, and
+`just set-dns-all`/`verify-dns` fold in `traefik_cli.py dns-rewrites` so a fronted hostname
+(e.g. `netbox.<domain>`) resolves to pki's edge IP instead of the service's own IP — same
+REST-API-driven `adguard_cli rewrite-sync` mechanism, layered on top (exact override, not a
+wildcard). `just traefik-check`/`traefik-targets`/`traefik-hosts` round out the CLI. Design:
+`specs/dynamic-traefik.md`.
+
 **Coroot (opt-in eBPF observability on k0s).** `enable_coroot` deploys the self-hosted
 [Coroot](https://github.com/coroot/coroot) stack (server + eBPF node-agent + cluster-agent +
 bundled Prometheus + ClickHouse) onto the `centralized_logging` k0s node via Helm, declaratively

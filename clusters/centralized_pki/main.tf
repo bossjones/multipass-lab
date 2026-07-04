@@ -69,6 +69,9 @@ locals {
     domain = var.domain
   }))
 
+  # Static (no templating) placeholder for the fleet-wide routing table — see specs/dynamic-traefik.md.
+  traefik_fleet_seed = file("${path.module}/cloud-init/traefik/fleet.yaml.seed")
+
   authelia_conf = templatefile("${path.module}/cloud-init/authelia/configuration.yaml.tftpl", {
     domain                  = var.domain
     authelia_session_secret = var.authelia_session_secret
@@ -187,6 +190,7 @@ resource "local_file" "services_ci" {
     compose_conf       = local.compose_conf
     traefik_static     = local.traefik_static
     traefik_dynamic    = local.traefik_dynamic
+    traefik_fleet_seed = local.traefik_fleet_seed
     authelia_conf      = local.authelia_conf
     authelia_users     = local.authelia_users
 
