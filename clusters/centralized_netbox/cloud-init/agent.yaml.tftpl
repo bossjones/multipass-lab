@@ -65,6 +65,44 @@ write_files:
     content: |
       ${indent(6, docker_tools_installer)}
 %{ endif ~}
+%{ if enable_node_exporter ~}
+
+  # Generic exporter installer: download a GitHub release (tar.gz or raw binary), drop the
+  # binary in /usr/local/bin, install + enable a systemd unit. {ARCH} in the URL is replaced
+  # with the host's Debian arch (arm64/amd64). Mirrors the client/server VMs' install pattern.
+  - path: /usr/local/sbin/install-exporter.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      name="$1"; url="$2"; bin="$3"; shift 3; args="$*"
+      arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+      case "$arch" in aarch64) arch=arm64 ;; x86_64) arch=amd64 ;; esac
+      url="$${url//\{ARCH\}/$arch}"
+      tmp="$(mktemp -d)"
+      curl -sSLf "$url" -o "$tmp/dl"
+      if tar -tzf "$tmp/dl" >/dev/null 2>&1; then
+        tar -xzf "$tmp/dl" -C "$tmp"
+        found="$(find "$tmp" -type f -name "$bin" | head -n1)"
+      else
+        found="$tmp/dl"
+      fi
+      install -m0755 "$found" "/usr/local/bin/$name"
+      cat >/etc/systemd/system/$name.service <<UNIT
+      [Unit]
+      Description=$name
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      ExecStart=/usr/local/bin/$name $args
+      Restart=always
+      RestartSec=5
+      [Install]
+      WantedBy=multi-user.target
+      UNIT
+      systemctl daemon-reload
+      systemctl enable --now "$name"
+%{ endif ~}
 
   # Long-running orb-agent runner. Waits for the Diode ingress to accept connections, then runs the
   # agent (which executes its policy on load + on schedule). Writes a readiness marker once the
@@ -126,6 +164,11 @@ runcmd:
   - update-ca-certificates
 %{ endif ~}
   - systemctl enable --now docker
+%{ if enable_node_exporter ~}
+  # node_exporter — OS host + systemd-unit metrics (:9100). Parity with the client/server VMs so
+  # the fleet-wide :9100 scrape target for this VM has something to hit (no chronic TargetDown).
+  - /usr/local/sbin/install-exporter.sh node_exporter https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-{ARCH}.tar.gz node_exporter --collector.systemd
+%{ endif ~}
 %{ if enable_docker_tools ~}
   # Interactive docker operator TUIs (wharf/oxker/dive); best-effort so a download blip can't
   # break boot. Idempotent — re-run with `sudo /usr/local/sbin/install-docker-tools.sh`.

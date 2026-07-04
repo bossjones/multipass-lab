@@ -339,7 +339,7 @@ variable "client" {
 
 # --- Prometheus exporters (both VMs; verified locally, scraped cross-cluster later) -----------
 variable "enable_node_exporter" {
-  description = "node_exporter (:9100) on both VMs — host metrics; parity with the other clusters."
+  description = "node_exporter (:9100) on the server/client/agent VMs — host metrics; parity with the other clusters."
   type        = bool
   default     = true
 }

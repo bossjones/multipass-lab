@@ -287,6 +287,10 @@ resource "local_file" "agent_ci" {
     # Docker operator TUIs (wharf/oxker/dive) — the agent runs orb-agent via docker.
     enable_docker_tools    = var.enable_docker_tools
     docker_tools_installer = local.docker_tools_installer
+    # node_exporter (:9100) — parity with the client/server VMs. The cross-cluster scrape logic
+    # adds every VM (incl. this agent) as a :9100 target, so without it the agent chronically
+    # reports TargetDown. Threaded in explicitly (this templatefile does not merge local.flags).
+    enable_node_exporter = var.enable_node_exporter
     # Netdata agent (:19999) — installed by the shared snippet (this VM's templatefile does not
     # merge local.flags, so enable_netdata is threaded in explicitly alongside the installer).
     enable_netdata    = var.enable_netdata
