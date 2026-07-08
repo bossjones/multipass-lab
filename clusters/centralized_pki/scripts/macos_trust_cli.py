@@ -27,6 +27,7 @@ Because it mutates the host trust store, `install`/`remove` PRINT what they will
 
 from __future__ import annotations
 
+import shlex
 import ssl
 import subprocess
 import tempfile
@@ -204,7 +205,7 @@ def _install_or_remove(o: Options, action: str) -> None:
     )
     for cmd in cmds:
         # soft_wrap so long temp/keychain paths are printed on one line (copy-pasteable).
-        console.print(f"  [dim]$[/dim] {' '.join(cmd)}", soft_wrap=True)
+        console.print(f"  [dim]$[/dim] {shlex.join(cmd)}", soft_wrap=True)
     ff = _firefox_profiles(o.firefox_dir)
     if not ff:
         console.print(
