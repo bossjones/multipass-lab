@@ -1,11 +1,19 @@
 # Spec: centralized_k0s Cluster
 
-> **Status: DRAFT — hardened after an adversarial review round.** Synthesized from a 5-agent research
-> fleet (`specs/centralized_k0s/*.md`), refined through user review (Vector, k0sctl, `--enable-worker`,
+> **Status: IMPLEMENTED and verified.** Synthesized from a 5-agent research fleet
+> (`specs/centralized_k0s/*.md`), refined through user review (Vector, k0sctl, `--enable-worker`,
 > smaller default, native HAProxy exporter), then **hardened against three hostile reviewers** whose
-> confirmed findings are folded in below (see § "Adversarial fixes applied"). **Nothing is implemented
-> yet.** Where this umbrella disagrees with a backing shard, **the umbrella wins** (shards predate the
-> review — their stale datastore/version claims are superseded here).
+> confirmed findings are folded in below (see § "Adversarial fixes applied"). The build is now green
+> from source: `just check` **9/9**, `just verify` **26 passed / 25 skipped / 0 failed** (skips are
+> the expected HA-only roles/tests), no live patches. Implementation lives in
+> [`clusters/centralized_k0s/`](../clusters/centralized_k0s/) (flags:
+> [`docs/feature-flags.md`](../clusters/centralized_k0s/docs/feature-flags.md)); the backing build
+> plans are [`build-plans/core.md`](centralized_k0s/build-plans/core.md),
+> [`build-plans/k0sctl.md`](centralized_k0s/build-plans/k0sctl.md),
+> [`build-plans/node.md`](centralized_k0s/build-plans/node.md), and
+> [`build-plans/vector-tests.md`](centralized_k0s/build-plans/vector-tests.md). Where this umbrella
+> disagrees with a backing shard, **the umbrella wins** (shards predate the review — their stale
+> datastore/version claims are superseded here).
 
 ## Context
 
