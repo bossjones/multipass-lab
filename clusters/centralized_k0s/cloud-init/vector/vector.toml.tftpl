@@ -1,0 +1,141 @@
+# Vector agent config for centralized_k0s nodes (one Vector per node) — rendered by
+# main.tf's local.vector_config_{controller,worker} via templatefile(), then embedded into each
+# node's cloud-init by the controller/worker templates. See specs/centralized_k0s.md
+# § "Log shipping to centralized_logging — Vector".
+#
+# This is an OpenTofu template (.tftpl): tofu resolves its interpolations + directives at render
+# time. IMPORTANT — Vector interpolates a dollar-brace token across the ENTIRE file (comments
+# included) and crash-loops on an unknown env var, so NO such token appears anywhere below, not
+# even in prose. Vector's own runtime syntax (.field, VRL) is left untouched.
+#
+# Two log paths, NO Kubernetes API dependency (the K8s-API-backed pod-log source was rejected — it
+# needs API access Vector wouldn't have at boot; this is a locked decision):
+#   1. Host + k0s-component logs: journald  -> socket sink, syslog codec (RFC5424/TCP) -> logging:514
+#   2. Pod logs:                 file(/var/log/pods) + VRL path-parse (ns/pod/container) ->
+#                                  (a) OpenObserve http sink (_json, drop_newest)
+#                                  (b) a flat syslog archival copy to centralized_logging
+#
+# The shipping sinks are GATED on their target vars being non-empty. When NEITHER is wired (a plain
+# `just up`), a local `blackhole` sink consumes both transforms so the config ALWAYS validates and
+# vector.service stays active — Vector collects locally and ships nowhere (turnkey + isolated).
+
+data_dir = "/var/lib/vector"
+
+# --- Sources ----------------------------------------------------------------
+
+# Host + k0s-component logs (systemd units: k0scontroller/k0sworker, containerd, kubelet, etc.).
+[sources.journald]
+type = "journald"
+current_boot_only = false
+
+# Pod logs from the on-disk kubelet layout — present on ALL nodes now that controllers run
+# kubelet via --enable-worker. No K8s API, no kubeconfig, no boot-order fragility.
+[sources.pod_logs]
+type = "file"
+include = ["/var/log/pods/*/*/*.log"]
+# Keep multiline stack traces intact for OpenObserve: fold continuation lines (leading space or a
+# non-timestamp start) into the preceding event. The flat syslog archival copy may still split.
+read_from = "beginning"
+
+[sources.pod_logs.multiline]
+start_pattern = '^\d{4}-\d{2}-\d{2}|^\{|^[0-9]{4}/[0-9]{2}/[0-9]{2}'
+mode = "halt_before"
+condition_pattern = '^\d{4}-\d{2}-\d{2}|^\{|^[0-9]{4}/[0-9]{2}/[0-9]{2}'
+timeout_ms = 1000
+
+# --- Transforms -------------------------------------------------------------
+
+# Host logs: explicitly populate HOSTNAME + APP-NAME so centralized_logging's syslog-ng
+# keep-hostname(yes) folders each node's stream correctly. APP-NAME is role-tagged.
+[transforms.host_syslog_fields]
+type = "remap"
+inputs = ["journald"]
+source = '''
+.hostname = get_hostname!()
+# APP-NAME: the emitting systemd unit if known, otherwise the node role. Never empty.
+.appname = string(.SYSTEMD_UNIT) ?? string(._SYSTEMD_UNIT) ?? "k0s-${role}"
+.role = "${role}"
+'''
+
+# Pod logs: parse the kubelet on-disk path /var/log/pods/<ns>_<pod>_<uid>/<container>/<n>.log to
+# extract namespace / pod / container WITHOUT any Kubernetes API call. Loses only pod labels/
+# annotations (ns/pod/container kept) — acceptable for the lab.
+[transforms.pod_meta]
+type = "remap"
+inputs = ["pod_logs"]
+source = '''
+.role = "${role}"
+.hostname = get_hostname!()
+parsed, err = parse_regex(.file, r'/var/log/pods/(?P<namespace>[^_/]+)_(?P<pod>.+)_(?P<pod_uid>[^_/]+)/(?P<container>[^/]+)/')
+if err == null {
+    .namespace = parsed.namespace
+    .pod = parsed.pod
+    .container = parsed.container
+    .pod_uid = parsed.pod_uid
+    # APP-NAME for the archival syslog copy: <namespace>/<container>. String concatenation over
+    # capture groups is fallible in VRL, so capture the error (error-capturing form) — never a bare
+    # fallible assignment (error[E103]).
+    .appname, err = parsed.namespace + "/" + parsed.container
+} else {
+    .appname = "k0s-${role}-pod"
+}
+'''
+
+# --- Sinks ------------------------------------------------------------------
+%{ if log_shipping_target != "" ~}
+# (1) Host + k0s-component logs -> centralized_logging syslog-ng (RFC5424 over TCP/514). Vector has
+# no dedicated "syslog sink": it is the socket sink + the syslog encoding codec.
+[sinks.syslog_out]
+type = "socket"
+inputs = ["host_syslog_fields"]
+address = "${log_shipping_target}"
+mode = "tcp"
+
+[sinks.syslog_out.encoding]
+codec = "syslog"
+
+# (2b) Flat syslog archival copy of pod logs -> centralized_logging. Archival only — multiline
+# stack traces may split at "\n" on this path (the structured OpenObserve copy stays intact).
+[sinks.pod_syslog_archive]
+type = "socket"
+inputs = ["pod_meta"]
+address = "${log_shipping_target}"
+mode = "tcp"
+
+[sinks.pod_syslog_archive.encoding]
+codec = "syslog"
+%{ endif ~}
+%{ if openobserve_endpoint != "" ~}
+# (2a) Structured pod logs -> centralized_monitoring's OpenObserve _json ingest. buffer.when_full =
+# drop_newest so a DOWN hub can NOT back-pressure and stall the local/archival path.
+[sinks.openobserve]
+type = "http"
+inputs = ["pod_meta"]
+uri = "http://${openobserve_endpoint}/api/${openobserve_org}/${openobserve_stream}/_json"
+method = "post"
+compression = "gzip"
+
+[sinks.openobserve.auth]
+strategy = "basic"
+user = "admin@example.com"
+password = "${openobserve_password}"
+
+[sinks.openobserve.encoding]
+codec = "json"
+
+[sinks.openobserve.buffer]
+when_full = "drop_newest"
+
+[sinks.openobserve.request.headers]
+Content-Type = "application/json"
+%{ endif ~}
+%{ if log_shipping_target == "" && openobserve_endpoint == "" ~}
+# NO shipping target wired (plain `just up`): consume BOTH transforms into a local blackhole so the
+# config ALWAYS validates (no dangling transforms, at least one sink) and vector.service stays
+# active. Vector collects locally and ships nowhere. The real socket/http sinks above take over on
+# the wired path (`just up-connected`).
+[sinks.local_blackhole]
+type = "blackhole"
+inputs = ["host_syslog_fields", "pod_meta"]
+print_interval_secs = 0
+%{ endif ~}

@@ -1,0 +1,98 @@
+# Managed by OpenTofu (rendered from cloud-init/k0sctl.yaml.tftpl into .rendered/k0sctl.yaml —
+# do NOT hand-edit .rendered/). ONE shared k0sctl cluster config for BOTH topologies (the default
+# 1 controller + 2 workers, and the 3 controllers + 3 workers HA opt-in). k0sctl SSHes to each host
+# and forms the cluster POST-APPLY (terraform_data.k0s_bootstrap): it distributes PKI automatically
+# and enforces controller->controller->worker join ordering itself, so cloud-init does OS prep only.
+#
+# Hardening (see specs/centralized_k0s.md § "Cluster bootstrap & join — k0sctl"):
+#   * storage.type: etcd UNCONDITIONALLY (single-member when 1 controller) — never kine/sqlite, so
+#     the 1<->3 render and the hermetic assertion stay coherent.
+#   * per-host privateAddress pinned to the tofu-discovered ipv4 — do NOT rely on k0sctl
+#     fact-gathering: it can pick a CNI bridge 10.244.x interface -> apiserver-SAN / etcd-peer IP
+#     mismatch -> silent TLS/quorum failure.
+#   * controllers carry --enable-worker in installFlags (control-plane taint KEPT — no --no-taints)
+#     so kubelet/cAdvisor + pod logs land while user pods stay off the control plane.
+#   * spec.api.externalAddress is a RESOLVABLE IP (k0s_api_ipv4 = HAProxy IP in HA / controller-1 in
+#     single mode) — NOT the hostname (backlog #6, live-verified). k0s bakes externalAddress into the
+#     konnectivity-agent's --proxy-server-host; those are PODS that resolve via CoreDNS, which has no
+#     record for k0s-api.<domain> (the /etc/hosts fix from issue #2 is node-only, pods don't use it),
+#     so a hostname there leaves the konnectivity tunnel DOWN -> apiserver can't reach kubelet ->
+#     metrics.k8s.io 503. k0s v1.34.9+k0s.0 has NO spec.network.coreDNS.patches (that field is
+#     newer-than-pinned), and the nodes forward to the router (not the AdGuard hub), so neither an
+#     in-cluster CoreDNS record nor a forward-to-hub fix is available/turnkey -> use a resolvable IP.
+#     The hostname stays in `sans` so node-level access (via /etc/hosts) + the API cert still cover it.
+#   * kubelet resolvConf pinned to the REAL upstream via a workerProfile applied to every host
+#     (--profile in installFlags) (backlog #7, preventive). The node /etc/resolv.conf is the
+#     systemd-resolved STUB (127.0.0.53); k0s docs (troubleshooting#coredns-in-crash-loop) warn that
+#     feeding the stub to pods causes CoreDNS "plugin/loop: Loop detected" crashloops. k0s already
+#     auto-detects the real upstream here, so this makes it EXPLICIT + guaranteed fleet-wide on rebuild.
+#   * NO KSM / manifest embedded here: an API-dependent step would run before the cluster exists.
+#     kube-state-metrics is applied post-apply via the k0s manifest deployer (core's terraform_data).
+apiVersion: k0sctl.k0sproject.io/v1beta1
+kind: Cluster
+metadata:
+  name: centralized-k0s
+spec:
+  hosts:
+%{ for idx, ip in controller_ips ~}
+    # controller-${idx + 1} — control plane + etcd member + worker (--enable-worker, taint kept).
+    # --profile pins kubelet resolvConf to the real upstream (backlog #7).
+    - role: controller
+      privateAddress: ${ip}
+      installFlags:
+        - --enable-worker
+        - --profile=resolv-upstream
+      ssh:
+        address: ${ip}
+        user: ubuntu
+        keyPath: ${ssh_key}
+%{ endfor ~}
+%{ for idx, ip in worker_ips ~}
+    # worker-${idx + 1} — --profile pins kubelet resolvConf to the real upstream (backlog #7).
+    - role: worker
+      privateAddress: ${ip}
+      installFlags:
+        - --profile=resolv-upstream
+      ssh:
+        address: ${ip}
+        user: ubuntu
+        keyPath: ${ssh_key}
+%{ endfor ~}
+  k0s:
+    version: ${k0s_version}
+    # ONE embedded ClusterConfig — k0sctl derives each node's api.address / etcd peerAddress from its
+    # privateAddress, so there is NO per-controller k0s.yaml artifact. Node-role differences live in
+    # per-host installFlags above, never in config fields.
+    config:
+      apiVersion: k0s.k0sproject.io/v1beta1
+      kind: ClusterConfig
+      metadata:
+        name: k0s
+      spec:
+        api:
+          # RESOLVABLE IP endpoint (backlog #6) — HAProxy IP in HA / controller-1 in single mode.
+          # A hostname here breaks the in-cluster konnectivity agents (see header). Kept resolvable
+          # everywhere with no CoreDNS dependency.
+          externalAddress: ${k0s_api_ipv4}
+          # SANs cover every controller IP, the endpoint IP (so TLS to externalAddress verifies), and
+          # the stable hostname (node-level access via /etc/hosts + future DNS still validate).
+          sans:
+%{ for ip in controller_ips ~}
+            - ${ip}
+%{ endfor ~}
+            - ${k0s_api_ipv4}
+            - ${k0s_api_host}
+        storage:
+          # etcd in BOTH modes (single-member when 1 controller) — never kine/sqlite.
+          type: etcd
+        network:
+          # v1 default CNI; enable_cilium is iteration 2. k0s default CIDRs (no Multipass collision).
+          provider: kuberouter
+          podCIDR: 10.244.0.0/16
+          serviceCIDR: 10.96.0.0/12
+        # backlog #7 — pin kubelet resolvConf to the REAL upstream (not the 127.0.0.53 stub) so pod
+        # DNS never loops CoreDNS. Applied to every host via --profile in installFlags above.
+        workerProfiles:
+        - name: resolv-upstream
+          values:
+            resolvConf: /run/systemd/resolve/resolv.conf

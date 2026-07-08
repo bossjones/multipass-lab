@@ -59,6 +59,7 @@ plan CLUSTER: (init CLUSTER)
 # PATH-prepended wrapper raises multipass launch's 5min default init timeout (see its header
 # comment) — a loaded fleet host can blow that mid-cloud-init, orphaning the VM tofu never records.
 up CLUSTER: (init CLUSTER)
+    @if [ "{{CLUSTER}}" = "centralized_k0s" ]; then command -v k0sctl >/dev/null || { echo "install k0sctl: brew install k0sproject/tap/k0sctl"; exit 1; }; fi
     PATH="{{justfile_directory()}}/{{cluster_root}}/_shared/scripts/multipass-timeout-wrapper:$PATH" \
       tofu -chdir={{cluster_root}}/{{CLUSTER}} apply -auto-approve
     @tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts \
@@ -1054,3 +1055,13 @@ netdata-status CLUSTER:
        state=$(ssh {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" 'systemctl is-active netdata 2>/dev/null' || echo unreachable); \
        printf '%-10s %-16s netdata=%s\n' "$role" "$ip" "$state"; \
      done
+
+# Logs for the k0s controller and worker nodes
+logs-k0s:
+  @ip=$(tofu -chdir=clusters/centralized_k0s output -json hosts | jq -r '."controller-1".ipv4'); \
+   ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519 ubuntu@"$ip" sudo journalctl -f
+
+# Logs for the k0s worker node
+logs-k0s-worker:
+  @ip=$(tofu -chdir=clusters/centralized_k0s output -json hosts | jq -r '."worker-1".ipv4'); \
+   ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519 ubuntu@"$ip" sudo journalctl -f
