@@ -1,76 +1,72 @@
 # Spec: centralized_k0s Cluster
 
-> **Status: DRAFT — decisions locked after review round 1.** Synthesized from a 5-agent research
-> fleet (fan-out → fan-in); detailed backing research in `specs/centralized_k0s/{ha-loadbalancer,
-> cni-networking,provisioning-cloudinit,observability-logging,tooling-shell-repo}.md`. This revision
-> folds in the user's review (Vector, k0sctl, `--enable-worker` controllers, smaller default,
-> blackbox, native HAProxy exporter, roxy-wi deferral). **Nothing is implemented yet** — next is an
-> adversarial round, then implementation.
+> **Status: DRAFT — hardened after an adversarial review round.** Synthesized from a 5-agent research
+> fleet (`specs/centralized_k0s/*.md`), refined through user review (Vector, k0sctl, `--enable-worker`,
+> smaller default, native HAProxy exporter), then **hardened against three hostile reviewers** whose
+> confirmed findings are folded in below (see § "Adversarial fixes applied"). **Nothing is implemented
+> yet.** Where this umbrella disagrees with a backing shard, **the umbrella wins** (shards predate the
+> review — their stale datastore/version claims are superseded here).
 
 ## Context
 
-Today the `centralized_monitoring` cluster carries a **single-node** k0s VM
-(`k0s install controller --single`, kine/SQLite, kube-router, unpinned `get.k0s.sh`) that doubles
-as a monitored Kubernetes node; `centralized_logging` runs the same shape for Coroot. This new
-cluster **extracts k0s into its own `clusters/centralized_k0s/`** and levels it up to a
-**production-shaped HA topology** — first on **Multipass** (arm64-Mac stand-in), then promoted to
-**Proxmox**. The prior `ai_docs/claude-multipass-infra-upgrade-brief.md` is Proxmox-oriented; this
-spec refines it for Multipass. **k0s stays in `centralized_monitoring` untouched until this cluster
-is validated** (`just verify centralized_k0s` green).
+The `centralized_monitoring` cluster carries a **single-node** k0s VM (`k0s install controller
+--single`, kine/SQLite, kube-router, unpinned `get.k0s.sh`) that doubles as a monitored node;
+`centralized_logging` runs the same shape for Coroot. This cluster **extracts k0s into its own
+`clusters/centralized_k0s/`** and levels it up to a multi-node etcd cluster — first on **Multipass**
+(arm64-Mac stand-in), then **Proxmox**. The prior `ai_docs/claude-multipass-infra-upgrade-brief.md`
+is Proxmox-oriented; this refines it for Multipass. **k0s stays in `centralized_monitoring` untouched
+until `just verify centralized_k0s` is green.**
 
 ## Objective
 
-A `just`-orchestrated k0s cluster mirroring every repo convention (folder-name auto-discovery,
-runtime-IP-injected cloud-init, two-layer tests, `_shared` opt-ins), providing:
+A `just`-orchestrated k0s cluster mirroring every repo convention, providing:
 
 - **Tunable topology** — default **1 controller + 2 workers** (fits `up-connected`); **3 controllers
-  + 3 workers + HAProxy** HA as an explicit opt-in; **etcd** datastore, **no SELinux**.
-- **HA control plane** fronted by **external HAProxy** (evaluated against k0s CPLB/Keepalived + NLLB),
-  **conditional** on >1 controller, exposing its **native Prometheus exporter** on `:8405`.
+  + 3 workers + HAProxy** as an HA opt-in; **etcd unconditionally** (single-member in default mode),
+  **no SELinux**.
+- **etcd-quorum HA behind an HAProxy edge** (opt-in) — *not* full HA (the single HAProxy is a
+  deliberate lab SPOF; full CPLB+NLLB HA is the Proxmox target). HAProxy is **conditional** on >1
+  controller and exposes its **native Prometheus exporter** on `:8405`.
 - **k9s, stern, helm, kubectl, etcdctl** on every node; **admin kubeconfig distributed to all nodes**.
-- **kubelet + cAdvisor on controllers too** (via `--enable-worker`, control-plane taint kept) plus
-  the full exporter + **Netdata** set, role-aware; **blackbox exporter** on the monitoring hub.
-- **All logs → `centralized_logging`** via **Vector** (host/k0s-component as syslog; pod logs
-  structured to the monitoring hub's OpenObserve + a syslog archival copy to logging).
-- **oh-my-zsh** on all nodes with zsh completions for `etcd, kubectl, helm, stern, k9s, k0s`.
-- **Cilium** as an opt-in CNI (`enable_cilium`, iteration 2 — not the v1 default).
-- **Cluster formation by k0sctl** now; **Ansible** (your `ansible-dev` plugin) migrates the
-  node-config layer later.
+- **kubelet + cAdvisor on controllers** (via `--enable-worker`, control-plane taint kept) + the full
+  exporter set + **Netdata**, role-aware.
+- **All logs → `centralized_logging`** via **Vector** — host/k0s-component as syslog; pod logs parsed
+  from the `/var/log/pods` path (namespace/pod/container, **no K8s API dependency**) → structured to
+  the monitoring hub's OpenObserve + a flat syslog archival copy to logging.
+- **oh-my-zsh** + zsh completions (`etcd, kubectl, helm, stern, k9s, k0s`) on all nodes.
+- **Cilium** as an opt-in CNI (`enable_cilium`, iteration 2).
+- **Cluster formation by k0sctl** now; **Ansible** (`ansible-dev` plugin) migrates node config later.
 
 ## Architecture
 
 ### Topology & resource sizing
 
-**Node counts are `count`-driven vars.** The control-plane count decides HA *and* whether HAProxy
-is provisioned (a VIP/LB is meaningless with one controller).
+Node counts are `count`-driven vars; the control-plane count decides HA *and* whether HAProxy exists.
+**Datastore is `etcd` in both modes** (single-member when 1 controller — keeps the 1↔3 render and the
+hermetic assertion coherent; the shards' "kine/SQLite" claim is superseded).
 
 | Mode | controllers | workers | HAProxy | VMs | ~vCPU / RAM | etcd |
 |---|---|---|---|---|---|---|
-| **Default** (`up-connected`-fit) | 1 | 2 | ❌ (direct to controller-1) | 3 | ~6 / 8–10 G | single-node |
+| **Default** (`up-connected`-fit) | 1 | 2 | ❌ (direct to controller-1) | 3 | ~6 / 8–10 G | single-member |
 | **HA opt-in** (`k0s_control_plane_count=3`) | 3 | 3 | ✅ | 7 | ~13 / 19 G | 3-member quorum |
 
-Per-VM sizing (tunable `object({cpus,memory,disk})` vars):
-
-| Role | Each | Notes |
-|---|---|---|
-| controller | **3 vCPU / 3 G / 20 G** | etcd + apiserver + scheduler + controller-manager + (now) kubelet/cAdvisor via `--enable-worker`. 3 G for etcd OOM headroom (cf. `specs/centralized-logging-k0s-perf.md`). |
-| worker | 2 vCPU / 4 G / 30 G | pods/kubelet/cAdvisor |
-| haproxy | 1 vCPU / 1 G / 10 G | only when controllers > 1; L4 passthrough + `:8405` exporter |
-
-The **HA opt-in (~13 vCPU / 19 G) is essentially the whole Mac** — bring it up **stand-alone**, not
-alongside the fleet. `up-connected` uses the 3-VM default so the cluster coexists with the rest.
+Per-VM sizing (tunable `object({cpus,memory,disk})` vars): controller **3 vCPU / 3 G / 20 G** (etcd
++ control plane + kubelet/cAdvisor via `--enable-worker`; 3 G for etcd OOM headroom, cf.
+`specs/centralized-logging-k0s-perf.md`), worker **2 vCPU / 4 G / 30 G**, haproxy **1 vCPU / 1 G /
+10 G** (only when controllers > 1). The **HA opt-in (~13 vCPU / 19 G) is essentially the whole Mac —
+bring it up stand-alone**; `up-connected` uses the 3-VM default.
 
 ### Provider & runtime-IP injection
 
-`controller[0]` is created first as the IP anchor (same edge as `centralized_logging`); its `ipv4`
-feeds `k0s.yaml` SANs and every node's join address, forcing create-before-render. Providers pin as
-elsewhere (`larstobi/multipass ~> 1.4`, `hashicorp/local ~> 2.4`, `required_version >= 1.7`).
-`count`-indexed, 1-named VMs: `centralized-k0s-controller-1..N`, `-worker-1..M`, `-haproxy`
-(folder→VM `_`→`-`).
+VMs are `count`-indexed and 1-named: `centralized-k0s-controller-1..N`, `-worker-1..M`, `-haproxy`.
+**Correction (adversarial):** `count` instances create in *parallel* — there is no "controller[0]
+anchor." The real create-before-render edge is that the rendered `k0sctl.yaml`/`local_file`s
+reference **`multipass_instance.controller[*].ipv4`** (all of them), forcing every VM created before
+render and before the post-apply bootstrap. Providers pin as elsewhere (`larstobi/multipass ~> 1.4`,
+`hashicorp/local ~> 2.4`, `required_version >= 1.7`).
 
-**`hosts` output** — dynamic `{role:{name,ipv4}}` built from the count-indexed resources (HAProxy
-conditional, like `centralized_netbox`'s count-gated `agent`):
-
+**`hosts` output** — dynamic `{role:{name,ipv4}}`; HAProxy conditional (count-gated, like
+`centralized_netbox`'s `agent[0]`):
 ```hcl
 output "hosts" {
   value = merge(
@@ -80,265 +76,266 @@ output "hosts" {
   )
 }
 ```
-Also export `k0s_api_endpoint` (HAProxy IP if present, else controller-1 IP), `k0s_version`,
-`dns_records`, `web_urls`.
+Also export `k0s_api_endpoint` and `dns_records` (see next). **Stable endpoint (backup/restore
+footgun fix):** register `k0s-api.<domain>` in `dns_records` → the HAProxy IP (or controller-1 in
+single mode), and set `spec.api.externalAddress` to that **hostname**, not the churning DHCP IP — so
+`k0s backup`/`restore` (which requires `externalAddress` unchanged) survives a rebuild.
 
 ### Control-plane HA + load balancer (HAProxy, conditional)
 
-When `k0s_control_plane_count > 1`, an **HAProxy VM** fronts the controllers; `spec.api.externalAddress`
-= the HAProxy IP (added to every controller's `spec.api.sans`). It passes three TCP ports (L4
-passthrough, no TLS termination): **6443** (apiserver), **8132** (konnectivity), **9443** (controller
-join). With a single controller, `externalAddress` = controller-1 IP and no HAProxy is created.
+When `k0s_control_plane_count > 1`, an HAProxy VM fronts the controllers; `spec.api.externalAddress`
+= `k0s-api.<domain>` (resolving to the HAProxy IP), added to every controller's `spec.api.sans`. It
+passes three TCP ports (L4 passthrough): **6443** (apiserver), **8132** (konnectivity), **9443**
+(controller join). Single-controller mode sets `externalAddress` = `k0s-api.<domain>` → controller-1,
+no HAProxy.
 
-**Native Prometheus metrics** — HAProxy's built-in exporter (no sidecar), scraped by the monitoring
-hub at `haproxy:8405/metrics`:
-
+**Native Prometheus metrics** (no sidecar), scraped by the monitoring hub at `haproxy:8405/metrics`:
 ```haproxy
 frontend prometheus
   bind :8405
   mode http
   http-request use-service prometheus-exporter if { path /metrics }
   no log
-# ... plus mode tcp frontends/backends on 6443/8132/9443 → the 3 controllers (option tcp-check) ...
+# + mode tcp frontends/backends on 6443/8132/9443 → the controllers (option tcp-check)
 ```
 
-**Why not k0s-native CPLB/NLLB on Multipass:** CPLB (Keepalived VRRP) needs a free in-subnet VIP the
-Multipass dnsmasq won't lease *and* VRRP multicast/GARP across the `vmnet` segment — both
-unverified-to-risky; NLLB is internal-only and mutually exclusive with `externalAddress`. HAProxy
-makes the endpoint a boring DHCP IP. **Asterisks:** HAProxy is a **SPOF** for API reachability (fine
-for a lab whose drill exercises *etcd* failover with 3 live backends) and forcing `externalAddress`
-disables NLLB, so the lab topology is **not** HA-equivalent to the Proxmox target — where CPLB+NLLB
-return (a config edit, not a rebuild). Details in `specs/centralized_k0s/ha-loadbalancer.md`.
-**roxy-wi** (an HAProxy management UI) is deferred — it's **x86_64-only** (won't run on arm64
-Multipass) and needs its own server+DB+agents; declarative cloud-init HAProxy + the native exporter
-cover the lab. See Future work.
+**HA honesty (adversarial reframe).** This is **etcd-quorum HA behind a SPOF edge**, not full HA:
+`externalAddress` + a single HAProxy **disables NLLB** and routes every worker→API through one VM on
+one Mac. The failover drill (kill a controller) validates **etcd quorum (2/3) + HAProxy backend
+health-checking** — killing the HAProxy VM drops the whole control plane. Full CPLB+NLLB HA is the
+Proxmox target (a config edit, not a rebuild). **Why not CPLB on Multipass:** VRRP needs a free
+in-subnet VIP the dnsmasq won't lease + multicast/GARP over `vmnet` — unverified/risky. **roxy-wi**
+(management UI) is deferred — x86_64-only, needs its own server+DB+agents. Details:
+`specs/centralized_k0s/ha-loadbalancer.md`.
 
 ### Cluster bootstrap & join — k0sctl
 
-**Decision: k0sctl (hybrid).** Cloud-init does OS prep only — DNS warm-up gate + retryable **pinned**
-`get.k0s.sh` install + CA trust + tooling + Vector/exporters — and **does not** run `k0s install`. A
-post-apply `terraform_data.k0s_bootstrap` (mirroring `centralized_monitoring`'s
-`terraform_data.k0s_log_shipper`) renders `k0sctl.yaml` from `tofu output` IPs and runs `k0sctl apply`.
-k0sctl **distributes the PKI automatically** and enforces controller→controller→worker order — the
-byte-fragile parts live in a tool built for them, and no controller's cloud-init waits on a peer
-(biggest boot-race reduction). Cost: a `k0sctl` host-tool preflight (`brew install
-k0sproject/tap/k0sctl`) — added to the `just` preflight like `tofu`/`multipass`/`uv`.
+**Decision: k0sctl.** Cloud-init does **only** OS prep — DNS warm-up gate + retryable pinned
+`get.k0s.sh` install + CA trust + tooling + Vector/exporters — and **runs no `k0s install`/`k0s
+start` and NO API-dependent step**. A post-apply `terraform_data.k0s_bootstrap` (mirroring
+`centralized_monitoring`'s `terraform_data.k0s_log_shipper`) renders **one** `k0sctl.yaml` and runs
+`k0sctl apply`; k0sctl distributes PKI automatically and enforces controller→controller→worker order.
 
-*Ansible is deliberately not used for bootstrap* — k0sctl already is "Ansible-for-k0s" (SSH-driven
-PKI + join). **Ansible enters later**: once your `ansible-dev` plugin (`boss-skills/specs/
-ansible-dev-plugin.md`) lands, migrate the **node-config layer** (tooling, oh-my-zsh, Vector,
-exporters, kubeconfig fan-out) from cloud-init/`terraform_data` to Ansible roles — this cluster is a
-natural first consumer (its Multipass-live-VM test rung). See Future work.
+**Adversarial hardening baked in:**
+- **No API-dependent steps in cloud-init.** Copying the existing single-node templates would drag in
+  `until … k0s kubectl /readyz; do sleep 5; done` (KSM, ingress, `k0s kubeconfig admin`) that run
+  against a cluster that does not exist until k0sctl runs → the canonical **infinite cloud-init hang**
+  (`multipass launch` never returns). **kube-state-metrics and any manifest are applied post-apply**
+  via the **k0s manifest deployer** (`/var/lib/k0s/manifests/<stack>/`, laid down by k0sctl config
+  `spec.k0s.config` or a `terraform_data` after bootstrap) — never in cloud-init.
+- **One shared cluster config, not per-controller `k0s.yaml`.** k0sctl takes a single
+  `spec.k0s.config` and derives per-node `api.address`/etcd `peerAddress` from each host. Node-role
+  differences (controllers get `--enable-worker`) are **per-host `installFlags`**, not config fields.
+  So there is **no per-controller `k0s.yaml` artifact** — hermetic tests assert on the rendered
+  `k0sctl.yaml`.
+- **Pin `privateAddress` explicitly.** Set `spec.hosts[*].privateAddress` = the tofu-discovered
+  `ipv4` for every host — do **not** rely on k0sctl fact-gathering (it can pick a CNI bridge
+  `10.244.x` interface → apiserver-SAN / etcd-peer IP mismatch → silent TLS/quorum failure).
+- **Ordering.** `terraform_data.k0s_kubeconfig_distribute` and the KSM-manifest step
+  **`depends_on = [terraform_data.k0s_bootstrap]`** so they never run before the cluster exists.
+- **k0sctl preflight (real, not aspirational).** Add a `command -v k0sctl` gate to the `just up`
+  recipe (there is **no** existing tool-preflight in the Justfile) that fails with
+  "install k0sctl: brew install k0sproject/tap/k0sctl", AND make the `terraform_data` fail-fast with
+  the same message — otherwise a missing k0sctl fails `apply` mid-flight (VMs created), and
+  `up-connected`'s consumer loop swallows the `rc=1` and reports a "green" fleet with a broken node.
 
-**Version pin.** Today's k0s is unpinned. Pin `var.k0s_version` (default **`v1.34.9+k0s.0`** —
-Kubernetes 1.34.x, etcd 3.6.12) threaded into `K0S_VERSION` (`get.k0s.sh`) and `k0sctl.yaml`'s
-`spec.k0s.version`; `kubectl` pins to the k8s minor, `etcdctl` to the bundled etcd — **verify all
-three against `k0s version` in the Phase-0 spike**. The etcd 3.5→3.6 "zombie member" hop (≥3.5.26
-first) only bites a future in-place 1.33→1.34 upgrade — document in the upgrade runbook.
+**Version pin.** `var.k0s_version` default **`v1.34.9+k0s.0`** (Kubernetes 1.34.9, **etcd 3.6.12** —
+confirmed real); threaded into `K0S_VERSION` + `k0sctl.yaml` `spec.k0s.version`. `kubectl` = k8s
+minor, `etcdctl` = **3.6.x** (the tooling shard's `etcdctl v3.5.21` is stale — superseded). Verify all
+three against `k0s version` in the Phase-0 spike. etcd 3.5→3.6 "zombie member" hop only bites a future
+in-place 1.33→1.34 upgrade.
 
-**Boot-race hardening.** Repo's verbatim guard (resolver-ready gate + bounded retry) on every network
-install, because `runcmd` is `/bin/sh` with no `set -e`:
-
+**Boot-race hardening — every network fetch, not just k0s.** `runcmd` is `/bin/sh` (no `set -e`), so
+a first-boot DNS-warm-up miss on *any* download fails silently. Make the resolver warm-up gate
+**unconditional** (not only under `dns_server != ""`) and wrap **every** network install — `get.k0s.sh`,
+oh-my-zsh (`raw.githubusercontent.com`), Vector, `install-cli.sh` GitHub releases (kubectl/helm/k9s/
+stern/etcdctl), netdata — in the bounded-retry idiom, warming the actual hosts hit:
 ```yaml
-%{ if dns_server != "" ~}
   - systemctl restart systemd-resolved
   - |
-    for i in $(seq 1 30); do getent hosts get.k0s.sh >/dev/null 2>&1 && break; sleep 2; done
-%{ endif ~}
-  - |
-    for i in $(seq 1 5); do
-      curl -sSLf https://get.k0s.sh | K0S_VERSION=${k0s_version} sh && break
-      echo "k0s install attempt $i failed; retrying"; sleep 5
+    for h in get.k0s.sh github.com raw.githubusercontent.com get.helm.sh; do
+      for i in $(seq 1 30); do getent hosts "$h" >/dev/null 2>&1 && break; sleep 2; done
     done
+  - |
+    for i in $(seq 1 5); do curl -sSLf https://get.k0s.sh | K0S_VERSION=${k0s_version} sh && break; sleep 5; done
 ```
+**300s launch window:** 7 concurrent `multipass launch`es each doing `package_upgrade` + 6 downloads
++ netdata will contend and can exceed Multipass's 300s window → timeout → orphaned VM → next `up`
+collides (`just prune` recovery). Mitigate: `package_upgrade: false` and move heavy tool/Vector/
+netdata installs into a **post-boot systemd oneshot** (`--no-block`, the netbox `netbox-stack.service`
+pattern) so cloud-init reaches `done` fast; document the `prune`/`recreate` recovery.
 
 ### CNI / networking
 
-**v1 default `kuberouter`** (what the repo runs today — zero extra steps, arm64-native, dual-stack).
-**`enable_cilium` opt-in for iteration 2** (default `false`): `provider: custom` +
-`kubeProxy.disabled: true` + Helm Cilium with `kubeProxyReplacement=true`,
-`k8sServiceHost=<k0s_api_endpoint>` (HAProxy IP, or controller-1 in single mode), `routingMode=tunnel/vxlan`.
-eBPF on Multipass arm64 is feasible (real QEMU/HVF VM kernel, BTF + cgroup v2 — not the Docker-Desktop
-trap) but unproven until a VM exists; Cilium's unreachable-`k8sServiceHost` failure is exactly the
-silent-wait-loop class, so don't couple the first HA bring-up to it. CNI is immutable post-init →
-`enable_cilium` is a `just recreate`-class flag. Keep k0s defaults `podCIDR: 10.244.0.0/16`,
-`serviceCIDR: 10.96.0.0/12` (no collision with Multipass's `192.168.64.0/24` — verify per-machine).
+**v1 default `kuberouter`**; **`enable_cilium` opt-in iteration 2** (`provider: custom` +
+`kubeProxy.disabled: true` + Helm with `kubeProxyReplacement=true`, `k8sServiceHost=k0s-api.<domain>`).
+eBPF on Multipass arm64 is feasible but unproven; CNI is immutable post-init → `enable_cilium` is a
+`just recreate`-class flag. Keep k0s defaults `podCIDR 10.244.0.0/16` / `serviceCIDR 10.96.0.0/12`
+(no collision with Multipass's `192.168.64.0/24` — verify per-machine).
 
 ### Node tooling & shell UX
 
-Reuse `install-cli.sh` (arch-substituted release download → `/usr/local/bin`). On **every** node,
-**unconditional** (debug baseline): **kubectl** (`v1.34.x`, real binary not just `k0s kubectl`),
-**helm** `v3.21.2` (make unconditional — today gated in `coroot-install.sh`), **k9s** `v0.51.0`,
-**stern** `v1.34.0` (completion flag `--completion=zsh`), **etcdctl** (match bundled etcd).
+`install-cli.sh` (arch-substituted release → `/usr/local/bin`), **unconditional** on every node:
+kubectl (`v1.34.x`, real binary), helm `v3.21.2` (make unconditional), k9s `v0.51.0`, stern
+`v1.34.0` (`--completion=zsh`), etcdctl (3.6.x). **kubeconfig on all nodes:** controllers
+self-generate; `terraform_data.k0s_kubeconfig_distribute` (after bootstrap) pulls the admin config
+(its `server:` already = `k0s-api.<domain>`) and scps to `/home/ubuntu/.kube/config` on every node.
+**oh-my-zsh** unattended as `ubuntu` (`RUNZSH=no CHSH=no KEEP_ZSHRC=yes`), `chsh zsh`, one
+`~/.oh-my-zsh/completions/_<tool>` per tool — installed in the post-boot oneshot, after the resolver gate.
 
-**kubeconfig on all nodes.** Controllers self-generate (`k0s kubeconfig admin`); workers can't.
-Because `externalAddress` = `k0s_api_endpoint`, the generated kubeconfig's `server:` already points
-at the LB/controller — no `sed`. Post-apply `terraform_data.k0s_kubeconfig_distribute` pulls it from
-controller-1 and scps to `/home/ubuntu/.kube/config` on all nodes. (k0sctl also writes an admin
-kubeconfig back to the Mac — usable for `just`-side checks.)
+### Observability — exporters + Netdata
 
-**oh-my-zsh + completions.** Unattended install as `ubuntu` (`RUNZSH=no CHSH=no KEEP_ZSHRC=yes`),
-`chsh -s /usr/bin/zsh ubuntu`, one `~/.oh-my-zsh/completions/_<tool>` per `k0s, kubectl, helm, stern,
-k9s, etcdctl` (on `fpath` before `compinit`). The oh-my-zsh curl of `raw.githubusercontent.com` sits
-**after** the resolver gate.
-
-### Observability — exporters + Netdata + blackbox
-
-**Controllers now run kubelet + cAdvisor** (via `k0s install controller --enable-worker`, keeping the
-default control-plane taint so no user pods schedule) — so those metrics *and* pod logs exist on
-controllers too. Host exporters everywhere; kube-state-metrics exactly once; etcd + k0s
-system-component metrics on controllers.
+Controllers run kubelet + cAdvisor (via `--enable-worker`, taint kept → metrics + pod logs, no user
+pods). Host exporters everywhere; kube-state-metrics once; etcd + k0s system metrics on controllers.
 
 | Exporter | Port | Controllers | Workers | Notes |
 |---|---|:---:|:---:|---|
-| node_exporter | 9100 | ✅ | ✅ | v1.8.2 |
-| systemd_exporter | 9558 | ✅ | ✅ | v0.7.0 |
-| process-exporter | 9256 | ✅ | ✅ | v0.8.7 |
-| Netdata | 19999 | ✅ | ✅ | shared `install-netdata.sh.tftpl`; `enable_netdata_ebpf` **off** on arm64 |
-| kubelet (read-only) | 10255 | ✅ (now, via `--enable-worker`) | ✅ | `--kubelet-extra-args="--read-only-port=10255"` |
-| cAdvisor | 8089 | ✅ (now) | ✅ | v0.49.1 (`:8080` = kube-router) |
-| kube-state-metrics | 8081 | — one cluster-wide Deployment (v2.13.0, hostNetwork, replicas 1) — | | |
-| etcd metrics | 2381 | ✅ | ❌ | `--listen-metrics-urls`, HTTP no-cert |
-| k0s system-components | 9091 | ✅ (opt-in `--enable-metrics-scraper`) | ❌ | k0s-pushgateway, 2-min TTL → scrape < 2 min |
-| **HAProxy** | 8405 | — HAProxy VM (HA mode) — | | native `prometheus-exporter` service |
+| node/systemd/process | 9100/9558/9256 | ✅ | ✅ | v1.8.2 / v0.7.0 / v0.8.7 |
+| Netdata | 19999 | ✅ | ✅ | scraped via **`netdata_scrape_targets`** (needs `metrics_path`+`params` — **not** `extra_scrape_targets`); `enable_netdata_ebpf` off (arm64) |
+| kubelet RO / cAdvisor | 10255 / 8089 | ✅ (now) | ✅ | `--read-only-port`; cAdvisor v0.49.1 |
+| kube-state-metrics | 8081 | — one cluster-wide Deployment (v2.13.0) — | | scheduled on a worker; **scrape-targeting caveat** below |
+| etcd / k0s-pushgateway | 2381 / 9091 | ✅ | ❌ | pushgateway opt-in (`--enable-metrics-scraper`), 2-min TTL → scrape < 2 min |
+| HAProxy | 8405 | — HAProxy VM (HA mode) — | | native exporter |
 
-**Blackbox exporter — on the monitoring hub.** Run `blackbox_exporter` on `centralized_monitoring`
-(next to Prometheus, the standard pattern) and add scrape jobs (with `params`/relabeling) that probe:
-the k0s API `https://<k0s_api_endpoint>:6443/readyz`, HAProxy stats, and key service URLs. This is a
-change to `centralized_monitoring` (new exporter + scrape jobs), consumed via the existing
-`extra_scrape_targets` mechanism; centralized_k0s just exposes the endpoints.
+**KSM scrape-targeting caveat:** KSM (`replicas:1`, hostNetwork) lands non-deterministically on *one*
+worker, but `extra_scrape_targets` is a static `{ip,port}` — you can't know the IP ahead of time.
+Pin KSM to a specific worker (nodeSelector) or discover the landed node's IP post-apply and feed it
+in. **Blackbox exporter is deferred** (see Future work) — it can't ride `extra_scrape_targets` and
+needs a bespoke `centralized_monitoring` change (exporter container + `/probe` relabel job +
+`insecure_skip_verify` for `:6443/readyz`).
 
-### Log shipping to centralized_logging — Vector
+### Log shipping to centralized_logging — Vector (no K8s API dependency)
 
-**Vector replaces the syslog-ng client drop-in *and* the otelcol pod bridge with one agent per node.**
-`centralized_logging` ingests only syslog RFC5424/TCP:514, so:
+**One Vector agent per node.** `centralized_logging` ingests only syslog RFC5424/TCP:514, so:
 
-- **Host + k0s-component logs** — Vector `journald` source → **`syslog` sink** (RFC5424/TCP) →
-  `centralized_logging:514`. k0s runs every component as a journald systemd service
-  (`k0scontroller`/`k0sworker`), so OS + control-plane/worker component logs ship with zero hub change.
-- **Pod logs (structured, metadata-preserving)** — Vector `kubernetes_logs` (or file source on
-  `/var/log/pods/*/*/*.log`, present on all nodes now that controllers run kubelet) → **VRL transforms**
-  (parse, enrich `k8s.namespace/pod/container`, redact) → **two sinks**: (a) the monitoring hub's
-  **OpenObserve** (`http`/OTLP sink → `/api/<org>/<stream>/_json`, full structured metadata — solves
-  the syslog metadata-loss problem), and (b) a flat **`syslog` copy** to `centralized_logging` for
-  archival. Runs as root to read `/var/log/pods`.
-- Var plumbing: reuse `log_shipping_target` (→ centralized_logging syslog) + `openobserve_endpoint`/
-  `openobserve_org`/`openobserve_password` (→ monitoring OpenObserve) — both already standard
-  cross-cluster opt-in vars, so `up-connected` wires them from live hub IPs.
+- **Host + k0s-component logs** — Vector `journald` source → **`socket` sink with
+  `encoding.codec = "syslog"`** (RFC5424, TCP) → `centralized_logging:514`. (Vector has no "syslog
+  sink" — it's the socket sink + syslog codec; explicitly populate `HOSTNAME`/`APP-NAME` fields so
+  the hub's `keep-hostname(yes)` folders correctly.)
+- **Pod logs (structured, no API) — path-parsed.** Vector **`file` source** on
+  `/var/log/pods/*/*/*.log` (present on all nodes now that controllers run kubelet) → **VRL** parses
+  the path `/var/log/pods/<ns>_<pod>_<uid>/<container>/` to extract **namespace / pod / container**
+  (no Kubernetes API, no kubeconfig, no boot-order fragility — the `kubernetes_logs` source was
+  rejected precisely because it needs API access Vector wouldn't have at boot) → two sinks:
+  (a) the monitoring hub's **OpenObserve** — Vector **`http` sink** to `/api/<org>/<stream>/_json`
+  with basic auth (`auth.user`/`auth.password`), `encoding.codec=json`, **`buffer.when_full =
+  drop_newest`** (so a down hub can't back-pressure and stall the archival path), and
+  (b) a flat **socket/syslog** archival copy to `centralized_logging`.
+  *Loses only pod labels/annotations* (not ns/pod/container) — acceptable for the lab.
+- **Var plumbing:** `log_shipping_target` (→ logging syslog) + `openobserve_endpoint`/`_org`/
+  `_password` **+ a new `openobserve_stream` value** (the `_json` URL names the stream — not in the
+  current cross-cluster var contract; add it). `up-connected` wires these from live hub IPs.
 
-**Watch-outs:** back-pressure — cap the OpenObserve firehose and size Vector's disk buffer; the
-syslog copy is lossy by design (archival only — structured queries go to OpenObserve); Vector on
-arm64 is fine (native). Config sketch to be written under `cloud-init/vector/`.
+Config sketch lands under `cloud-init/vector/vector.toml.tftpl`. Multiline pod logs (stack traces):
+ship intact to OpenObserve; the flat syslog copy may split at `\n` (archival only).
 
 ### No SELinux
 
-**N/A on Ubuntu** (AppArmor). The k0s SELinux doc is RHEL-only; the only adjacent need
-(`apparmor_parser` for containerd) is present on stock Ubuntu. Note it for a future RHEL Proxmox guest.
+N/A on Ubuntu (AppArmor); `apparmor_parser` (containerd's only need) is present. Note for a future
+RHEL Proxmox guest.
 
 ## Layout
 
 ```
 clusters/centralized_k0s/
-├── main.tf                 # count-indexed controller/worker + conditional haproxy; controller[0] anchor;
-│                           #   local_file renders of k0s.yaml (per controller) + cloud-inits + k0sctl.yaml;
-│                           #   terraform_data: k0s_bootstrap (k0sctl apply) + kubeconfig_distribute
-├── variables.tf            # k0s_control_plane_count(=1)/worker_count(=2), controller/worker/haproxy sizes,
-│                           #   k0s_version, enable_cilium/enable_hubble, enable_netdata(+_ebpf),
-│                           #   log_shipping_target, openobserve_endpoint/org/password,
-│                           #   dns_server, internal_ca_cert, ntp_server (all opt-in)
-├── outputs.tf              # hosts{}, k0s_api_endpoint, k0s_version, dns_records, web_urls
-├── providers.tf, versions.tf, terraform.tfvars
+├── main.tf                 # count controller/worker + conditional haproxy; k0sctl.yaml + cloud-init renders;
+│                           #   terraform_data: k0s_bootstrap (k0sctl apply) → kubeconfig_distribute + ksm_manifest (depends_on bootstrap)
+├── variables.tf            # k0s_control_plane_count(=1)/worker_count(=2), size objects, k0s_version,
+│                           #   enable_cilium/enable_hubble, enable_netdata(+_ebpf), log_shipping_target,
+│                           #   openobserve_endpoint/_org/_password/_stream, dns_server, internal_ca_cert, ntp_server
+├── outputs.tf              # hosts{}, k0s_api_endpoint, dns_records (incl. k0s-api.<domain>), web_urls
 ├── cloud-init/
-│   ├── controller.yaml.tftpl   # OS prep + DNS gate + pinned get.k0s.sh + tooling + oh-my-zsh + exporters + Vector
-│   ├── worker.yaml.tftpl       # + kubelet/cAdvisor
-│   ├── haproxy.yaml.tftpl      # L4 haproxy.cfg + :8405 prometheus frontend
-│   ├── k0s.yaml.tftpl          # per controller (node-specific address/peerAddress; shared sans/etcd; --enable-worker)
-│   ├── k0sctl.yaml.tftpl       # rendered from tofu output IPs
-│   └── vector/vector.toml.tftpl# journald→syslog + kubernetes_logs→OpenObserve(+syslog copy)
-├── tests/
-│   ├── tofu/sizing_and_render.tftest.hcl   # hermetic: mock_provider + command=plan
-│   └── testinfra/conftest.py + test_*.py   # live SSH; dynamic per-role fixtures from hosts{}
+│   ├── controller.yaml.tftpl / worker.yaml.tftpl   # OS prep + DNS gate + pinned get.k0s.sh; heavy installs in a post-boot oneshot; NO k0s install / NO API-dependent step
+│   ├── haproxy.yaml.tftpl                           # L4 cfg + :8405 prometheus frontend
+│   ├── k0sctl.yaml.tftpl                            # ONE cluster config; per-host privateAddress + installFlags(--enable-worker on controllers)
+│   └── vector/vector.toml.tftpl                     # journald→socket/syslog + file(/var/log/pods)→VRL→OpenObserve(http)+syslog copy
+├── tests/{tofu/sizing_and_render.tftest.hcl, testinfra/conftest.py + test_*.py}
 └── docs/feature-flags.md
 ```
-Shared snippets from `clusters/_shared/cloud-init/` (netdata, use-dns, use-ntp, issue-cert).
 
 ## Testing — layered feedback loop
 
-Two-layer split; pin cross-cluster opt-ins (`dns_server`, `internal_ca_cert`, `ntp_server`,
-`enable_cilium`, `openobserve_endpoint`, `log_shipping_target`) **OFF** in each test file's file-level
-`variables {}` (auto-tfvars gotcha).
+Pin cross-cluster opt-ins **OFF** in each test file's file-level `variables {}` — the full list:
+`dns_server, internal_ca_cert, ntp_server, enable_cilium, log_shipping_target, openobserve_endpoint,
+openobserve_stream` (a stale `.cross-cluster.auto.tfvars.json` will otherwise poison `just check`).
 
-- **Hermetic** (`tofu test`, `mock_provider`, `command = plan`, `strcontains`/`yamldecode` — `just
-  check`): default renders 1 controller + 2 workers, **no HAProxy**; a `k0s_control_plane_count=3`
-  run renders 3 controllers + 3 workers **+ HAProxy** at the right sizes (controller 3 vCPU/3 G); the
-  HAProxy cloud-init contains the `:8405 prometheus-exporter` frontend; controller `k0s.yaml` carries
-  `storage.type: etcd`, `--enable-worker`, `externalAddress`/`sans` with the (mock) endpoint; every
-  node's cloud-init has the pinned tool installs, `K0S_VERSION`, oh-my-zsh + `_<tool>` completions,
-  `chsh zsh`, and the **Vector** config (journald→syslog, kubernetes_logs→OpenObserve); `k0sctl.yaml`
-  + the `k0s_bootstrap`/`kubeconfig_distribute` `terraform_data` exist; `_off_by_default` for
-  `enable_cilium`/`log_shipping_target`/`openobserve_endpoint`.
+- **Hermetic** (`mock_provider`, `command = plan`, `strcontains`/`yamldecode` — `just check`): default
+  renders 1 controller + 2 workers, **no HAProxy**; a `k0s_control_plane_count=3` run renders 3+3
+  **+HAProxy** (controller 3 vCPU/3 G) with the `:8405` frontend; the rendered **`k0sctl.yaml`**
+  (not per-controller files) carries `storage.type: etcd` in **both** modes, per-host `privateAddress`,
+  `installFlags` with `--enable-worker` on controllers, and `externalAddress: k0s-api.<domain>`; every
+  node's cloud-init has the pinned tool installs + `K0S_VERSION`, the **unconditional** resolver gate,
+  oh-my-zsh + `_<tool>` completions, and the **Vector** config (journald→syslog + `file`
+  /var/log/pods→OpenObserve `http` sink); `k0s_bootstrap` + `kubeconfig_distribute`(`depends_on`) exist;
+  `_off_by_default` for `enable_cilium`/`log_shipping_target`/`openobserve_endpoint`.
 - **Live** (`tests/testinfra/` over SSH — `just verify`): each controller `sudo k0s status` Running;
-  `sudo k0s kubectl get nodes` = all Ready (3 default / 6 HA); in HA mode `sudo k0s etcd member-list`
-  = 3 + failover drill (hard-stop active controller → API 200 via HAProxy, quorum 2/3); standalone
-  `kubectl get nodes` works as `ubuntu` on every node (kubeconfig-distribution proof); tools present;
-  `ubuntu` shell = zsh with completions; **Vector** running + shipping (syslog line lands in
-  `/var/log/remote/` on central; a pod-log record appears in OpenObserve); HAProxy `:8405/metrics`
-  returns `haproxy_*` (HA mode); blackbox probe of `/readyz` is up (asserted on the monitoring hub).
+  `sudo k0s kubectl get nodes` all Ready (3 default / 6 HA); HA mode `k0s etcd member-list` = 3 +
+  failover drill; standalone `kubectl get nodes` as `ubuntu` on every node; tools present; zsh +
+  completions; Vector running + **enrichment asserted** (an OpenObserve record with populated
+  `namespace/pod/container`, not just "a record appears") + syslog line in `/var/log/remote/`;
+  HAProxy `:8405/metrics` returns `haproxy_*` (HA). **Fixtures:** the "dynamic per-role" idea isn't a
+  real pytest pattern — enumerate the **max** role set as **skip-guarded** fixtures (the netbox
+  `agent` idiom: `controller-2`, `controller-3`, `worker-3`, `haproxy` each `pytest.skip` when absent),
+  or `@pytest.mark.parametrize` over `hosts.keys()`.
 
 ## Quickstart
 
 ```sh
-just check   centralized_k0s                       # hermetic (no VMs)
-just up      centralized_k0s                        # default 1+2; k0sctl bootstrap forms the cluster
-K0S_HA=1 just up centralized_k0s                    # (or set k0s_control_plane_count=3) → 3+3+HAProxy, stand-alone
+just check   centralized_k0s
+just up      centralized_k0s          # default 1+2; preflight checks k0sctl; k0sctl forms the cluster
+K0S_HA=1 just up centralized_k0s      # 3+3+HAProxy, stand-alone
 just verify  centralized_k0s
-just ssh     centralized_k0s controller-1           # k9s / kubectl / sudo k0s kubectl get nodes
-just recreate centralized_k0s                       # after ANY cloud-init/k0s.yaml edit (not `just up`)
+just recreate centralized_k0s         # after ANY cloud-init/k0sctl/vector edit
 ```
-Preflight: `k0sctl` must be on the Mac (`brew install k0sproject/tap/k0sctl`) — add to the `just`
-tool check. The default 1+2 joins `up-connected`; the 3+3 HA opt-in is a stand-alone bring-up.
+Preflight: `brew install k0sproject/tap/k0sctl`. Default 1+2 joins `up-connected`; 3+3 HA is stand-alone.
 
 ## Applying cloud-init / config changes
 
-Edit cloud-init/`k0s.yaml`/`vector.toml` → **`just recreate centralized_k0s`**, never `just up`
-(stale-cloud-init trap). Iterate live via SSH + `systemctl restart --no-block`, then fold back into
-the `.tftpl`.
+Edit cloud-init/`k0sctl.yaml`/`vector.toml` → **`just recreate`**, never `just up`. Iterate live via
+SSH + `systemctl restart --no-block`, then fold back into the `.tftpl`.
 
-## Decisions locked (review round 1)
+## Decisions locked (review + adversarial rounds)
 
 | Topic | Decision |
 |---|---|
-| Bootstrap | **k0sctl** now (PKI + join order); Ansible/`ansible-dev` migrates node-config later |
-| Log shipping | **Vector** per node; pods→OpenObserve (structured) + syslog→logging; host/component→syslog→logging |
-| Controllers | `--enable-worker` **with taint kept** → kubelet + cAdvisor + pod logs, no user pods |
-| Default size | **1 CP + 2 workers** (fits `up-connected`); **3+3 + HAProxy** = HA opt-in, stand-alone |
-| HAProxy | conditional on >1 controller; native Prometheus exporter on `:8405`; stays (no CPLB spike) |
-| Controller RAM | **3 G** (etcd OOM headroom) |
-| Blackbox | on the **monitoring hub**, probing `/readyz` + HAProxy + services |
-| roxy-wi | **deferred** to Proxmox (x86_64-only) |
-| CNI | kube-router v1; `enable_cilium` opt-in iteration 2 |
+| Bootstrap | **k0sctl** (one shared config + per-host `installFlags`/`privateAddress`); Ansible later |
+| Cloud-init | **OS prep only** — no `k0s install`, no API-dependent step (KSM/kubeconfig go post-apply) |
+| Logs | **Vector**; pods via **`file`+path-parse** (no API) → OpenObserve `http` sink (`drop_newest`) + syslog copy; host→syslog |
+| Controllers | `--enable-worker` + taint kept |
+| Default size | **1 CP + 2 workers** (etcd single-member); **3+3+HAProxy** = HA opt-in, stand-alone |
+| Datastore | **etcd unconditionally** (both modes) |
+| HA framing | **etcd-quorum HA behind a SPOF edge** (lab), not full HA |
+| HAProxy | conditional on >1 CP; native `:8405` exporter; endpoint via stable `k0s-api.<domain>` |
+| Blackbox | **deferred** to a monitoring-hub change (future work) |
+| roxy-wi | deferred to Proxmox (x86_64) |
+| Version | `v1.34.9+k0s.0` / etcd 3.6.12 / etcdctl 3.6.x (verify in spike) |
 
-**Phase-0 spike checklist (verify on a live VM before committing pins):** `k0s version` → confirm
-`k0s_version` / `kubectl` / `etcdctl` pins; `ls /sys/kernel/btf/vmlinux` + cgroup v2 (Cilium readiness);
-Multipass bridge subnet (podCIDR/serviceCIDR collision); Vector `kubernetes_logs`→OpenObserve auth path.
+## Adversarial fixes applied
 
-## Future work (kept in mind, not built here)
+The hostile reviewers' confirmed holes are addressed above: **no API-dependent steps in cloud-init**
+(would hang); **single k0sctl config + `installFlags`** (per-controller `k0s.yaml` was dead);
+**pinned `privateAddress`**; **`depends_on` ordering**; **Vector `file`+path-parse** (kills the
+`kubernetes_logs` API/boot-order trap); **boot-race guard on all fetches + unconditional gate**;
+**300s window → post-boot oneshot + `package_upgrade:false`**; **skip-guarded testinfra fixtures**;
+**real k0sctl preflight**; **HA-honesty reframe**; **stable DNS endpoint** for backup/restore;
+**Netdata via `netdata_scrape_targets`**; **blackbox deferred**.
 
-- **Ansible / `ansible-dev` plugin** migrates the node-config layer (tooling, Vector, exporters,
-  kubeconfig) once the plugin lands — this cluster as its first real consumer.
-- **CPLB (Keepalived VIP) + NLLB** on Proxmox (reservable VIP, real multicast) — a config edit, not
-  a rebuild (etcd/tokens/PKI unchanged).
-- **roxy-wi** as the HAProxy management UI on the x86_64 Proxmox promotion.
-- **Cilium + Hubble** (`enable_cilium` iteration 2).
-- **Storage/CSI** (k0s ships none): OpenEBS/local-path; kubelet dir `/var/lib/k0s/kubelet`.
-- **Backup/DR**: `k0s backup` (etcd + PKI, not PVs) + Velero for PV data (Proxmox-era).
-- **Manifest deployer / `spec.extensions.helm`** for addons vs ad-hoc `runcmd kubectl`.
+**Residual risks accepted (lab):** HAProxy SPOF; pod-log labels/annotations dropped (ns/pod/container
+kept); multiline pod logs split on the flat syslog archival copy; KSM scrape target needs the landed
+worker IP.
+
+## Future work
+
+- **Blackbox exporter** as a `centralized_monitoring` enhancement (exporter container + `/probe`
+  relabel job + `insecure_skip_verify` for `:6443/readyz`), asserted in that cluster's suite.
+- **Ansible / `ansible-dev` plugin** migrates the node-config layer.
+- **CPLB (Keepalived VIP) + NLLB** on Proxmox (real HA — a config edit, not a rebuild).
+- **roxy-wi** HAProxy UI on x86_64 Proxmox. **Cilium + Hubble** (`enable_cilium`). **Storage/CSI**
+  (OpenEBS/local-path; kubelet dir `/var/lib/k0s/kubelet`). **Backup/DR** (`k0s backup` + Velero).
 
 ## Sources
 
-Backing research: `specs/centralized_k0s/{ha-loadbalancer,cni-networking,provisioning-cloudinit,
-observability-logging,tooling-shell-repo}.md` (each with k0s-doc citations + self-adversarial
-section). Prior Proxmox brief: `ai_docs/claude-multipass-infra-upgrade-brief.md`. Ansible direction:
-`boss-skills/specs/ansible-dev-plugin.md`. Repo templates: `clusters/centralized_logging/`,
-`clusters/centralized_monitoring/`, `clusters/centralized_netbox/`. k0s docs:
-`https://docs.k0sproject.io/stable/`.
+Backing research: `specs/centralized_k0s/*.md` (superseded where they disagree — stale kine/version
+claims). Prior brief: `ai_docs/claude-multipass-infra-upgrade-brief.md`. Ansible:
+`boss-skills/specs/ansible-dev-plugin.md`. Templates: `clusters/centralized_{logging,monitoring,netbox}/`.
+k0s docs: `https://docs.k0sproject.io/stable/`.
