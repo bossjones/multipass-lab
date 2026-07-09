@@ -48,6 +48,11 @@ lab-specific notes.
 |-----|----------------------|-----|------|
 | **centralized_logging** | syslog-ng log shipping across three VMs into one collector (`/var/log/remote/<host>/<prog>.log`), with runtime DHCP-IP injection between peers, plus a flag-gated Prometheus exporter layer | 3 | 📘 [USAGE](clusters/centralized_logging/USAGE.md) · 📖 [README](clusters/centralized_logging/README.md) · 🧭 [tutorial](clusters/centralized_logging/TUTORIAL.md) · 📐 [spec](specs/centralized_logging.md) · 📊 [metrics spec](specs/centralized_logging_metrics.md) |
 | **centralized_monitoring** | Pull-based Prometheus/Grafana/OpenObserve observability stack across two VMs, with feature-flagged, tiered (MVP/Reach/Nice-to-have) exporters and an inverted runtime-IP injection edge | 2 | 📘 [USAGE](clusters/centralized_monitoring/USAGE.md) · 📖 [README](clusters/centralized_monitoring/README.md) · 📚 [docs/](clusters/centralized_monitoring/docs/) · 📐 [spec](specs/centralized_monitoring.md) · 🧪 [e2e spec](specs/e2e-centralized-monitoring.md) |
+| **centralized_k0s** | A `just`-orchestrated, multi-node k0s Kubernetes cluster formed via k0sctl (etcd-backed control plane, kubelet workers via `--enable-worker`), leveling up the single-node k0s embedded in `centralized_monitoring`/`centralized_logging` into its own tunable-topology lab, with an opt-in 3-controller etcd-quorum HA mode behind an HAProxy L4 edge | 3 | 🚩 [feature flags](clusters/centralized_k0s/docs/feature-flags.md) · 📐 [spec](specs/centralized_k0s.md) |
+| **centralized_pki** | The lab's internal CA (step-ca) plus a Traefik fleet-edge reverse proxy fronting Authelia (SSO forward-auth) and Vaultwarden, doubling as the reverse-proxy edge for clusters without their own hostname+TLS story and as the root of the fleet's internal-CA trust chain | 2 | 📘 [USAGE](clusters/centralized_pki/USAGE.md) · 📖 [README](clusters/centralized_pki/README.md) · 🔑 [default passwords](clusters/centralized_pki/DEFAULT_PASSWORDS.md) · 📐 [spec](specs/centralized_pki.md) · 🔀 [fleet-edge Traefik spec](specs/dynamic-traefik.md) · 🤝 [PKI + DNS spec](specs/pki-and-dns.md) |
+| **centralized_unifi** | A version-exact simulation of a UniFi homelab's log plane — an rsyslog 5.8.11 USG (Debian wheezy, emulated amd64) forwarding syslog to a syslog-ng 3.28.1 UCK Gen2 controller (Debian bullseye, native arm64) with a Prometheus exporter on the collector; log-pipeline only, no human dashboards | 2 | 📖 [README](clusters/centralized_unifi/README.md) · 📐 [spec](specs/centralized_unifi.md) |
+| **centralized_netbox** | A NetBox DCIM/IPAM server plus a client VM that self-registers into it via the REST API on first boot (seeded with a base org/device/IPAM data model), with an opt-in Diode/orb-agent discovery service that scans the Multipass subnet and ingests results automatically | 2 | 📐 [spec](specs/centralized_netbox.md) · 🛠️ [CLI spec](specs/cli-netbox.md) · 🌱 [data-seed spec](specs/netbox-data.md) · 🔍 [discovery spec](specs/netbox-discovery.md) |
+| **centralized_dns** | A single VM running AdGuard Home (`:53`) over a recursive Unbound resolver (`127.0.0.1:5335`), both host-level under systemd — the network-wide ad-blocking DNS resolver AND the cross-cluster hub that comes up FIRST in `just up-connected` so every other VM can point its resolver at it from first boot | 1 | 📘 [USAGE](clusters/centralized_dns/USAGE.md) · 📖 [README](clusters/centralized_dns/README.md) · 🔑 [default passwords](clusters/centralized_dns/DEFAULT_PASSWORDS.md) · 📐 [spec](specs/centralized_dns.md) · 🧷 [cross-cluster hub spec](specs/cross-cluster.md) · 🤝 [PKI + DNS spec](specs/pki-and-dns.md) · 📊 [dashboards spec (planned)](specs/dns-dashboards.md) |
 
 > _New labs land as new `clusters/<name>/` folders. CI auto-discovers them — see
 > [How it works](#how-it-works)._
@@ -178,6 +183,26 @@ templates on every apply.
 - 🧪 [`specs/e2e-centralized-monitoring.md`](specs/e2e-centralized-monitoring.md) — end-to-end monitoring design
 - 📥 [`specs/openobserve.md`](specs/openobserve.md) — OpenObserve ingestion design (Prometheus `remote_write` + OTel filelog + k0s log shipping)
 - 🐝 [`specs/locustio.md`](specs/locustio.md) — host-run Locust load generators (`just locust*`)
+- 🚩 [`clusters/centralized_k0s/docs/feature-flags.md`](clusters/centralized_k0s/docs/feature-flags.md) — k0s feature-flag reference (CNI choice, HA opt-in, Coroot/ingress toggles)
+- 📐 [`specs/centralized_k0s.md`](specs/centralized_k0s.md) — full design of the k0sctl-formed, multi-node k0s cluster (default vs. HA topology, HAProxy edge)
+- 📘 [`clusters/centralized_pki/USAGE.md`](clusters/centralized_pki/USAGE.md) — detailed how-to-use guide for the internal-CA + fleet-edge cluster
+- 📖 [`clusters/centralized_pki/README.md`](clusters/centralized_pki/README.md) — the PKI/Traefik lab
+- 🔑 [`clusters/centralized_pki/DEFAULT_PASSWORDS.md`](clusters/centralized_pki/DEFAULT_PASSWORDS.md) — dev-default secrets for step-ca, Authelia, and Vaultwarden
+- 📐 [`specs/centralized_pki.md`](specs/centralized_pki.md) — full design of the step-ca + Traefik cluster
+- 🔀 [`specs/dynamic-traefik.md`](specs/dynamic-traefik.md) — fleet-edge Traefik reverse-proxy design (pki hosts the edge for netbox/dns/logging)
+- 🤝 [`specs/pki-and-dns.md`](specs/pki-and-dns.md) — combined internal-CA trust + Phase-2 TLS + DNS auto-registration design spanning pki, monitoring, and dns
+- 📖 [`clusters/centralized_unifi/README.md`](clusters/centralized_unifi/README.md) — the UniFi homelab log-plane simulation lab
+- 📐 [`specs/centralized_unifi.md`](specs/centralized_unifi.md) — full design of the version-exact USG→UCK syslog pipeline
+- 📐 [`specs/centralized_netbox.md`](specs/centralized_netbox.md) — full design of the NetBox DCIM/IPAM cluster (self-registration, seed data model)
+- 🛠️ [`specs/cli-netbox.md`](specs/cli-netbox.md) — the `netbox_cli.py` verification CLI design
+- 🌱 [`specs/netbox-data.md`](specs/netbox-data.md) — base data-model seed design (org hierarchy, DCIM device library, IPAM, tenancy)
+- 🔍 [`specs/netbox-discovery.md`](specs/netbox-discovery.md) — opt-in Diode/orb-agent subnet-discovery design
+- 📘 [`clusters/centralized_dns/USAGE.md`](clusters/centralized_dns/USAGE.md) — detailed how-to-use guide for the AdGuard/Unbound DNS hub
+- 📖 [`clusters/centralized_dns/README.md`](clusters/centralized_dns/README.md) — the DNS resolver/cross-cluster hub lab
+- 🔑 [`clusters/centralized_dns/DEFAULT_PASSWORDS.md`](clusters/centralized_dns/DEFAULT_PASSWORDS.md) — dev-default AdGuard admin credentials
+- 📐 [`specs/centralized_dns.md`](specs/centralized_dns.md) — full design of the AdGuard Home + Unbound cluster
+- 🧷 [`specs/cross-cluster.md`](specs/cross-cluster.md) — cross-cluster hub-ordering design (why DNS comes up first in `just up-connected`)
+- 📊 [`specs/dns-dashboards.md`](specs/dns-dashboards.md) — Grafana/OpenObserve dashboards for the AdGuard + Unbound exporters (status: planned, not yet built)
 - 🤖 [`CLAUDE.md`](CLAUDE.md) — repo conventions and `.claude/` automation guidance
 - ⚙️ [`Justfile`](Justfile) — every orchestration recipe
 - ✅ [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — hermetic CI pipeline

@@ -38,6 +38,27 @@ flowchart TD
 | 🧪 [`specs/e2e-centralized-monitoring.md`](../specs/e2e-centralized-monitoring.md) | End-to-end monitoring design. |
 | 📥 [`specs/openobserve.md`](../specs/openobserve.md) | Design for **OpenObserve ingestion** (Prometheus `remote_write` + OTel filelog + k0s log shipping). |
 | 🐝 [`specs/locustio.md`](../specs/locustio.md) | Design for the **host-run Locust load generators** (`just locust*`). |
+| ⚙️ [`clusters/centralized_k0s/docs/feature-flags.md`](../clusters/centralized_k0s/docs/feature-flags.md) | k0s cluster **feature-flag reference** (HA, Cilium, log shipping, Netdata). |
+| 📐 [`specs/centralized_k0s.md`](../specs/centralized_k0s.md) | Full **design rationale** for the multi-node k0sctl-formed k0s lab (default + HA topologies). |
+| 📐 [`specs/centralized_k0s/build-plans/`](../specs/centralized_k0s/build-plans/) | k0s **build-plan shards** — core, k0sctl, node, vector-tests. |
+| 📖 [`clusters/centralized_pki/README.md`](../clusters/centralized_pki/README.md) | The lab's **quick-reference** card for the internal CA + fleet-edge Traefik. |
+| 📘 [`clusters/centralized_pki/USAGE.md`](../clusters/centralized_pki/USAGE.md) | The lab's **detailed how-to-use guide**. |
+| 🔑 [`clusters/centralized_pki/DEFAULT_PASSWORDS.md`](../clusters/centralized_pki/DEFAULT_PASSWORDS.md) | Dev-default secrets (step-ca, Authelia, Vaultwarden) — all overridable via `TF_VAR_*`. |
+| 📐 [`specs/centralized_pki.md`](../specs/centralized_pki.md) | Full **design rationale** for the internal CA + Traefik/Authelia/Vaultwarden lab. |
+| 📐 [`specs/pki-and-dns.md`](../specs/pki-and-dns.md) | Combined design for **internal-CA trust, Phase-2 TLS, and DNS auto-registration** across clusters. |
+| 📐 [`specs/dynamic-traefik.md`](../specs/dynamic-traefik.md) | Design for the **fleet-edge Traefik** reverse proxy hosted by `centralized_pki`. |
+| 📖 [`clusters/centralized_unifi/README.md`](../clusters/centralized_unifi/README.md) | The lab's **quick-reference** card for the UniFi USG→Controller syslog simulation. |
+| 📐 [`specs/centralized_unifi.md`](../specs/centralized_unifi.md) | Full **design rationale** for the version-exact UniFi log-plane simulation. |
+| 📐 [`specs/centralized_netbox.md`](../specs/centralized_netbox.md) | Full **design rationale** for the NetBox DCIM/IPAM lab (self-registration, sizing, testing). |
+| 📐 [`specs/cli-netbox.md`](../specs/cli-netbox.md) | Design for the **`netbox_cli.py` verification CLI**. |
+| 📐 [`specs/netbox-data.md`](../specs/netbox-data.md) | Design for NetBox's **seeded base data model** (org hierarchy, DCIM, IPAM, tenancy). |
+| 📐 [`specs/netbox-discovery.md`](../specs/netbox-discovery.md) | Design for the **opt-in Diode/orb-agent discovery** agent. |
+| 📖 [`clusters/centralized_dns/README.md`](../clusters/centralized_dns/README.md) | The lab's **quick-reference** card for the AdGuard Home + Unbound DNS hub. |
+| 📘 [`clusters/centralized_dns/USAGE.md`](../clusters/centralized_dns/USAGE.md) | The lab's **detailed how-to-use guide**. |
+| 🔑 [`clusters/centralized_dns/DEFAULT_PASSWORDS.md`](../clusters/centralized_dns/DEFAULT_PASSWORDS.md) | Dev-default AdGuard admin credentials. |
+| 📐 [`specs/centralized_dns.md`](../specs/centralized_dns.md) | Full **design rationale** for the AdGuard Home + Unbound DNS lab. |
+| 📐 [`specs/cross-cluster.md`](../specs/cross-cluster.md) | Cross-cluster **hub-ordering design** (logs, metrics, DNS, CA in `up-connected`). |
+| 📅 [`specs/dns-dashboards.md`](../specs/dns-dashboards.md) | Planned design for AdGuard/Unbound **Grafana dashboards** — not yet built. |
 | 🤖 [`CLAUDE.md`](../CLAUDE.md) | Repo conventions and `.claude/` automation guidance. |
 | ⚙️ [`Justfile`](../Justfile) | Every orchestration recipe (`init`/`plan`/`up`/`down`/`check`/`verify`/`status`/`ssh`/`logs`). |
 | ✅ [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | Hermetic CI — auto-discovers every `clusters/<name>/` folder. |
@@ -110,6 +131,99 @@ dashboards fill.
 📥 [openobserve](../specs/openobserve.md) ·
 🐝 [locustio](../specs/locustio.md)
 
-> _New labs land as new `clusters/<name>/` folders, each with its own `README.md` + `USAGE.md`.
-> Add a section here and a row to the [root README labs table](../README.md#labs) when you
-> introduce one._
+### centralized_k0s
+
+A `just`-orchestrated, multi-node k0s Kubernetes cluster (k0sctl-formed, etcd-backed) that levels
+up the single-node k0s embedded in `centralized_monitoring`/`centralized_logging` into its own
+tunable-topology lab cluster. Default topology is **no HA** — 1 controller + 2 workers (3 VMs,
+single-member etcd); an opt-in HA mode (3 controllers + 3 workers + an HAProxy edge, 7 VMs total,
+3-member etcd quorum) is a stand-alone deployment, not part of `just up-connected`. It has no
+Grafana/Prometheus UI of its own — it's a compute cluster, not an observability stack.
+
+| VM | Role | Sizing |
+|----|------|--------|
+| `centralized-k0s-controller` | etcd + control plane + kubelet/cAdvisor via `--enable-worker` (control-plane taint kept) | 3 vCPU / 3G / 20G |
+| `centralized-k0s-worker-1` / `-2` | schedulable workload nodes | 2 vCPU / 4G / 30G |
+| `centralized-k0s-haproxy` (HA opt-in only) | L4 passthrough edge for 6443/8132/9443 + `:8405` exporter | 1 vCPU / 1G / 10G |
+
+**Docs:** ⚙️ [feature-flags](../clusters/centralized_k0s/docs/feature-flags.md) ·
+📐 [spec](../specs/centralized_k0s.md) ·
+📐 [build-plans](../specs/centralized_k0s/build-plans/) —
+(no dedicated README/USAGE yet — see the spec above)
+
+### centralized_pki
+
+The lab's internal CA (step-ca) plus a Traefik instance that fronts Authelia (SSO forward-auth)
+and Vaultwarden. Beyond its own two services, this Traefik additively doubles as the **fleet-wide
+reverse-proxy edge** for clusters without their own hostname+TLS story (`centralized_netbox`,
+`centralized_dns`'s AdGuard UI, `centralized_logging`'s Coroot UI).
+
+| VM | Role | Sizing |
+|----|------|--------|
+| `centralized-pki-ca` | step-ca root/intermediate CA (`:9000`) | 1 vCPU / 1G / 10G |
+| `centralized-pki-services` | Traefik (`:80/:443/:8080`) fronting Authelia + Vaultwarden; fleet-edge reverse proxy | 2 vCPU / 4G / 25G |
+
+**Docs:** 📖 [README](../clusters/centralized_pki/README.md) ·
+📘 [USAGE](../clusters/centralized_pki/USAGE.md) ·
+🔑 [DEFAULT_PASSWORDS](../clusters/centralized_pki/DEFAULT_PASSWORDS.md) ·
+📐 [spec](../specs/centralized_pki.md) ·
+📐 [pki-and-dns](../specs/pki-and-dns.md) ·
+📐 [dynamic-traefik](../specs/dynamic-traefik.md)
+
+### centralized_unifi
+
+A version-exact simulation of a UniFi homelab's log plane: two VMs reproducing the USG (rsyslog
+5.8.11, emulated amd64 — wheezy has no arm64 port) forwarding syslog to the UCK Gen2 Controller
+(syslog-ng 3.28.1, native arm64), with a Prometheus exporter on the collector. This is a
+**log-pipeline-only** lab — there are no human-facing dashboards (`core` is explicitly empty).
+
+| VM | Role | Sizing |
+|----|------|--------|
+| `centralized-unifi-usg` | USG / forwarder — rsyslog 5.8.11 in a container, forwards syslog via UDP/514 | 2 vCPU / 2G / 15G |
+| `centralized-unifi-controller` | UCK Gen2 / collector — syslog-ng 3.28.1 in a container + `syslog_ng_exporter` (`:9577`) | 2 vCPU / 2G / 20G |
+
+**Docs:** 📖 [README](../clusters/centralized_unifi/README.md) ·
+📐 [spec](../specs/centralized_unifi.md) —
+(no USAGE.md or docs/ dir yet — see the spec above)
+
+### centralized_netbox
+
+A NetBox DCIM/IPAM server plus a client VM that self-registers into it via the REST API on first
+boot. An opt-in Diode/orb-agent discovery agent (`enable_discovery`, off by default) scans the
+Multipass subnet and ingests results into NetBox over gRPC. NetBox is deliberately pinned to
+**4.1** (not latest) so the API token stays a settable v1 plaintext value.
+
+| VM | Role | Sizing |
+|----|------|--------|
+| `centralized-netbox-server` | netbox-docker stack (NetBox + worker + housekeeping + postgres + redis) | 2 vCPU / 4G / 20G |
+| `centralized-netbox-client` | Minimal test VM — self-registers as a Virtual Machine on first boot | 1 vCPU / 1G / 10G |
+| `centralized-netbox-agent` (opt-in, `enable_discovery`) | `orb-agent` subnet discovery → Diode ingestion | 1 vCPU / 1G / 10G |
+
+**Docs:** 📐 [spec](../specs/centralized_netbox.md) ·
+📐 [cli-netbox](../specs/cli-netbox.md) ·
+📐 [netbox-data](../specs/netbox-data.md) ·
+📐 [netbox-discovery](../specs/netbox-discovery.md) —
+(no dedicated README/USAGE yet — see the specs above)
+
+### centralized_dns
+
+A single VM running AdGuard Home (`:53`) over a recursive Unbound resolver (`127.0.0.1:5335`),
+both host-level under systemd — the network-wide ad-blocking DNS resolver. It's also a
+**cross-cluster hub**: it comes up FIRST in `just up-connected` so every other VM can point its
+resolver at it from first boot.
+
+| VM | Role | Sizing |
+|----|------|--------|
+| `centralized-dns-server` | AdGuard Home (`0.0.0.0:53`, UI/API `:3000`) + Unbound (`127.0.0.1:5335`) | 2 vCPU / 2G / 20G |
+
+**Docs:** 📖 [README](../clusters/centralized_dns/README.md) ·
+📘 [USAGE](../clusters/centralized_dns/USAGE.md) ·
+🔑 [DEFAULT_PASSWORDS](../clusters/centralized_dns/DEFAULT_PASSWORDS.md) ·
+📐 [spec](../specs/centralized_dns.md) ·
+📐 [cross-cluster](../specs/cross-cluster.md) ·
+📐 [pki-and-dns](../specs/pki-and-dns.md) ·
+📅 [dns-dashboards (planned)](../specs/dns-dashboards.md)
+
+> _New labs land as new `clusters/<name>/` folders, each with its own `README.md` + `USAGE.md`
+> where applicable. Add a section here and a row to the
+> [root README labs table](../README.md#labs) when you introduce one._

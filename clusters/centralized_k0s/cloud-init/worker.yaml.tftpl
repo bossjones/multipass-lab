@@ -1,0 +1,297 @@
+#cloud-config
+# k0s WORKER node — OS PREP ONLY (spec § "Cluster bootstrap" + § "Boot-race hardening").
+# This cloud-init runs NO `k0s install`, NO `k0s start`, and NO API-dependent step (no
+# `k0s kubectl .../readyz`, no KSM/ingress/kubeconfig) — copying the single-node monitoring
+# template would drag in an `until .../readyz; do sleep 5; done` against a cluster that does not
+# exist yet → the canonical infinite cloud-init hang (`multipass launch` never returns). k0sctl
+# (post-apply `terraform_data.k0s_bootstrap`) forms the cluster; here we only lay down the k0s
+# BINARY, CA trust, tooling, exporters, Netdata, and Vector so k0sctl has a ready host.
+#
+# 300s launch window: `package_upgrade` is OFF and every heavy install (tools/exporters/netdata/
+# vector) runs post-boot in the k0s-nodeprep.service oneshot (--no-block) so cloud-init reaches
+# `done` fast. Recovery for a launch timeout is `just prune` / `just recreate` (see CLAUDE.md).
+package_update: true
+package_upgrade: false
+
+${ntp_timesync}
+
+packages:
+  - curl
+  - tar
+  - vim
+  - htop
+  - jq
+  - ccze
+  - zsh
+  - git
+
+ssh_authorized_keys:
+  - ${ssh_pubkey}
+
+write_files:
+  # Generic exporter installer: download a GitHub release (tar.gz or raw binary), drop the binary
+  # in /usr/local/bin, install + enable a systemd unit. {ARCH} in the URL is replaced with the
+  # host's Debian arch (arm64/amd64). Mirrors the other clusters' install pattern.
+  - path: /usr/local/sbin/install-exporter.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      name="$1"; url="$2"; bin="$3"; shift 3; args="$*"
+      arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+      case "$arch" in aarch64) arch=arm64 ;; x86_64) arch=amd64 ;; esac
+      url="$${url//\{ARCH\}/$arch}"
+      tmp="$(mktemp -d)"
+      curl -sSLf "$url" -o "$tmp/dl"
+      if tar -tzf "$tmp/dl" >/dev/null 2>&1; then
+        tar -xzf "$tmp/dl" -C "$tmp"
+        found="$(find "$tmp" -type f -name "$bin" | head -n1)"
+      else
+        found="$tmp/dl"
+      fi
+      install -m0755 "$found" "/usr/local/bin/$name"
+      cat >/etc/systemd/system/$name.service <<UNIT
+      [Unit]
+      Description=$name
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      ExecStart=/usr/local/bin/$name $args
+      Restart=always
+      RestartSec=5
+      [Install]
+      WantedBy=multi-user.target
+      UNIT
+      systemctl daemon-reload
+      systemctl enable --now "$name"
+
+  # Debug/ops CLI installer: same arch/{ARCH} handling as install-exporter.sh, minus the systemd
+  # unit — kubectl/helm/k9s/stern/etcdctl are CLIs, not daemons.
+  - path: /usr/local/sbin/install-cli.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      name="$1"; url="$2"; bin="$3"
+      arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+      case "$arch" in aarch64) arch=arm64 ;; x86_64) arch=amd64 ;; esac
+      url="$${url//\{ARCH\}/$arch}"
+      tmp="$(mktemp -d)"
+      curl -sSLf "$url" -o "$tmp/dl"
+      if tar -tzf "$tmp/dl" >/dev/null 2>&1; then
+        tar -xzf "$tmp/dl" -C "$tmp"
+        found="$(find "$tmp" -type f -name "$bin" | head -n1)"
+      else
+        found="$tmp/dl"
+      fi
+      install -m0755 "$found" "/usr/local/bin/$name"
+%{ if enable_netdata ~}
+
+  # Netdata agent (shared snippet) — installed by the k0s-nodeprep oneshot; serves the Prometheus
+  # endpoint on :19999 (/api/v1/allmetrics?format=prometheus). eBPF off on arm64. See specs/shared-netdata.md.
+  - path: /usr/local/sbin/install-netdata.sh
+    permissions: '0755'
+    content: |
+      ${indent(6, netdata_installer)}
+%{ endif ~}
+
+  # process-exporter config: curated groups so multi-process apps aggregate; a final {{.Comm}}
+  # catch-all keeps the long tail as one bounded group per command (empty groups pruned at runtime
+  # via -remove-empty-groups). exe matches the argv[0] basename.
+  - path: /etc/process-exporter/all.yaml
+    permissions: '0644'
+    content: |
+      process_names:
+        - name: container-runtime
+          exe: [ containerd, containerd-shim-runc-v2, runc ]
+        - name: kubernetes
+          exe: [ k0s, kubelet, kube-router, kube-proxy ]
+        - name: observability
+          exe: [ vector, netdata ]
+        - name: "{{.Comm}}"
+          cmdline:
+            - '.+'
+
+  # Vector agent config (CONTENT owned by the vector agent; this node just places + runs it). One
+  # Vector per node: journald -> socket/syslog to centralized_logging; /var/log/pods -> VRL path-parse
+  # -> OpenObserve http sink (+ syslog archival copy). All-empty ship-vars => Vector ships nowhere.
+  - path: /etc/vector/vector.toml
+    permissions: '0644'
+    content: |
+      ${indent(6, vector_config)}
+
+  # Post-boot node prep — heavy installs moved OFF the 300s launch path into this oneshot.
+  - path: /usr/local/sbin/k0s-nodeprep.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      # Post-boot node prep for centralized_k0s (OS-prep ONLY — NO k0s install/start, NO API step).
+      # Runs via k0s-nodeprep.service (Type=oneshot, --no-block) so cloud-init finishes inside the
+      # 300s Multipass launch window. Re-gates DNS first (the --no-block start races systemd-resolved),
+      # then every network fetch is a BOUNDED retry (never an unbounded `until`). Drops the readiness
+      # marker /var/lib/k0s-nodeprep/done at the end (testinfra + fixtures poll it).
+      set -uo pipefail
+
+      # Bounded retry wrapper: 5 attempts, 5s apart; nonzero if all fail (callers stay best-effort).
+      retry() { for i in $(seq 1 5); do "$@" && return 0; echo "attempt $i failed: $*"; sleep 5; done; return 1; }
+
+      # Re-gate DNS: the --no-block start can beat systemd-resolved. Bounded wait on the hosts we hit.
+      systemctl restart systemd-resolved || true
+      for h in dl.k8s.io get.helm.sh github.com raw.githubusercontent.com get.netdata.cloud; do
+        for i in $(seq 1 30); do getent hosts "$h" >/dev/null 2>&1 && break; sleep 2; done
+      done
+
+      # --- CLI tooling (unconditional on every node) -> /usr/local/bin ---------------------------
+      retry /usr/local/sbin/install-cli.sh kubectl https://dl.k8s.io/release/v1.34.9/bin/linux/{ARCH}/kubectl kubectl || true
+      retry /usr/local/sbin/install-cli.sh helm https://get.helm.sh/helm-v3.21.2-linux-{ARCH}.tar.gz helm || true
+      retry /usr/local/sbin/install-cli.sh k9s https://github.com/derailed/k9s/releases/download/v0.51.0/k9s_Linux_{ARCH}.tar.gz k9s || true
+      retry /usr/local/sbin/install-cli.sh stern https://github.com/stern/stern/releases/download/v1.34.0/stern_1.34.0_linux_{ARCH}.tar.gz stern || true
+      retry /usr/local/sbin/install-cli.sh etcdctl https://github.com/etcd-io/etcd/releases/download/v3.6.12/etcd-v3.6.12-linux-{ARCH}.tar.gz etcdctl || true
+
+      # --- oh-my-zsh (unattended) + zsh completions, as ubuntu -----------------------------------
+      retry curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh -o /tmp/omz-install.sh || true
+      chmod 0644 /tmp/omz-install.sh 2>/dev/null || true
+      if [ -s /tmp/omz-install.sh ] && [ ! -d /home/ubuntu/.oh-my-zsh ]; then
+        su - ubuntu -c 'RUNZSH=no CHSH=no KEEP_ZSHRC=yes sh /tmp/omz-install.sh --unattended' || true
+      fi
+      chsh -s "$(command -v zsh)" ubuntu 2>/dev/null || true
+      ZC=/home/ubuntu/.oh-my-zsh/completions
+      mkdir -p "$ZC"
+      command -v kubectl >/dev/null 2>&1 && kubectl completion zsh > "$ZC/_kubectl" 2>/dev/null || true
+      command -v helm    >/dev/null 2>&1 && helm completion zsh    > "$ZC/_helm"    2>/dev/null || true
+      command -v k9s     >/dev/null 2>&1 && k9s completion zsh      > "$ZC/_k9s"     2>/dev/null || true
+      command -v stern   >/dev/null 2>&1 && stern --completion=zsh  > "$ZC/_stern"   2>/dev/null || true
+      command -v etcdctl >/dev/null 2>&1 && etcdctl completion zsh  > "$ZC/_etcdctl" 2>/dev/null || true
+      command -v k0s     >/dev/null 2>&1 && k0s completion zsh      > "$ZC/_k0s"     2>/dev/null || true
+      chown -R ubuntu:ubuntu /home/ubuntu/.oh-my-zsh 2>/dev/null || true
+
+      # --- Host exporters (everywhere): node :9100, systemd :9558, process :9256 -----------------
+      # Workers carry the host exporter set only — no cAdvisor/kubelet-RO/etcd metrics (those are the
+      # controllers' concern; on workers cAdvisor/kubelet metrics ride the kubelet k0sctl enables).
+      retry /usr/local/sbin/install-exporter.sh node_exporter https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-{ARCH}.tar.gz node_exporter --collector.systemd || true
+      retry /usr/local/sbin/install-exporter.sh systemd_exporter https://github.com/prometheus-community/systemd_exporter/releases/download/v0.7.0/systemd_exporter-0.7.0.linux-{ARCH}.tar.gz systemd_exporter --web.listen-address=:9558 --systemd.collector.unit-include='(ssh|containerd|k0s.*|kube.*|vector|netdata|.*[-_]exporter|cadvisor)[.]service' --systemd.collector.enable-restart-count || true
+      retry /usr/local/sbin/install-exporter.sh process-exporter https://github.com/ncabatoff/process-exporter/releases/download/v0.8.7/process-exporter-0.8.7.linux-{ARCH}.tar.gz process-exporter --config.path=/etc/process-exporter/all.yaml -threads=false -gather-smaps=false -remove-empty-groups || true
+%{ if enable_netdata ~}
+
+      # --- Netdata agent :19999 (opt-in; eBPF off on arm64). Idempotent; self-gates on DNS. -------
+      /usr/local/sbin/install-netdata.sh || true
+%{ endif ~}
+
+      # --- Vector log agent — ALWAYS installed (collection is always on; sinks fall back to a local
+      # blackhole when no ship target is wired — the vector agent owns config content). We place the
+      # binary + run it. journald->syslog to centralized_logging; /var/log/pods->OpenObserve when wired.
+      if ! command -v vector >/dev/null 2>&1; then
+        varch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+        case "$varch" in arm64|aarch64) varch=aarch64 ;; amd64|x86_64) varch=x86_64 ;; esac
+        for i in $(seq 1 5); do
+          curl -sSLf "https://github.com/vectordotdev/vector/releases/download/v0.44.0/vector-0.44.0-$varch-unknown-linux-gnu.tar.gz" -o /tmp/vector.tar.gz && break
+          echo "vector download attempt $i failed"; sleep 5
+        done
+        if [ -s /tmp/vector.tar.gz ]; then
+          tar -xzf /tmp/vector.tar.gz -C /tmp
+          vbin="$(find /tmp -type f -name vector -path '*/bin/*' | head -n1)"
+          [ -n "$vbin" ] && install -m0755 "$vbin" /usr/local/bin/vector
+        fi
+      fi
+      mkdir -p /var/lib/vector
+      if command -v vector >/dev/null 2>&1; then
+        cat >/etc/systemd/system/vector.service <<'UNIT'
+      [Unit]
+      Description=Vector log agent (centralized_k0s)
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      ExecStart=/usr/local/bin/vector --config /etc/vector/vector.toml
+      Restart=always
+      RestartSec=5
+      [Install]
+      WantedBy=multi-user.target
+      UNIT
+        systemctl daemon-reload
+        systemctl enable --now vector || true
+      fi
+
+      # --- Readiness marker (testinfra + fixtures poll this) -------------------------------------
+      mkdir -p /var/lib/k0s-nodeprep
+      touch /var/lib/k0s-nodeprep/done
+
+  - path: /etc/systemd/system/k0s-nodeprep.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=centralized_k0s post-boot node prep (tooling, exporters, netdata, vector)
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/k0s-nodeprep.sh
+      RemainAfterExit=yes
+      TimeoutStartSec=0
+      [Install]
+      WantedBy=multi-user.target
+%{ if dns_server != "" ~}
+
+  # Cross-cluster DNS — resolve through the centralized_dns AdGuard Home hub. See specs/cross-cluster.md.
+  - path: /etc/systemd/resolved.conf.d/99-centralized-dns.conf
+    permissions: '0644'
+    content: |
+      ${indent(6, dns_resolved_conf)}
+%{ endif ~}
+%{ if ntp_server != "" ~}
+
+  # Internal NTP source — point systemd-timesyncd at the lab NTP server (shared snippet). See specs/shared-ntp.md.
+  - path: /etc/systemd/timesyncd.conf.d/99-centralized-ntp.conf
+    permissions: '0644'
+    content: |
+      ${indent(6, ntp_conf)}
+%{ endif ~}
+%{ if internal_ca_cert != "" ~}
+
+  # Fleet-wide trust — the internal root CA, installed into the OS trust store by a runcmd. See specs/internal-ca.md.
+  - path: /usr/local/share/ca-certificates/internal-root-ca.crt
+    permissions: '0644'
+    content: |
+      ${indent(6, internal_ca_cert)}
+%{ endif ~}
+
+runcmd:
+  # Enforce UTC late: Multipass injects the host timezone during first boot and can beat the
+  # declarative `timezone:` key above; runcmd runs after config modules, so it wins. See specs/ntp.md.
+  - timedatectl set-timezone Etc/UTC
+%{ if ntp_server != "" ~}
+  # Internal NTP source — apply the timesyncd drop-in written above. See specs/shared-ntp.md.
+  - systemctl restart systemd-timesyncd
+%{ endif ~}
+  # UNCONDITIONAL resolver warm-up gate (spec § "Boot-race hardening"): restart resolved (applies the
+  # AdGuard drop-in when dns_server is set; harmless otherwise), then BLOCK until the hosts the k0s
+  # binary install actually hits resolve. runcmd is /bin/sh with no `set -e`, so a first-boot DNS race
+  # would otherwise fail `curl https://get.k0s.sh` silently. Bounded (never an unbounded `until`).
+  - systemctl restart systemd-resolved
+  - |
+    for h in get.k0s.sh github.com raw.githubusercontent.com get.helm.sh; do
+      for i in $(seq 1 30); do getent hosts "$h" >/dev/null 2>&1 && break; sleep 2; done
+    done
+  # k0s-api stable endpoint — resolve k0s-api.<domain> WITHOUT the DNS hub. A plain `just up` never
+  # registers DNS (that's set-dns-all in up-connected) and the worker join token targets this hostname,
+  # so add an /etc/hosts fallback pointing at controller-1's ipv4 (k0s_api_ip — runtime-IP-injected by
+  # core into the worker render). Idempotent (guard against a duplicate line on re-run).
+  - |
+    grep -q "${k0s_api_host}" /etc/hosts || echo "${k0s_api_ip} ${k0s_api_host}" >> /etc/hosts
+%{ if internal_ca_cert != "" ~}
+  # Fleet-wide trust — install the internal root CA into the OS trust store. See specs/internal-ca.md.
+  - update-ca-certificates
+%{ endif ~}
+  # Pinned k0s BINARY only (bounded retry) — NO `k0s install`, NO `k0s start`, NO API/readyz wait.
+  # k0sctl forms the cluster post-apply; the binary just needs to be present for it. See spec.
+  - |
+    for i in $(seq 1 5); do
+      curl -sSLf https://get.k0s.sh | K0S_VERSION=${k0s_version} sh && break
+      echo "k0s binary download attempt $i failed; retrying"; sleep 5
+    done
+  # Heavy tooling/exporters/netdata/vector run post-boot (oneshot, --no-block) so cloud-init reaches
+  # `done` inside the 300s launch window. The oneshot re-gates DNS itself (it races the resolver).
+  - systemctl daemon-reload
+  - systemctl enable k0s-nodeprep.service
+  - systemctl start --no-block k0s-nodeprep.service
+
+final_message: "k0s worker OS prep done — k0sctl forms the cluster post-apply (k0s binary present, NOT installed as a service)"
