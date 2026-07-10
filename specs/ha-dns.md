@@ -224,10 +224,35 @@ IMPORTANT: Execute every step in order, top to bottom.
 
 - Manually (or via a scratch `.auto.tfvars`) launch two Ubuntu Multipass VMs on the same
   subnet as today's DNS VM.
+- **Start a live background tail on both scratch VMs BEFORE installing keepalived** — first
+  boot is the rockiest part of this whole plan, so watch it from the start, not after something
+  breaks. These are throwaway VMs with no tofu `hosts` output and no `centralized_dns` Justfile
+  recipe yet, so reach them by raw `ssh` (same flags `tools/_system_debug_core.SSH_OPTS` uses),
+  not `just tail-log`:
+  ```bash
+  ip_a=$(multipass info dns-spike-a --format json | jq -r '.info["dns-spike-a"].ipv4[0]')
+  ip_b=$(multipass info dns-spike-b --format json | jq -r '.info["dns-spike-b"].ipv4[0]')
+  ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+      -o ConnectTimeout=8 -o BatchMode=yes -i ~/.ssh/id_ed25519 ubuntu@"$ip_a" \
+      'sudo journalctl -f -o short-iso -p warning' > scratchpad/dns-spike-a.log 2>&1
+  ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+      -o ConnectTimeout=8 -o BatchMode=yes -i ~/.ssh/id_ed25519 ubuntu@"$ip_b" \
+      'sudo journalctl -f -o short-iso -p warning' > scratchpad/dns-spike-b.log 2>&1
+  ```
+  (Bash tool, `run_in_background: true` for each.)
 - On each, `apt install -y keepalived`, drop a **unicast** `keepalived.conf` (MASTER/BACKUP,
   shared `virtual_router_id`, `unicast_src_ip`/`unicast_peer` = the two node IPs,
   `virtual_ipaddress <candidate VIP in the Multipass subnet>`), `systemctl enable --now
   keepalived`.
+- Periodically grep both tails against the centralized signature list (never hand-copy it):
+  `grep -iE "$(uv run tools/print_signatures.py)" scratchpad/dns-spike-*.log`. Any hit is a
+  stop-and-look signal — don't wait for the "Verify" steps below to notice it first.
+- **Stall check** (a silent `until … sleep` gate looks identical to healthy-but-slow to a
+  point-in-time check — see "Live provisioning watch" in Testing Strategy): if a tail goes
+  quiet for **> 90s** (`age=$(( $(date +%s) - $(date -r scratchpad/dns-spike-a.log +%s) ))`)
+  while `cloud-init status --long` still shows work outstanding (or, once keepalived is dropped
+  in, `systemctl status keepalived` isn't yet active), ssh in and check
+  `ps -o pid,ppid,args -ax | grep -E 'runcmd|sleep'` rather than continuing to wait.
 - **Verify, in order:**
   1. `ip addr` on MASTER shows the VIP; on BACKUP it does not.
   2. **From the Mac host**, `dig @<VIP> example.com` succeeds (install a throwaway resolver
@@ -369,6 +394,11 @@ locals {
     (`tofu output -json hosts` → per-node `:9100/:9618/:9167`).
   - Add `just dns-failover-test centralized_dns` (kills AdGuard on the VIP holder over SSH,
     asserts the VIP moves + still resolves) and `just dns-sync-status centralized_dns`.
+  - Add `just tail-log CLUSTER ROLE` (generalizes the existing `logs-k0s`/`logs-k0s-worker`
+    hardcoded recipes into one parameterized live journal tail, using the shared
+    `{{ssh_opts}}`/`{{ssh_key}}` — `logs-k0s`/`logs-k0s-worker` stay as-is, kept independently
+    available for quick k0s feedback loops). Step 12's live HA bring-up backgrounds this per
+    node before `just recreate`; see "Live provisioning watch" in Testing Strategy.
 
 ### 8. HA-aware CLI commands
 
@@ -427,6 +457,27 @@ locals {
 - `uvx ruff check clusters/centralized_dns/scripts/*.py`; CLI hermetic suites
   (`tests/adguard`, `tests/unbound`, `tests/dns_common`).
 - Live single-mode: `just up centralized_dns && just verify centralized_dns` (unchanged).
+- **Before `just recreate`, start the live tail — first-class step, not an afterthought.** This
+  is the single most failure-prone bring-up in the plan (VRRP-on-Multipass-NAT, the
+  AdGuard-answering-before-keepalived-starts ordering gate, the arch-aware AdGuardHome-Sync
+  binary fetch), so watch it live from the first `apply`, not after `just verify` goes red:
+  ```bash
+  just tail-log centralized_dns primary   > scratchpad/dns-primary.log   2>&1
+  just tail-log centralized_dns secondary > scratchpad/dns-secondary.log 2>&1
+  ```
+  (Bash tool, `run_in_background: true` for each.) Then run `just recreate centralized_dns`.
+  While it provisions, periodically:
+  ```bash
+  grep -iE "$(uv run tools/print_signatures.py)" scratchpad/dns-{primary,secondary}.log
+  ```
+  Treat any hit as stop-and-look, checked **during** provisioning. If a log goes quiet for
+  **> 90s** while `uv run tools/system_debug.py centralized_dns --json` still shows
+  `cloud_init_status: running` with no failed units/signatures, suspect the silent
+  `until … sleep` wait-loop rather than assuming it's still working — `just ssh centralized_dns
+  primary` (or `secondary`) then `ps -o pid,ppid,args -ax | grep -E 'runcmd|sleep'`.
+  The two tails should show `keepalived[…]: VRRP_Instance(VI_DNS) Entering MASTER STATE` on
+  `primary` and `BACKUP STATE` on `secondary` before proceeding past `just verify` to
+  `just dns-failover-test` — if not, stop and look rather than continuing the sequence.
 - Live HA: set `enable_ha=true`/`vip_address` (throwaway `.auto.tfvars`) → `just recreate
   centralized_dns` → `just verify centralized_dns` (failover + sync tests pass) →
   `just dns-failover-test centralized_dns`.
@@ -455,6 +506,31 @@ VIP — the Task 1 spike must confirm advertisements actually flow, else split-b
 failure mode); AdGuardHome-Sync overwriting a hand-edit on `secondary` (documented: edit
 `primary` only); sync version/schema drift between AdGuard versions on the two nodes (pin the
 same AdGuard version on both — they boot from the identical seed).
+
+### Live provisioning watch (complements, doesn't replace, the snapshot tools)
+
+`tools/system_debug.py` is a **point-in-time** snapshot: a node stuck in a silent `until …
+sleep` wait-loop (`triage-patterns` Example 4b — an early oneshot install failed under plain
+`/bin/sh` with no `set -e`, so a later gate spins forever) reports `cloud-init: running`, no
+failed units, no signature hits — indistinguishable from healthy-but-slow. A **live** tail is
+the only thing that can tell "still working" from "silently stuck forever," because it sees log
+*cadence* over time, not one snapshot.
+
+- Start it **before** the Task 1 spike's VM launch / Step 12's `just recreate`, not after a
+  failure surfaces.
+- Mechanism: `just tail-log <cluster> <role>` (Step 12) or the equivalent raw `ssh … sudo
+  journalctl -f -o short-iso -p warning` (Task 1, pre-cluster), backgrounded (Bash
+  `run_in_background: true`) into `scratchpad/<cluster>-<role>.log`.
+- Detection reuses `tools/_system_debug_core.SIGNATURES` via `tools/print_signatures.py` — no
+  second hardcoded string list to drift out of sync.
+- Stall detection: log-file mtime age (`date +%s` minus `date -r <file> +%s`) **> 90s** while
+  `uv run tools/system_debug.py <cluster> [role] --json` still shows `cloud_init_status:
+  running` with empty `failed_units`/`signature_hits` → suspect the silent wait-loop, ssh in and
+  check `ps -o pid,ppid,args -ax | grep -E 'runcmd|sleep'` rather than continuing to wait.
+- Not a replacement for `system_debug.py` / `triage-logs` / testinfra — it's what catches a
+  problem *while `just recreate` is still running*, so those tools have a live-verified fact to
+  check against instead of a cold trail once `just verify` finally reports it. Implements the
+  "Background journalctl monitor" TODO in `specs/pki-and-dns.md`.
 
 ## Acceptance Criteria
 
@@ -510,6 +586,15 @@ same AdGuard version on both — they boot from the identical seed).
 - **Split-brain is the failure mode if VRRP advertisements don't flow** (both nodes think
   they're MASTER, both raise the VIP). The Task 1 spike's failover test (stop MASTER → VIP
   moves, restart → exactly one holder) is what proves advertisements actually reach the peer.
+- **Background live tail is first-class from the start of bring-up, not reached for only after
+  a failure:** for the first few iterations of both Task 1's spike and Step 12's live
+  `recreate`, start the tail (`just tail-log centralized_dns primary`/`secondary`, or raw `ssh …
+  journalctl -f` pre-cluster) **before** kicking off provisioning, backgrounded to
+  `scratchpad/`. Mirrors the manual `logs-k0s`/`logs-k0s-worker` + `scratchpad/{ctl,wrk}.log`
+  workflow already used for the k0s HA bring-up (`.team/centralized_k0s.backlog.md`) and closes
+  out the documented-but-never-implemented TODO in `specs/pki-and-dns.md`. Grep it against
+  `tools/print_signatures.py`'s output, never a hand-copied signature list. See "Testing
+  Strategy → Live provisioning watch."
 - **Secrets:** `vrrp_auth_pass` and the AdGuard admin password are **dev-throwaway lab**
   values (same posture as the existing AdGuard creds / NetBox token). Override via `TF_VAR_*`
   for anything real; regenerate the bcrypt seed hash when changing the AdGuard password.

@@ -1065,3 +1065,12 @@ logs-k0s:
 logs-k0s-worker:
   @ip=$(tofu -chdir=clusters/centralized_k0s output -json hosts | jq -r '."worker-1".ipv4'); \
    ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519 ubuntu@"$ip" sudo journalctl -f
+
+# generalized live journal tail for any cluster/role — background it (redirect to scratchpad/<cluster>-<role>.log)
+# and grep against `uv run tools/print_signatures.py` to catch provisioning errors early, per specs/pki-and-dns.md
+# and specs/ha-dns.md's "Live provisioning watch" (fixes logs-k0s/logs-k0s-worker's missing ConnectTimeout/BatchMode —
+# those two stay as-is for now, kept independently available for quick k0s feedback loops):
+#   just tail-log centralized_dns primary
+tail-log CLUSTER ROLE:
+  @ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.{{ROLE}}.ipv4'); \
+   ssh -n {{ssh_opts}} -o BatchMode=yes -i {{ssh_key}} ubuntu@"$ip" 'sudo journalctl -f -o short-iso -p warning'
