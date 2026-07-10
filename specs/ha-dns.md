@@ -1,8 +1,39 @@
 # Plan: High-Availability mode for `centralized_dns` (keepalived VIP + AdGuardHome-Sync)
 
-Status: **planned** · Task type: **feature** · Complexity: **complex**
+Status: **implemented (code + hermetic tests); live VIP feasibility spike + live bring-up still
+TODO** · Task type: **feature** · Complexity: **complex**
 Extends: `specs/centralized_dns.md` (single-VM AdGuard Home + Unbound cluster)
 Repo precedent to mirror: `centralized_k0s` opt-in etcd-quorum HA behind an HAProxy edge (`specs/centralized_k0s.md`)
+
+**Implementation note (read before touching `main.tf`):** two parts of this plan's original
+"Solution Approach" (items 2–3, 5–6) turned out to be unsound against how OpenTofu actually
+resolves state addresses and dependency cycles, and were corrected during implementation:
+
+1. **`multipass_instance.server` was NOT converted to a unified `for_each` keyed by role.**
+   Doing so changes its state address even when `enable_ha` stays `false` (OpenTofu tracks
+   resources by address, not by the `name` attribute), which would destroy/recreate every
+   existing deployment's DNS VM. Instead `multipass_instance.server` (+ `local_file.server_ci`)
+   stays its own resource, gated `count = local.ha ? 0 : 1`, migrated in place with `moved`
+   blocks; HA nodes are a wholly separate `multipass_instance.node` (`for_each`) resource —
+   mirrors `centralized_k0s`'s dedicated `haproxy` resource, not a single unified fan-out.
+2. **Neither the keepalived `unicast_peer` NOR the AdGuardHome-Sync `secondary_ip` reference is
+   baked into `node_ci`'s first-boot cloud-init render.** A `for_each` resource
+   (`local_file.node_ci`) referencing another `for_each` resource (`multipass_instance.node`) by
+   a sibling key is treated as a **whole-resource cycle** by OpenTofu's graph analysis
+   (confirmed via `tofu validate`) — even where only one direction is actually referenced per
+   instance (e.g. AdGuardHome-Sync's primary→secondary reference). Both are deferred to
+   standalone post-apply resources (`local_file.keepalived_peer_conf` /
+   `terraform_data.keepalived_peer_push`, and `local_file.adguardhome_sync_conf` /
+   `terraform_data.adguardhome_sync_push`), rendered and pushed over SSH only after both nodes
+   exist — mirroring `centralized_k0s`'s `terraform_data.k0s_bootstrap` post-apply idiom. First
+   boot installs keepalived + the health script (peer-less) and the AdGuardHome-Sync binary +
+   unit (config-less) but does not start either; the post-apply push writes the real config and
+   starts each service for the first time.
+
+The rest of the plan below (variables, keepalived config shape, health probe, AdGuardHome-Sync
+config, Justfile rewiring, CLI changes, test structure, docs) stands as designed. Everything
+except the Task 1 live feasibility spike and Task 12's live bring-up/failover test has been
+implemented; those two remain for a live Multipass run.
 
 ## Task Description
 

@@ -13,6 +13,35 @@ def test_parse_tofu_output_extracts_ip_and_flags():
     assert flags == {"enable_node_exporter", "enable_adguard_exporter"}
 
 
+def test_parse_tofu_output_prefers_dns_endpoint_over_server_ipv4():
+    # HA mode: dns_endpoint (the VIP) must win over the legacy server_ipv4 output.
+    doc = {
+        "server_ipv4": {"value": None},
+        "dns_endpoint": {"value": "10.10.10.99"},
+        "enabled_flags": {"value": []},
+    }
+    ip, _flags = dc.parse_tofu_output(doc)
+    assert ip == "10.10.10.99"
+
+
+def test_parse_hosts_and_is_ha():
+    single = {"hosts": {"value": {"server": {"name": "x", "ipv4": "10.0.0.1"}}}}
+    assert dc.parse_hosts(single) == {"server": {"name": "x", "ipv4": "10.0.0.1"}}
+    assert dc.is_ha(single) is False
+
+    ha = {
+        "hosts": {
+            "value": {
+                "primary": {"name": "p", "ipv4": "10.0.0.2"},
+                "secondary": {"name": "s", "ipv4": "10.0.0.3"},
+            }
+        },
+        "enabled_features": {"value": {"ha": True}},
+    }
+    assert set(dc.parse_hosts(ha)) == {"primary", "secondary"}
+    assert dc.is_ha(ha) is True
+
+
 def test_resolve_target_prefers_explicit_url_and_skips_tofu():
     called = {"n": 0}
 
@@ -32,6 +61,24 @@ def test_resolve_target_from_tofu_builds_url():
     t = dc.resolve_target(port=9167, runner=fake)
     assert t.base_url == "http://10.9.9.9:9167"
     assert t.ip == "10.9.9.9"
+
+
+def test_resolve_target_target_output_override():
+    def fake(_chdir):
+        return {
+            "dns_endpoint": {"value": "10.10.10.99"},
+            "dns_rewrite_target": {"value": "10.0.0.2"},
+            "enabled_flags": {"value": []},
+        }
+
+    # Default (no target_output): dns_endpoint (VIP).
+    t = dc.resolve_target(port=3000, runner=fake)
+    assert t.ip == "10.10.10.99"
+
+    # AdGuard web API / config edits must hit the origin, not the VIP.
+    t = dc.resolve_target(port=3000, runner=fake, target_output="dns_rewrite_target")
+    assert t.ip == "10.0.0.2"
+    assert t.base_url == "http://10.0.0.2:3000"
 
 
 def test_resolve_credentials_precedence():

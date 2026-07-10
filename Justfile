@@ -207,7 +207,9 @@ up-connected:
     jq -n --arg ca "$ca_pem" --argjson ntp "$dns_ntp_json" '{internal_ca_cert: $ca} + $ntp' \
       > {{cluster_root}}/$dns/.cross-cluster.auto.tfvars.json
     just up "$dns" || { echo "FAILED hub: $dns"; rc=1; }
-    dns_ip="$(tofu -chdir={{cluster_root}}/$dns output -raw server_ipv4)"
+    # dns_endpoint = the floating VIP in HA mode (enable_ha=true), else the single server VM's IP —
+    # this is what the FLEET should resolve against either way. See specs/ha-dns.md.
+    dns_ip="$(tofu -chdir={{cluster_root}}/$dns output -raw dns_endpoint)"
     echo "    AdGuard Home resolver: $dns_ip:53"
     # Now that the DNS/NTP hub IP is known, point the fleet's timesyncd at it (INTERNAL_NTP only).
     if [ -n "${INTERNAL_NTP:-}" ]; then
@@ -267,15 +269,19 @@ up-connected:
         | jq --argjson acc "$ndtargets" \
             '$acc + [to_entries[] | {name: .value.name, ip: .value.ipv4}]')"
     done
-    # add the DNS hub's OWN exporters (node :9100, adguard :9618, unbound :9167).
-    targets="$(echo "$targets" | jq --arg ip "$dns_ip" \
-      '. + [{job:"centralized-dns-server",ip:$ip,port:9100},
-            {job:"centralized-dns-adguard",ip:$ip,port:9618},
-            {job:"centralized-dns-unbound",ip:$ip,port:9167}]')"
+    # add the DNS hub's OWN exporters (node :9100, adguard :9618, unbound :9167) — one VM in single
+    # mode, BOTH primary+secondary in HA mode (see specs/ha-dns.md), so Prometheus scrapes both.
+    dns_hosts_json="$(tofu -chdir={{cluster_root}}/$dns output -json hosts 2>/dev/null || echo '{}')"
+    targets="$(echo "$targets" | jq --argjson hosts "$dns_hosts_json" \
+      '. + ($hosts | to_entries | map(.key as $r | .value.ipv4 as $ip |
+            [{job:("centralized-dns-"+$r),ip:$ip,port:9100},
+             {job:("centralized-dns-"+$r+"-adguard"),ip:$ip,port:9618},
+             {job:("centralized-dns-"+$r+"-unbound"),ip:$ip,port:9167}]) | flatten)')"
     # Netdata targets for the hubs the monitoring job doesn't already carry statically: the DNS
-    # server VM + all of the logging hub's VMs (the monitoring hub's own server+k0s are static in
+    # VM(s) + all of the logging hub's VMs (the monitoring hub's own server+k0s are static in
     # the netdata job). See specs/shared-netdata.md.
-    ndtargets="$(echo "$ndtargets" | jq --arg ip "$dns_ip" '. + [{name:"centralized-dns-server", ip:$ip}]')"
+    ndtargets="$(echo "$ndtargets" | jq --argjson hosts "$dns_hosts_json" \
+      '. + ($hosts | to_entries | map({name: ("centralized-dns-" + .key), ip: .value.ipv4}))')"
     ndtargets="$(tofu -chdir={{cluster_root}}/$logging output -json hosts 2>/dev/null \
       | jq --argjson acc "$ndtargets" '$acc + [to_entries[] | {name: .value.name, ip: .value.ipv4}]' 2>/dev/null || echo "$ndtargets")"
 
@@ -392,9 +398,9 @@ set-dns-all:
 verify-dns:
     #!/usr/bin/env bash
     set -uo pipefail
-    dns_ip="$(tofu -chdir={{cluster_root}}/centralized_dns output -raw server_ipv4 2>/dev/null || true)"
+    dns_ip="$(tofu -chdir={{cluster_root}}/centralized_dns output -raw dns_endpoint 2>/dev/null || true)"
     if [ -z "$dns_ip" ]; then
-      echo "centralized_dns is not up (no server_ipv4) — cannot verify" >&2
+      echo "centralized_dns is not up (no dns_endpoint) — cannot verify" >&2
       exit 1
     fi
     docs=()
@@ -483,7 +489,8 @@ refresh-cross-cluster:
     rc=0
     dns=centralized_dns; logging=centralized_logging; monitoring=centralized_monitoring
 
-    dns_ip="$(tofu -chdir={{cluster_root}}/$dns output -raw server_ipv4 2>/dev/null || true)"
+    dns_ip="$(tofu -chdir={{cluster_root}}/$dns output -raw dns_endpoint 2>/dev/null || true)"
+    dns_hosts_json="$(tofu -chdir={{cluster_root}}/$dns output -json hosts 2>/dev/null || echo '{}')"
     log_ip="$(tofu -chdir={{cluster_root}}/$logging output -raw central_ipv4 2>/dev/null || true)"
     mon_ip="$(tofu -chdir={{cluster_root}}/$monitoring output -raw server_ipv4 2>/dev/null || true)"
     log_target=""; [ -n "$log_ip" ] && log_target="$log_ip:514"
@@ -514,12 +521,17 @@ refresh-cross-cluster:
         | jq --argjson acc "$ndtargets" '$acc + [to_entries[] | {name: .value.name, ip: .value.ipv4}]' \
         2>/dev/null)" && ndtargets="$new_nd"
     done
-    if [ -n "$dns_ip" ]; then
-      targets="$(echo "$targets" | jq --arg ip "$dns_ip" \
-        '. + [{job:"centralized-dns-server",ip:$ip,port:9100},
-              {job:"centralized-dns-adguard",ip:$ip,port:9618},
-              {job:"centralized-dns-unbound",ip:$ip,port:9167}]')"
-      ndtargets="$(echo "$ndtargets" | jq --arg ip "$dns_ip" '. + [{name:"centralized-dns-server", ip:$ip}]')"
+    # Scrape targets for every centralized_dns VM (one "server" single mode; "primary"+"secondary"
+    # HA mode — see specs/ha-dns.md) so Prometheus scrapes BOTH nodes' exporters in HA mode, not
+    # just whichever holds the VIP.
+    if [ "$dns_hosts_json" != '{}' ] && [ -n "$dns_hosts_json" ]; then
+      targets="$(echo "$targets" | jq --argjson hosts "$dns_hosts_json" \
+        '. + ($hosts | to_entries | map(.key as $r | .value.ipv4 as $ip |
+              [{job:("centralized-dns-"+$r),ip:$ip,port:9100},
+               {job:("centralized-dns-"+$r+"-adguard"),ip:$ip,port:9618},
+               {job:("centralized-dns-"+$r+"-unbound"),ip:$ip,port:9167}]) | flatten)')"
+      ndtargets="$(echo "$ndtargets" | jq --argjson hosts "$dns_hosts_json" \
+        '. + ($hosts | to_entries | map({name: ("centralized-dns-" + .key), ip: .value.ipv4}))')"
     fi
     # logging hub's VMs run Netdata too (monitoring's own server+k0s stay static in the job).
     new_nd="$(tofu -chdir={{cluster_root}}/$logging output -json hosts 2>/dev/null \
@@ -645,7 +657,7 @@ verify-connected:
     #!/usr/bin/env bash
     set -uo pipefail
     rc=0
-    dns_ip="$(tofu -chdir={{cluster_root}}/centralized_dns output -raw server_ipv4)"
+    dns_ip="$(tofu -chdir={{cluster_root}}/centralized_dns output -raw dns_endpoint)"
     log_ip="$(tofu -chdir={{cluster_root}}/centralized_logging output -raw central_ipv4)"
     pki_ip="$(tofu -chdir={{cluster_root}}/centralized_pki output -json hosts | jq -r '.services.ipv4')"
     token="xcheck-$(tofu -chdir={{cluster_root}}/centralized_pki output -raw services_ipv4 | tr -d '.')"
@@ -1074,3 +1086,73 @@ logs-k0s-worker:
 tail-log CLUSTER ROLE:
   @ip=$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.{{ROLE}}.ipv4'); \
    ssh -n {{ssh_opts}} -o BatchMode=yes -i {{ssh_key}} ubuntu@"$ip" 'sudo journalctl -f -o short-iso -p warning'
+
+# --- centralized_dns HA (opt-in enable_ha; see specs/ha-dns.md) --------------------------------
+
+# live: kill AdGuard Home on whichever HA node currently holds the VIP, assert the VIP moves to
+# the other node within a few seconds and keeps answering DNS, then restart AdGuard and assert it
+# preempts back to primary. Requires enable_ha=true and the cluster up.  just dns-failover-test centralized_dns
+dns-failover-test CLUSTER:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    vip="$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -raw vip_address 2>/dev/null || true)"
+    if [ -z "$vip" ]; then
+      echo "{{CLUSTER}} has no vip_address — is enable_ha=true and the cluster up?" >&2
+      exit 1
+    fi
+    primary_ip="$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.primary.ipv4')"
+    secondary_ip="$(tofu -chdir={{cluster_root}}/{{CLUSTER}} output -json hosts | jq -r '.secondary.ipv4')"
+
+    if ! dig +time=2 +tries=1 +short @"$vip" example.com >/dev/null 2>&1; then
+      echo "FAIL: VIP $vip is not answering DNS before the test even starts" >&2
+      exit 1
+    fi
+
+    # find which node currently holds the VIP.
+    holder=""
+    for role_ip in "primary:$primary_ip" "secondary:$secondary_ip"; do
+      role="${role_ip%%:*}"; ip="${role_ip#*:}"
+      if ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$ip" "ip addr show | grep -q $vip"; then
+        holder="$role"; holder_ip="$ip"
+        break
+      fi
+    done
+    if [ -z "$holder" ]; then
+      echo "FAIL: no node currently holds the VIP $vip" >&2
+      exit 1
+    fi
+    echo "VIP $vip is currently held by: $holder ($holder_ip)"
+
+    echo "=== stopping AdGuardHome on $holder to force failover ==="
+    ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$holder_ip" 'sudo systemctl stop AdGuardHome'
+
+    ok=1
+    for i in $(seq 1 10); do
+      if dig +time=1 +tries=1 +short @"$vip" example.com >/dev/null 2>&1; then ok=0; break; fi
+      sleep 1
+    done
+    if [ "$ok" -eq 0 ]; then
+      echo "PASS: VIP $vip still answers DNS within 10s of stopping AdGuard on $holder"
+    else
+      echo "FAIL: VIP $vip stopped answering after stopping AdGuard on $holder" >&2
+    fi
+
+    echo "=== restarting AdGuardHome on $holder ==="
+    ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$holder_ip" 'sudo systemctl start AdGuardHome'
+    sleep 3
+    if [ "$holder" = "primary" ]; then
+      echo "PASS: primary is back — preemption is a no-op since primary never lost the VIP holder role in this run"
+    else
+      preempted=1
+      for i in $(seq 1 10); do
+        if ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$primary_ip" "ip addr show | grep -q $vip"; then preempted=0; break; fi
+        sleep 1
+      done
+      [ "$preempted" -eq 0 ] && echo "PASS: VIP preempted back to primary" || echo "FAIL: VIP did not preempt back to primary within 10s" >&2
+    fi
+    exit "$ok"
+
+# live: tail AdGuardHome-Sync's recent journal on primary (thin wrapper over adguard_cli.py sync-status).
+# Requires enable_ha=true and the cluster up.  just dns-sync-status centralized_dns
+dns-sync-status CLUSTER:
+    @uv run {{cluster_root}}/{{CLUSTER}}/scripts/adguard_cli.py --cluster {{CLUSTER}} sync-status

@@ -48,3 +48,28 @@ a post-boot hot-push so the DNS VM (and the IP the fleet resolves against) is ne
 `enable_process_exporter`, `enable_systemd_exporter` (all default **on**). Cross-cluster opt-ins
 (`dns_server`, `log_shipping_target`, `openobserve_endpoint`) default empty — a plain
 `just up centralized_dns` is turnkey and isolated.
+
+## HA mode (opt-in `enable_ha`)
+
+Off by default — the single VM above, unchanged. `enable_ha = true` (+ `vip_address`) instead
+brings up two self-contained nodes, `primary` and `secondary`, each running its own AdGuard Home +
+Unbound + exporters (no shared upstream), fronted by a **keepalived** unicast-VRRP floating VIP.
+The whole fleet resolves DNS through the VIP; killing AdGuard (or the VM) on the node holding the
+VIP moves it to the healthy node in a few seconds. **AdGuardHome-Sync** replicates config
+(blocklists, rewrites, filtering, settings) unidirectionally `primary → secondary` on a timer, so
+**config edits must only ever be made on `primary`'s UI/API** — `secondary` is overwritten on
+every sync cycle. Full design, the OpenTofu resource shape (and why the singleton `server` VM and
+the HA `primary`/`secondary` nodes are kept as separate resources rather than unified into one
+`for_each`), and the peer-IP wiring are in [`specs/ha-dns.md`](../../specs/ha-dns.md).
+
+```sh
+just recreate centralized_dns          # after setting enable_ha=true / vip_address (needs recreate, not up)
+just verify centralized_dns            # HA-aware; adds keepalived + sync + failover tests
+just dns-failover-test centralized_dns # kill AdGuard on the VIP holder, assert it moves + preempts back
+just dns-sync-status centralized_dns   # AdGuardHome-Sync status on primary
+```
+
+New outputs `dns_endpoint` (the VIP in HA mode, the single VM's IP otherwise — what the fleet
+resolves against) and `dns_rewrite_target` (the origin node — where `just set-dns-all` pushes
+rewrites) are what every other cluster/recipe reads, so HA needs no mode-specific branching
+elsewhere in the fleet.

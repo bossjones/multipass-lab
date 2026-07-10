@@ -26,6 +26,9 @@ packages:
   - jq
   - unbound
   - dnsutils
+%{ if enable_ha ~}
+  - keepalived
+%{ endif ~}
 
 ssh_authorized_keys:
   - ${ssh_pubkey}
@@ -152,6 +155,37 @@ write_files:
           cmdline:
             - '.+'
 %{ endif ~}
+%{ if enable_ha ~}
+
+  # keepalived: unicast VRRP presenting the floating VIP. Rendered PEER-LESS at first boot
+  # (unicast_src_ip/interface self-discovered below; peer_ip filled in by a post-apply push once
+  # both nodes exist — see clusters/centralized_dns/main.tf's keepalived_peer_push). Not started
+  # here (runcmd only `enable`s it) — the post-apply push starts it for the first time once the
+  # real peer-aware config lands. See specs/ha-dns.md.
+  - path: /etc/keepalived/keepalived.conf
+    permissions: '0644'
+    content: |
+      ${indent(6, keepalived_conf)}
+
+  # vrrp_script health probe — verifies AdGuard actually ANSWERS DNS, not just that the process
+  # is alive, so the VIP leaves a node whose resolver is hung.
+  - path: /usr/local/sbin/chk_adguard.sh
+    permissions: '0755'
+    content: |
+      ${indent(6, chk_adguard_script)}
+%{ if is_origin ~}
+
+  # AdGuardHome-Sync (primary/origin only) — replicates blocklists/rewrites/filtering/settings
+  # unidirectionally to secondary. Installed from the release BINARY (not the Docker image). The
+  # CONFIG (needs secondary's real IP) is NOT written here — see main.tf's adguardhome_sync_push —
+  # so this unit is installed+enabled but has nothing to run against until that post-apply push
+  # lands the config and starts it.
+  - path: /etc/systemd/system/adguardhome-sync.service
+    permissions: '0644'
+    content: |
+      ${indent(6, adguardhome_sync_svc)}
+%{ endif ~}
+%{ endif ~}
 %{ if dns_server != "" ~}
 
   # Cross-cluster DNS — point this VM's resolver at an external AdGuard hub. Normally EMPTY for
@@ -260,6 +294,31 @@ runcmd:
       dig @127.0.0.1 example.com +short +time=2 +tries=1 >/dev/null 2>&1 && break
       sleep 2
     done
+%{ if enable_ha ~}
+  # --- keepalived (only AFTER AdGuard is confirmed answering above) ---------
+  # Fill in the self-discovered interface/source-IP placeholders (unknowable at Terraform render
+  # time — Multipass DHCP-assigns this VM's IP only after it boots). `enable` (no --now): the
+  # rendered config has no peer yet, so the post-apply push starts the service for real once both
+  # node IPs exist and the peer-aware config has landed.
+  - |
+    iface=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}')
+    self_ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="src") print $(i+1)}')
+    sed -i "s/@@VRRP_IFACE@@/$${iface}/; s/@@UNICAST_SRC_IP@@/$${self_ip}/" /etc/keepalived/keepalived.conf
+  - systemctl enable keepalived
+%{ if is_origin ~}
+  # AdGuardHome-Sync (primary/origin only) — arch-aware release-binary install (not Docker). No
+  # config exists yet (needs secondary's real IP — see main.tf's adguardhome_sync_push), so
+  # `enable` only (no --now): starting now would just crash-loop on a missing config file. The
+  # post-apply push writes the config and starts the service for the first time.
+  - |
+    ARCH="$(dpkg --print-architecture)"
+    curl -sSLf "https://github.com/bakito/adguardhome-sync/releases/download/${adguardhome_sync_version}/adguardhome-sync_linux_$${ARCH}.tar.gz" -o /tmp/adguardhome-sync.tar.gz
+    tar -xzf /tmp/adguardhome-sync.tar.gz -C /tmp adguardhome-sync
+    install -m0755 /tmp/adguardhome-sync /usr/local/bin/adguardhome-sync
+  - systemctl daemon-reload
+  - systemctl enable adguardhome-sync
+%{ endif ~}
+%{ endif ~}
 %{ if enable_node_exporter ~}
   # node_exporter — OS host metrics (:9100).
   - /usr/local/sbin/install-exporter.sh node_exporter https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-{ARCH}.tar.gz node_exporter
@@ -322,4 +381,4 @@ runcmd:
   - systemctl restart otelcol-contrib
 %{ endif ~}
 
-final_message: "centralized_dns ready — AdGuard Home on :53 (UI :${adguard_web_port}), Unbound upstream on 127.0.0.1:5335"
+final_message: "centralized_dns (${role}) ready — AdGuard Home on :53 (UI :${adguard_web_port}), Unbound upstream on 127.0.0.1:5335"

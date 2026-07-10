@@ -1,0 +1,40 @@
+# keepalived unicast VRRP — one floating VIP the whole fleet resolves against. Rendered TWICE:
+# once peer-less at first boot (peer_ip = ""), once peer-aware by the post-apply
+# keepalived_peer_push provisioner (peer_ip = the other node's real IP) once both nodes exist —
+# see clusters/centralized_dns/main.tf. @@VRRP_IFACE@@/@@UNICAST_SRC_IP@@ are filled in by a
+# runcmd/SSH sed at boot-time / push-time (unknowable at Terraform render time — Multipass
+# DHCP-assigns each VM's IP only after it boots). See specs/ha-dns.md.
+
+vrrp_script chk_adguard {
+    script "/usr/local/sbin/chk_adguard.sh"
+    interval 2
+    weight -60
+    fall 2
+    rise 2
+}
+
+vrrp_instance VI_DNS {
+    state ${state}
+    interface @@VRRP_IFACE@@
+    virtual_router_id ${vrrp_router_id}
+    priority ${priority}
+    advert_int 1
+%{ if vrrp_use_unicast ~}
+    unicast_src_ip @@UNICAST_SRC_IP@@
+%{ if peer_ip != "" ~}
+    unicast_peer {
+        ${peer_ip}
+    }
+%{ endif ~}
+%{ endif ~}
+    authentication {
+        auth_type PASS
+        auth_pass ${vrrp_auth_pass}
+    }
+    virtual_ipaddress {
+        ${vip}
+    }
+    track_script {
+        chk_adguard
+    }
+}

@@ -1,0 +1,12 @@
+[Unit]
+Description=adguardhome-sync (primary -> secondary config replication)
+After=AdGuardHome.service network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/adguardhome-sync run --config /etc/adguardhome-sync/adguardhome-sync.yaml
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

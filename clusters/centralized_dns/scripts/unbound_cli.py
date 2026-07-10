@@ -50,6 +50,7 @@ class Options:
     server_url: str | None
     as_json: bool
     timeout: float
+    node: str | None = None
 
 
 @dataclass
@@ -68,12 +69,27 @@ def _main(
     ),
     as_json: bool = typer.Option(False, "--json", help="machine-readable JSON output"),
     timeout: float = typer.Option(10.0, "--timeout"),
+    node: str = typer.Option(
+        None,
+        "--node",
+        help="HA mode only: target a specific node (server/primary/secondary) by tofu `hosts`",
+    ),
 ):
     """Unbound verification CLI (via unbound_exporter)."""
-    ctx.obj = Options(cluster, server_url, as_json, timeout)
+    ctx.obj = Options(cluster, server_url, as_json, timeout, node)
 
 
 def resolve(opts: Options) -> Ctx:
+    if opts.node and not opts.server_url:
+        tofu_json = dc.run_tofu_output(dc.default_chdir(opts.cluster))
+        hosts = dc.parse_hosts(tofu_json)
+        if opts.node not in hosts:
+            _die(f"--node {opts.node!r} not in tofu hosts output: {sorted(hosts)}")
+        base_url = f"http://{hosts[opts.node]['ipv4']}:{PORT}"
+        return Ctx(base_url=base_url, as_json=opts.as_json, timeout=opts.timeout)
+    # Default targets dns_endpoint (the VIP in HA mode — same node that currently answers :53,
+    # since unbound_exporter also binds 0.0.0.0 and rides along with whichever node holds the
+    # VIP). Use --node to introspect a specific node regardless of who holds the VIP.
     target = dc.resolve_target(
         port=PORT,
         cluster=opts.cluster,
@@ -135,6 +151,29 @@ def check(ctx: typer.Context):
         "unbound_queries_total" in metrics,
         f"queries_total={metrics.get('unbound_queries_total')}",
     )
+
+    # HA mode only: assert BOTH nodes independently serve, not just whichever holds the VIP. A
+    # node being down is exactly the scenario under test (failover), so scrape failures are
+    # reported as a failed check here, not a CLI-aborting _die.
+    opts: Options = ctx.obj
+    if not opts.server_url:
+        import httpx
+
+        tofu_json = dc.run_tofu_output(dc.default_chdir(opts.cluster))
+        if dc.is_ha(tofu_json):
+            for role, info in dc.parse_hosts(tofu_json).items():
+                node_url = f"http://{info['ipv4']}:{PORT}"
+                try:
+                    with httpx.Client(base_url=node_url, timeout=c.timeout) as client:
+                        resp = client.get("/metrics")
+                        resp.raise_for_status()
+                        node_metrics = dc.parse_prometheus_metrics(resp.text)
+                    node_up = node_metrics.get("unbound_up")
+                    report.add(
+                        f"{role} unbound_up=1", node_up == 1.0, f"unbound_up={node_up}"
+                    )
+                except httpx.HTTPError as exc:
+                    report.add(f"{role} unbound_up=1", False, str(exc))
 
     if c.as_json:
         dc.print_json(report.to_dict())

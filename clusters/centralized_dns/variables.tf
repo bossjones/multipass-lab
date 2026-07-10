@@ -209,3 +209,56 @@ variable "server" {
     disk   = "20G"
   }
 }
+
+# --- High availability (opt-in; see specs/ha-dns.md) -------------------------
+# Off by default = today's single `server` VM, byte-for-byte unchanged. On = two
+# self-contained AdGuard+Unbound nodes (primary/secondary) behind a keepalived unicast-VRRP
+# floating VIP, with AdGuardHome-Sync replicating config unidirectionally primary -> secondary.
+
+variable "enable_ha" {
+  description = "Opt-in HA: false (default) = single `server` VM (unchanged); true = 2 nodes (primary+secondary) behind a keepalived VIP with AdGuardHome-Sync replication. See specs/ha-dns.md."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.enable_ha || var.vip_address != ""
+    error_message = "vip_address must be set (non-empty) when enable_ha = true."
+  }
+}
+
+variable "vip_address" {
+  description = "Floating Virtual IP the fleet resolves against in HA mode. Must be a free address on the Multipass subnet (see specs/ha-dns.md's Task 1 feasibility spike). Ignored when enable_ha = false."
+  type        = string
+  default     = ""
+}
+
+variable "vrrp_router_id" {
+  description = "VRRP virtual_router_id shared by both HA nodes. Must be unique on the VRRP broadcast/unicast domain. Ignored when enable_ha = false."
+  type        = number
+  default     = 51
+}
+
+variable "vrrp_auth_pass" {
+  description = "VRRP unicast auth password (PASS auth type), shared by both HA nodes. keepalived truncates simple-text auth_pass to 8 chars, so keep any override <= 8 chars. Dev-throwaway lab value; override via TF_VAR_vrrp_auth_pass for anything real. Ignored when enable_ha = false."
+  type        = string
+  default     = "labvrrp1"
+  sensitive   = true
+}
+
+variable "vrrp_use_unicast" {
+  description = "Use unicast VRRP (unicast_src_ip/unicast_peer) instead of multicast. Default true — sidesteps multicast on the Multipass NAT/bridge network. Flip to false when targeting a real L2 (e.g. Proxmox)."
+  type        = bool
+  default     = true
+}
+
+variable "adguardhome_sync_version" {
+  description = "bakito/adguardhome-sync release tag (installed as a release binary, not the Docker image) on primary only. Ignored when enable_ha = false."
+  type        = string
+  default     = "v0.7.5"
+}
+
+variable "sync_interval" {
+  description = "AdGuardHome-Sync replication interval (cron `@every <interval>` syntax, e.g. \"5m\"). Ignored when enable_ha = false."
+  type        = string
+  default     = "5m"
+}

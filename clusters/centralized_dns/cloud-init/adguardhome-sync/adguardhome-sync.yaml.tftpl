@@ -1,0 +1,23 @@
+# AdGuardHome-Sync (bakito/adguardhome-sync) — unidirectional replication FROM this node
+# (origin/primary) TO secondary. Rendered on primary only. Edit config on primary's UI only —
+# secondary is overwritten every sync cycle. See specs/ha-dns.md.
+origin:
+  url: "http://127.0.0.1:${adguard_web_port}"
+  username: "${adguard_user}"
+  password: "${adguard_password}"
+
+replicas:
+  - url: "http://${secondary_ip}:${adguard_web_port}"
+    username: "${adguard_user}"
+    password: "${adguard_password}"
+
+cron: "@every ${sync_interval}"
+runOnStart: true
+
+features:
+  generalSettings: true
+  filters: true
+  dhcp: false
+  clients: true
+  dns:
+    rewrites: true
