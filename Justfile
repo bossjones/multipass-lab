@@ -489,10 +489,20 @@ refresh-cross-cluster:
     rc=0
     dns=centralized_dns; logging=centralized_logging; monitoring=centralized_monitoring
 
+    # `tofu output -raw <name>` against a state with NO outputs at all (hub never applied,
+    # or destroyed) prints a "Warning: No outputs found" banner to STDOUT (not stderr), so
+    # `2>/dev/null || true` doesn't catch it — the raw warning text would otherwise get
+    # captured here and templated straight into dependent clusters' configs. Guard every
+    # captured value against looking like an actual IPv4 address; anything else means the
+    # hub is down, so treat it as empty (same as "not up").
+    ipv4_re='^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'
     dns_ip="$(tofu -chdir={{cluster_root}}/$dns output -raw dns_endpoint 2>/dev/null || true)"
+    [[ "$dns_ip" =~ $ipv4_re ]] || dns_ip=""
     dns_hosts_json="$(tofu -chdir={{cluster_root}}/$dns output -json hosts 2>/dev/null || echo '{}')"
     log_ip="$(tofu -chdir={{cluster_root}}/$logging output -raw central_ipv4 2>/dev/null || true)"
+    [[ "$log_ip" =~ $ipv4_re ]] || log_ip=""
     mon_ip="$(tofu -chdir={{cluster_root}}/$monitoring output -raw server_ipv4 2>/dev/null || true)"
+    [[ "$mon_ip" =~ $ipv4_re ]] || mon_ip=""
     log_target=""; [ -n "$log_ip" ] && log_target="$log_ip:514"
     oo_target="";  [ -n "$mon_ip" ] && oo_target="$mon_ip:5080"
     echo "=== refresh-cross-cluster: dns=$dns_ip logging=$log_ip monitoring=$mon_ip ==="
