@@ -8,6 +8,7 @@ Every secret below is a **development default** for the throwaway lab VM. They a
 | AdGuard Home admin user | `admin` | `TF_VAR_adguard_user` |
 | AdGuard Home admin password | `test1234` | `TF_VAR_adguard_password` |
 | AdGuard Home password hash | bcrypt(`test1234`) | `TF_VAR_adguard_password_hash` |
+| VRRP unicast auth password (HA only) | `labvrrp1` | `TF_VAR_vrrp_auth_pass` (keepalived truncates simple-text auth to 8 chars — keep any override <= 8 chars) |
 
 The seeded `AdGuardHome.yaml` needs the **bcrypt hash**; the exporter and the CLIs need the
 **plaintext**. They must agree, so when changing the password regenerate the hash together:

@@ -48,3 +48,56 @@ a post-boot hot-push so the DNS VM (and the IP the fleet resolves against) is ne
 `enable_process_exporter`, `enable_systemd_exporter` (all default **on**). Cross-cluster opt-ins
 (`dns_server`, `log_shipping_target`, `openobserve_endpoint`) default empty — a plain
 `just up centralized_dns` is turnkey and isolated.
+
+## HA mode (opt-in `enable_ha`)
+
+Off by default — the single VM above, unchanged. `enable_ha = true` (+ `vip_address`) instead
+brings up two self-contained nodes, `primary` and `secondary`, each running its own AdGuard Home +
+Unbound + exporters (no shared upstream), fronted by a **keepalived** unicast-VRRP floating VIP.
+The whole fleet resolves DNS through the VIP; killing AdGuard (or the VM) on the node holding the
+VIP moves it to the healthy node in a few seconds. **AdGuardHome-Sync** replicates config
+(blocklists, rewrites, filtering, settings) unidirectionally `primary → secondary` on a timer, so
+**config edits must only ever be made on `primary`'s UI/API** — `secondary` is overwritten on
+every sync cycle. Full design, the OpenTofu resource shape (and why the singleton `server` VM and
+the HA `primary`/`secondary` nodes are kept as separate resources rather than unified into one
+`for_each`), and the peer-IP wiring are in [`specs/ha-dns.md`](../../specs/ha-dns.md).
+
+```sh
+just dns-ha 10.0.7.99                   # turn HA ON: write ha.auto.tfvars.json (VIP) + recreate
+just dns-ha 10.0.7.99 verify           # ...then also cascade to verify + dns-failover-test
+just dns-ha-off centralized_dns        # turn HA OFF: remove the tfvars + recreate to single mode
+just verify centralized_dns            # HA-aware; adds keepalived + sync + failover tests
+just dns-failover-test centralized_dns # kill AdGuard on the VIP holder, assert it moves + preempts back
+just dns-sync-status centralized_dns   # AdGuardHome-Sync status on primary
+```
+
+`just dns-ha <vip>` is the one-shot toggle: it writes `ha.auto.tfvars.json` (`enable_ha=true` +
+the VIP, which must be a free address on the Multipass subnet) and cascades to `just recreate`.
+Pass a 2nd arg `verify` (or set `HA_VERIFY=1`; VIP also via `HA_VIP`) to additionally run
+`verify` + `dns-failover-test`. `just dns-ha-off` removes the tfvars and recreates back to single
+mode. (You can still hand-write the tfvars, as below, if you prefer.)
+
+New outputs `dns_endpoint` (the VIP in HA mode, the single VM's IP otherwise — what the fleet
+resolves against) and `dns_rewrite_target` (the origin node — where `just set-dns-all` pushes
+rewrites) are what every other cluster/recipe reads, so HA needs no mode-specific branching
+elsewhere in the fleet.
+
+### VIP feasibility spike — confirmed working on Multipass (macOS)
+
+The one genuinely uncertain part of HA on Multipass — whether a keepalived floating VIP is reachable
+from the **Mac host** across the QEMU/vmnet bridge — was proven with a throwaway two-VM spike
+(`specs/ha-dns.md` Task 1). Result: **it works, unicast VRRP, no fallback needed.**
+
+- **Subnet / bridge:** Multipass VMs live on `192.168.252.0/24` behind `bridge100` (gateway
+  `192.168.252.1`); the guest NIC is `enp0s1`. Pick a `vip_address` that is free on this subnet
+  (verify with `ping`/`arp -a` first) — the spike used `192.168.252.240`.
+- **Transport:** **unicast** VRRP (`unicast_src_ip` + `unicast_peer`, keepalived's default here) —
+  no multicast needed on the bridge.
+- **Host reachability:** `dig @<VIP>` and `ping <VIP>` answer **from the Mac host** — gratuitous ARP
+  for the VIP propagates across `bridge100`. This is the key result; there is no host→VIP block.
+- **Failover:** `systemctl stop keepalived` on MASTER → BACKUP entered `MASTER STATE` in ~1s, the VIP
+  migrated, and host-side `dig @<VIP>` did not drop a single query. The VIP **preempts back** to the
+  higher-priority node on recovery.
+
+So on Multipass, HA is fully exercisable (host-side clients included); no Proxmox-only / VM-to-VM-only
+fallback is required.

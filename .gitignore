@@ -486,6 +486,9 @@ apps/task-manager/data/
 
 
 
+# Session scratch — transient working files (background logs, tfvars backups, temp cloud-init)
+scratchpad/
+
 # Logs
 logs/
 *.log
@@ -563,6 +566,9 @@ clusters/*/.ca/
 
 # Bulk bring-up feature flags written by `just up-all` (enable_coroot / enable_discovery)
 clusters/*/.flags.auto.tfvars.json
+
+# HA-DNS toggle state written by `just dns-ha` / removed by `just dns-ha-off` (see Justfile)
+clusters/*/ha.auto.tfvars.json
 
 **/.claude/data
 **/logs

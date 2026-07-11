@@ -22,16 +22,20 @@ OpenObserve stack), `clusters/centralized_netbox/` (a NetBox DCIM/IPAM server + 
 that **self-registers** into it via the REST API on first boot; see `specs/centralized_netbox.md`),
 `clusters/centralized_dns/` (a single VM running **AdGuard Home** (`:53`) over a recursive
 **Unbound** (`127.0.0.1:5335`), both host-level under systemd — the network-wide ad-blocking DNS
-resolver; see `specs/centralized_dns.md`), `clusters/centralized_k0s/` (a multi-node **k0sctl**-formed
-k0s Kubernetes cluster, etcd-backed, with an opt-in etcd-quorum HA mode behind an HAProxy edge; see
-`specs/centralized_k0s.md`), `clusters/centralized_pki/` (the lab's internal CA (**step-ca**) +
-**Traefik** fleet-edge reverse proxy fronting Authelia and Vaultwarden; see `specs/centralized_pki.md`),
-and `clusters/centralized_unifi/` (a version-exact UniFi homelab log-plane simulation — a USG rsyslog
-forwarder shipping to a UCK Gen2 syslog-ng collector, log-pipeline only; see
-`specs/centralized_unifi.md`). `centralized_dns` is a **cross-cluster hub that comes up
-FIRST** in `just up-connected`: every other VM points its resolver at AdGuard at first boot (the
-`dns_server` opt-in var). A root `Justfile` orchestrates every cluster **by folder name** — that
-name is the only argument the recipes take.
+resolver; see `specs/centralized_dns.md`; it also has an opt-in **`enable_ha`** mode — two
+self-contained AdGuard+Unbound nodes (`primary`/`secondary`) behind a **keepalived** unicast-VRRP
+floating VIP, with **AdGuardHome-Sync** replicating config unidirectionally `primary → secondary`,
+mirroring `centralized_k0s`'s HA phrasing below; see `specs/ha-dns.md`), `clusters/centralized_k0s/`
+(a multi-node **k0sctl**-formed k0s Kubernetes cluster, etcd-backed, with an opt-in etcd-quorum HA
+mode behind an HAProxy edge; see `specs/centralized_k0s.md`), `clusters/centralized_pki/` (the lab's
+internal CA (**step-ca**) + **Traefik** fleet-edge reverse proxy fronting Authelia and Vaultwarden;
+see `specs/centralized_pki.md`), and `clusters/centralized_unifi/` (a version-exact UniFi homelab
+log-plane simulation — a USG rsyslog forwarder shipping to a UCK Gen2 syslog-ng collector,
+log-pipeline only; see `specs/centralized_unifi.md`). `centralized_dns` is a **cross-cluster hub
+that comes up FIRST** in `just up-connected`: every other VM points its resolver at AdGuard at
+first boot (the `dns_server` opt-in var, wired from `centralized_dns`'s `dns_endpoint` output —
+the floating VIP in HA mode, the single VM's IP otherwise). A root `Justfile` orchestrates every
+cluster **by folder name** — that name is the only argument the recipes take.
 
 ```sh
 just check centralized_logging   # hermetic: tofu fmt + validate + test (no VMs)

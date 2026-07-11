@@ -104,9 +104,14 @@ Live bring-ups are watched in real time rather than inspected only at the end:
   backoff, early-exits once healthy. Exit `0` healthy / `2` issues / `3` unreachable / `4` not-up.
   Shells out to `ssh`/`tofu` (never a Python socket) so it dodges the macOS Local-Network block.
   Pure parsing/policy in `tools/_system_debug_core.py` (hermetically tested in `tools/tests/`).
-- **Background journalctl monitor** — once SSH answers on a freshly-launched VM, tail its journal
-  live (`ssh … 'journalctl -f -o short-iso -p warning'`) into a per-VM log so failures surface as
-  they happen. Complements the `system_debug` snapshot checkpoints.
+- **Background journalctl monitor** (`just tail-log <cluster> <role>`) — once SSH answers on a
+  freshly-launched VM, tail its journal live (`journalctl -f -o short-iso -p warning`) into a
+  per-VM log so failures surface as they happen; grep it against `uv run
+  tools/print_signatures.py`'s output (the same strong signatures `system_debug.py` scores
+  health against, not a second hand-copied list). Complements the `system_debug` snapshot
+  checkpoints — a snapshot can't distinguish "still working" from a silent `until … sleep`
+  wait-loop, a live tail can. See `specs/ha-dns.md`'s "Live provisioning watch" for the fuller
+  write-up (stall detection, exact commands).
 - **Boot-race fixes (from PR #28)** that make a TLS bring-up deterministic: `chown` otelcol's
   `file_storage` dir after the user exists; wait for the resolver to answer (`getent hosts
   registry-1.docker.io`) before docker pulls; `dpkg --force-confdef --force-confold` on repeat

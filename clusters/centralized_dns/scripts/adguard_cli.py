@@ -46,6 +46,7 @@ class Options:
     password: str | None
     as_json: bool
     timeout: float
+    node: str | None = None
 
 
 @dataclass
@@ -89,18 +90,34 @@ def _main(
     password: str = typer.Option(None, "--password", help="$ADGUARD_PASSWORD"),
     as_json: bool = typer.Option(False, "--json", help="machine-readable JSON output"),
     timeout: float = typer.Option(10.0, "--timeout"),
+    node: str = typer.Option(
+        None,
+        "--node",
+        help="HA mode only: target a specific node (server/primary/secondary) by tofu `hosts`, bypassing the default origin resolution",
+    ),
 ):
     """AdGuard Home verification CLI."""
-    ctx.obj = Options(cluster, server_url, user, password, as_json, timeout)
+    ctx.obj = Options(cluster, server_url, user, password, as_json, timeout, node)
 
 
 def resolve(opts: Options) -> Ctx:
-    target = dc.resolve_target(
-        port=PORT,
-        cluster=opts.cluster,
-        server_url=opts.server_url,
-        url_env="ADGUARD_URL",
-    )
+    if opts.node and not opts.server_url:
+        tofu_json = dc.run_tofu_output(dc.default_chdir(opts.cluster))
+        hosts = dc.parse_hosts(tofu_json)
+        if opts.node not in hosts:
+            _die(f"--node {opts.node!r} not in tofu hosts output: {sorted(hosts)}")
+        target = dc.Target(base_url=f"http://{hosts[opts.node]['ipv4']}:{PORT}")
+    else:
+        # Default: the AdGuard web API/config edits must hit the ORIGIN node, never the VIP
+        # (the "edit only on primary" rule — see specs/ha-dns.md). In single mode
+        # dns_rewrite_target == the server VM's IP, so this is a no-op there.
+        target = dc.resolve_target(
+            port=PORT,
+            cluster=opts.cluster,
+            server_url=opts.server_url,
+            url_env="ADGUARD_URL",
+            target_output="dns_rewrite_target",
+        )
     user, password = dc.resolve_credentials(
         opts.user,
         opts.password,
@@ -293,7 +310,9 @@ def rewrite_set(
     c = resolve(ctx.obj)
     rows = _rewrite_list(c)
     status, previous = _apply_rewrite_set(c, domain, answer, rows)
-    _emit(c, {"domain": domain, "answer": answer, "status": status, "previous": previous})
+    _emit(
+        c, {"domain": domain, "answer": answer, "status": status, "previous": previous}
+    )
 
 
 @app.command(name="rewrite-sync")
@@ -399,8 +418,100 @@ def check(ctx: typer.Context):
     finally:
         client.close()
 
+    # 3. HA mode only: every node must independently answer, and the VIP itself must answer DNS
+    # (not just be assigned) — see specs/ha-dns.md's failover acceptance criteria.
+    if not ctx.obj.server_url:
+        tofu_json = dc.run_tofu_output(dc.default_chdir(ctx.obj.cluster))
+        if dc.is_ha(tofu_json):
+            import httpx as _httpx
+
+            for role, info in dc.parse_hosts(tofu_json).items():
+                ip = info["ipv4"]
+                try:
+                    resp = _httpx.get(
+                        f"http://{ip}:{PORT}/control/status",
+                        timeout=c.timeout,
+                        auth=_httpx.BasicAuth(c.user, c.password),
+                    )
+                    ok = resp.status_code < 400
+                    detail = f"http://{ip}:{PORT}"
+                except _httpx.HTTPError as exc:
+                    ok, detail = False, str(exc)
+                report.add(f"{role} answers /status", ok, detail)
+
+            vip = tofu_json["dns_endpoint"]["value"]
+            import subprocess
+
+            dig = subprocess.run(
+                ["dig", "+time=2", "+tries=1", "+short", f"@{vip}", "example.com"],
+                capture_output=True,
+                text=True,
+            )
+            report.add("VIP answers DNS", bool(dig.stdout.strip()), f"@{vip}")
+
     _render(c, report)
     raise typer.Exit(report.exit_code)
+
+
+# --- HA: AdGuardHome-Sync status (primary only) ------------------------------
+
+
+@app.command(name="sync-status")
+def sync_status(
+    ctx: typer.Context,
+    lines: int = typer.Option(20, "--lines", help="journal lines to show"),
+):
+    """AdGuardHome-Sync status on primary — recent journal lines over SSH (HA mode only).
+
+    adguardhome-sync doesn't expose an HTTP status endpoint in this deployment, so this shells
+    to `journalctl -u adguardhome-sync` on primary (same SSH idiom as the rest of the repo's
+    live-provisioning tooling — see CLAUDE.md).
+    """
+    import os
+    import subprocess
+    from pathlib import Path
+
+    opts: Options = ctx.obj
+    tofu_json = dc.run_tofu_output(dc.default_chdir(opts.cluster))
+    if not dc.is_ha(tofu_json):
+        _die("sync-status is only meaningful in HA mode (enable_ha=true)")
+
+    primary_ip = dc.parse_hosts(tofu_json)["primary"]["ipv4"]
+    ssh_key = os.environ.get(
+        "CLUSTER_SSH_KEY", str(Path.home() / ".ssh" / "id_ed25519")
+    )
+    result = subprocess.run(
+        [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "LogLevel=ERROR",
+            "-o",
+            "ConnectTimeout=8",
+            "-i",
+            ssh_key,
+            f"ubuntu@{primary_ip}",
+            f"sudo systemctl is-active adguardhome-sync; sudo journalctl -u adguardhome-sync -n {lines} --no-pager",
+        ],  # fmt: skip
+        capture_output=True,
+        text=True,
+    )
+    if opts.as_json:
+        dc.print_json(
+            {
+                "host": primary_ip,
+                "returncode": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+        )
+    else:
+        console.print(f"[bold]adguardhome-sync @ {primary_ip}[/bold]")
+        console.print(result.stdout or result.stderr)
+    raise typer.Exit(0 if result.returncode == 0 else dc.CHECK_FAIL_EXIT)
 
 
 def _render(c: Ctx, report: dc.CheckReport):

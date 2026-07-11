@@ -42,10 +42,28 @@ def run_tofu_output(chdir: str) -> dict:
 
 
 def parse_tofu_output(tofu_json: dict) -> tuple[str, set[str]]:
-    """Extract (server_ipv4, enabled_flags) from a parsed `tofu output -json`."""
-    ip = tofu_json["server_ipv4"]["value"]
+    """Extract (ip, enabled_flags) from a parsed `tofu output -json`.
+
+    ip = dns_endpoint (the floating VIP in HA mode, the single server VM's IP otherwise; see
+    specs/ha-dns.md), falling back to the older server_ipv4 output for compatibility with a
+    doc that predates the HA feature.
+    """
+    if "dns_endpoint" in tofu_json:
+        ip = tofu_json["dns_endpoint"]["value"]
+    else:
+        ip = tofu_json["server_ipv4"]["value"]
     flags = set(tofu_json.get("enabled_flags", {}).get("value", []))
     return ip, flags
+
+
+def parse_hosts(tofu_json: dict) -> dict[str, dict]:
+    """Return the `hosts` output: {"server": {...}} single mode, {"primary", "secondary"} HA."""
+    return tofu_json.get("hosts", {}).get("value", {})
+
+
+def is_ha(tofu_json: dict) -> bool:
+    """Whether the cluster is running in HA mode (reads output.enabled_features.ha)."""
+    return bool(tofu_json.get("enabled_features", {}).get("value", {}).get("ha", False))
 
 
 def default_chdir(cluster: str = "centralized_dns") -> str:
@@ -71,11 +89,17 @@ def resolve_target(
     chdir: str | None = None,
     env: dict | None = None,
     runner: Callable[[str], dict] = run_tofu_output,
+    target_output: str | None = None,
 ) -> Target:
     """Resolve a service base URL.
 
     Precedence: explicit ``server_url`` > ``$url_env`` > `tofu output` (``http://<ip>:<port>``).
     When a URL override is used, `tofu` is never invoked and ``enabled_flags`` is empty.
+
+    ``target_output`` picks WHICH tofu output supplies the IP when falling through to `tofu
+    output` (default: ``dns_endpoint``, the VIP in HA mode). Pass ``"dns_rewrite_target"`` for
+    the AdGuard web API / config edits, which must always hit the origin node, never the VIP —
+    see specs/ha-dns.md's "edit only on primary" rule.
     """
     import os
 
@@ -87,7 +111,12 @@ def resolve_target(
         return Target(base_url=server_url.rstrip("/"))
 
     chdir = chdir or default_chdir(cluster)
-    ip, flags = parse_tofu_output(runner(chdir))
+    tofu_json = runner(chdir)
+    if target_output:
+        ip = tofu_json[target_output]["value"]
+        flags = set(tofu_json.get("enabled_flags", {}).get("value", []))
+    else:
+        ip, flags = parse_tofu_output(tofu_json)
     return Target(base_url=f"http://{ip}:{port}", ip=ip, enabled_flags=flags)
 
 

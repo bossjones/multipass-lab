@@ -3,6 +3,8 @@
 Status: **planned** · Task type: **feature** · Complexity: **complex**
 Reference consumer pattern: `centralized_pki` · Hubs it joins: `centralized_logging`, `centralized_monitoring`
 Design inspiration: `~/dev/bossjones/adguardhome-unbound-macos-setup` (`install.sh`, `tools/adguardctl`)
+HA extension: `specs/ha-dns.md` adds an opt-in `enable_ha` mode (keepalived VRRP VIP +
+AdGuardHome-Sync) on top of this single-VM design — read this spec first, then that one.
 
 ## Task Description
 

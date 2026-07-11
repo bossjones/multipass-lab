@@ -13,6 +13,9 @@ variables {
   internal_ca_cert     = ""
   log_shipping_target  = ""
   openobserve_endpoint = ""
+  # Pin HA off too — see the CLAUDE.md auto-tfvars gotcha.
+  enable_ha   = false
+  vip_address = ""
 }
 
 # --- default: cross-cluster off -> no shipping/OTLP wiring rendered ----------
@@ -20,21 +23,21 @@ run "cross_cluster_off_by_default" {
   command = plan
 
   assert {
-    condition     = !strcontains(local_file.server_ci.content, "d_central")
+    condition     = !strcontains(local_file.server_ci[0].content, "d_central")
     error_message = "with log_shipping_target unset, cloud-init must NOT render the syslog client destination"
   }
   assert {
-    condition     = !strcontains(local_file.server_ci.content, "otlphttp/host")
+    condition     = !strcontains(local_file.server_ci[0].content, "otlphttp/host")
     error_message = "with openobserve_endpoint unset, cloud-init must NOT render the OTLP agent"
   }
   # The DNS VM resolves through its OWN AdGuard, not an external hub -> no external resolver drop-in.
   assert {
-    condition     = !strcontains(local_file.server_ci.content, "resolved.conf.d/99-centralized-dns.conf")
+    condition     = !strcontains(local_file.server_ci[0].content, "resolved.conf.d/99-centralized-dns.conf")
     error_message = "with dns_server unset, cloud-init must NOT point at an external DNS hub"
   }
   # ...but it always frees :53 for its own AdGuard (its own resolver is repointed in runcmd).
   assert {
-    condition     = strcontains(local_file.server_ci.content, "ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf")
+    condition     = strcontains(local_file.server_ci[0].content, "ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf")
     error_message = "the DNS VM must repoint its own resolver off the disabled stub"
   }
 }
@@ -48,15 +51,15 @@ run "log_shipping_renders_client_conf" {
   }
 
   assert {
-    condition     = strcontains(local_file.server_ci.content, "d_central")
+    condition     = strcontains(local_file.server_ci[0].content, "d_central")
     error_message = "cloud-init must render the syslog-ng d_central destination when shipping"
   }
   assert {
-    condition     = strcontains(local_file.server_ci.content, "\"10.9.9.5\"")
+    condition     = strcontains(local_file.server_ci[0].content, "\"10.9.9.5\"")
     error_message = "syslog client must point at the injected collector IP"
   }
   assert {
-    condition     = strcontains(local_file.server_ci.content, "port(5514)")
+    condition     = strcontains(local_file.server_ci[0].content, "port(5514)")
     error_message = "syslog client must use the injected collector port"
   }
   # The hot-push artifact is materialized on disk for scp.
@@ -75,15 +78,15 @@ run "otlp_push_renders_agent_conf" {
   }
 
   assert {
-    condition     = strcontains(local_file.server_ci.content, "otlphttp/host")
+    condition     = strcontains(local_file.server_ci[0].content, "otlphttp/host")
     error_message = "cloud-init must render the OTLP exporter when pushing to OpenObserve"
   }
   assert {
-    condition     = strcontains(local_file.server_ci.content, "http://10.9.9.7:5080/api/default")
+    condition     = strcontains(local_file.server_ci[0].content, "http://10.9.9.7:5080/api/default")
     error_message = "OTLP endpoint must carry the injected OpenObserve IP + org"
   }
   assert {
-    condition     = strcontains(local_file.server_ci.content, "stream-name: centralized_dns_server")
+    condition     = strcontains(local_file.server_ci[0].content, "stream-name: centralized_dns_server")
     error_message = "OTLP agent must ship to the centralized_dns_server stream"
   }
   assert {
@@ -101,11 +104,11 @@ run "dns_server_renders_resolved_conf" {
   }
 
   assert {
-    condition     = strcontains(local_file.server_ci.content, "resolved.conf.d/99-centralized-dns.conf")
+    condition     = strcontains(local_file.server_ci[0].content, "resolved.conf.d/99-centralized-dns.conf")
     error_message = "dns_server set must render the external resolver drop-in"
   }
   assert {
-    condition     = strcontains(local_file.server_ci.content, "DNS=10.7.7.7")
+    condition     = strcontains(local_file.server_ci[0].content, "DNS=10.7.7.7")
     error_message = "external resolver drop-in must carry the injected DNS IP"
   }
 }
@@ -115,7 +118,7 @@ run "internal_ca_off_by_default" {
   command = plan
 
   assert {
-    condition     = !strcontains(local_file.server_ci.content, "internal-root-ca.crt")
+    condition     = !strcontains(local_file.server_ci[0].content, "internal-root-ca.crt")
     error_message = "with internal_ca_cert unset, cloud-init must NOT drop a root CA into the trust store"
   }
 }
@@ -129,15 +132,15 @@ run "internal_ca_on_renders_trust" {
   }
 
   assert {
-    condition     = strcontains(local_file.server_ci.content, "/usr/local/share/ca-certificates/internal-root-ca.crt")
+    condition     = strcontains(local_file.server_ci[0].content, "/usr/local/share/ca-certificates/internal-root-ca.crt")
     error_message = "internal_ca_cert set must drop the root CA into /usr/local/share/ca-certificates"
   }
   assert {
-    condition     = strcontains(local_file.server_ci.content, "update-ca-certificates")
+    condition     = strcontains(local_file.server_ci[0].content, "update-ca-certificates")
     error_message = "internal_ca_cert set must run update-ca-certificates to install the trust"
   }
   assert {
-    condition     = strcontains(local_file.server_ci.content, "MIITESTROOTCA")
+    condition     = strcontains(local_file.server_ci[0].content, "MIITESTROOTCA")
     error_message = "the rendered CA cert must carry the injected PEM body"
   }
 }

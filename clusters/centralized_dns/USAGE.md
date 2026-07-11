@@ -4,8 +4,11 @@
 
 ```sh
 just up centralized_dns
-DNS_IP=$(tofu -chdir=clusters/centralized_dns output -raw server_ipv4)
+DNS_IP=$(tofu -chdir=clusters/centralized_dns output -raw dns_endpoint)
 ```
+
+`dns_endpoint` is the single VM's IP by default, or the floating VIP once `enable_ha = true` (see
+"HA mode" below) — it's what the rest of the fleet resolves against either way.
 
 First boot installs Unbound (apt), runs the official AdGuard Home installer, and builds the two
 DNS exporters from source (`go install`) — give it a few minutes. The cloud-init frees `:53` by
@@ -45,6 +48,39 @@ every enabled `/metrics` endpoint. `up-connected` adds all three to Prometheus.
 ## Iterating on cloud-init
 
 **Do not** `just recreate centralized_dns` while the fleet is up-connected — recreating churns the
-DNS IP and breaks every other VM's resolver. Instead SSH in, patch
-`/opt/AdGuardHome/AdGuardHome.yaml` or `/etc/unbound/unbound.conf.d/centralized-dns.conf`, and
-`sudo systemctl restart AdGuardHome` / `unbound`; then fold the fix back into the `.tftpl`.
+DNS IP and breaks every other VM's resolver (this is exactly what HA mode's VIP fixes — see
+below). Instead SSH in, patch `/opt/AdGuardHome/AdGuardHome.yaml` or
+`/etc/unbound/unbound.conf.d/centralized-dns.conf`, and `sudo systemctl restart AdGuardHome` /
+`unbound`; then fold the fix back into the `.tftpl`.
+
+## HA mode (opt-in)
+
+```sh
+# one-shot: writes ha.auto.tfvars.json (enable_ha=true + VIP) and cascades to `just recreate`.
+# VIP must be a FREE address on the Multipass subnet. 2nd arg `verify` (or HA_VERIFY=1) also
+# cascades to verify + dns-failover-test; VIP may instead come from $HA_VIP.
+just dns-ha 10.0.7.99                   # enable HA + recreate
+just dns-ha 10.0.7.99 verify           # ...then verify + failover-test
+just dns-ha-off centralized_dns        # disable HA: remove the tfvars + recreate to single mode
+
+# ...or hand-write the throwaway .auto.tfvars (outranks terraform.tfvars, see root CLAUDE.md):
+#   cat > clusters/centralized_dns/ha.auto.tfvars <<'EOF'
+#   enable_ha   = true
+#   vip_address = "10.0.7.99"
+#   EOF
+#   just recreate centralized_dns
+
+just verify   centralized_dns          # HA-aware: adds keepalived + sync + failover tests
+just dns-failover-test centralized_dns # kill AdGuard on the VIP holder; assert it moves + preempts back
+just dns-sync-status   centralized_dns # AdGuardHome-Sync journal on primary
+```
+
+`dns_endpoint` becomes the VIP; `tofu output -json hosts` becomes `{primary, secondary}` instead
+of `{server}`. **Edit AdGuard config on `primary`'s real IP only** — `dns_rewrite_target` (what
+`just set-dns-all` pushes to) and `adguard_cli.py`'s default target both resolve to `primary`,
+never the VIP, but the web UI itself is reachable at either address; hitting `secondary` directly
+is silently reverted on the next AdGuardHome-Sync cycle. Because HA is genuinely additive and
+`dns_endpoint` — not `server_ipv4` — is the stable address, **recreating the DNS nodes in HA mode
+no longer churns the address the fleet depends on**; the "do not recreate" gotcha above is a
+single-mode-only constraint. See [`specs/ha-dns.md`](../../specs/ha-dns.md) and this cluster's
+[`README.md`](README.md#ha-mode-opt-in-enable_ha) for the full design.

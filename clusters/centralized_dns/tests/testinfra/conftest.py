@@ -50,8 +50,40 @@ def enabled_flags(tofu_output):
 
 
 @pytest.fixture(scope="session")
+def ha_mode(hosts):
+    """True when the cluster is deployed in HA mode (primary/secondary roles instead of server)."""
+    return "primary" in hosts and "secondary" in hosts
+
+
+@pytest.fixture(scope="session")
+def vip(tofu_output):
+    """The keepalived floating VIP (`vip_address` output); empty string in single mode."""
+    return tofu_output.get("vip_address", {}).get("value", "")
+
+
+def _primary_or_server(hosts):
+    # In HA mode there is no `server` role; the primary node is the equivalent full DNS node, so the
+    # single-mode test suite (test_dns/test_services/test_metrics/test_ntp) runs against it.
+    return "server" if "server" in hosts else "primary"
+
+
+@pytest.fixture(scope="session")
 def server_ip(hosts):
-    return hosts["server"]["ipv4"]
+    return hosts[_primary_or_server(hosts)]["ipv4"]
+
+
+@pytest.fixture(scope="session")
+def primary_ip(hosts, ha_mode):
+    if not ha_mode:
+        pytest.skip("not HA mode (no primary node)")
+    return hosts["primary"]["ipv4"]
+
+
+@pytest.fixture(scope="session")
+def secondary_ip(hosts, ha_mode):
+    if not ha_mode:
+        pytest.skip("not HA mode (no secondary node)")
+    return hosts["secondary"]["ipv4"]
 
 
 @pytest.fixture(scope="session")
@@ -89,4 +121,18 @@ def _connect(ip, ssh_config_file):
 
 @pytest.fixture(scope="session")
 def server(hosts, ssh_config_file):
-    return _connect(hosts["server"]["ipv4"], ssh_config_file)
+    return _connect(hosts[_primary_or_server(hosts)]["ipv4"], ssh_config_file)
+
+
+@pytest.fixture(scope="session")
+def primary(hosts, ssh_config_file, ha_mode):
+    if not ha_mode:
+        pytest.skip("not HA mode (no primary node)")
+    return _connect(hosts["primary"]["ipv4"], ssh_config_file)
+
+
+@pytest.fixture(scope="session")
+def secondary(hosts, ssh_config_file, ha_mode):
+    if not ha_mode:
+        pytest.skip("not HA mode (no secondary node)")
+    return _connect(hosts["secondary"]["ipv4"], ssh_config_file)

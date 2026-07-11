@@ -44,6 +44,14 @@ AdGuard actually answering (`dig @<dns_ip> example.com`) — a dependent VM that
 resolver before AdGuard is live can't resolve `archive.ubuntu.com` mid-boot — then wires every
 later cluster with `dns_server=<dns_ip>`.
 
+`<dns_ip>` here is `centralized_dns`'s `dns_endpoint` output, not `server_ipv4` — with the
+opt-in HA mode (`enable_ha`; see `specs/ha-dns.md`), `dns_endpoint` resolves to the floating
+keepalived VIP fronting `primary`/`secondary` instead of a single VM's IP, so `up-connected`'s
+health-gate and every consumer's `dns_server` wiring need no HA-mode branching — they always
+read `dns_endpoint`. DNS-record pushes (`just set-dns-all`) instead target `dns_rewrite_target`
+(the origin/`primary` node in HA mode, so AdGuardHome-Sync replicates to `secondary`; the single
+VM otherwise) — pushing at the VIP would race the next sync cycle.
+
 The DNS hub is *also* a telemetry consumer (its own logs → OpenObserve, its exporters scraped by
 Prometheus), but it booted **before** the telemetry hubs existed. This is resolved exactly like
 the Prometheus scrape-target problem: its own log-shipping is **hot-pushed** after the hubs come
