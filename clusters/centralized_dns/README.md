@@ -73,3 +73,23 @@ New outputs `dns_endpoint` (the VIP in HA mode, the single VM's IP otherwise —
 resolves against) and `dns_rewrite_target` (the origin node — where `just set-dns-all` pushes
 rewrites) are what every other cluster/recipe reads, so HA needs no mode-specific branching
 elsewhere in the fleet.
+
+### VIP feasibility spike — confirmed working on Multipass (macOS)
+
+The one genuinely uncertain part of HA on Multipass — whether a keepalived floating VIP is reachable
+from the **Mac host** across the QEMU/vmnet bridge — was proven with a throwaway two-VM spike
+(`specs/ha-dns.md` Task 1). Result: **it works, unicast VRRP, no fallback needed.**
+
+- **Subnet / bridge:** Multipass VMs live on `192.168.252.0/24` behind `bridge100` (gateway
+  `192.168.252.1`); the guest NIC is `enp0s1`. Pick a `vip_address` that is free on this subnet
+  (verify with `ping`/`arp -a` first) — the spike used `192.168.252.240`.
+- **Transport:** **unicast** VRRP (`unicast_src_ip` + `unicast_peer`, keepalived's default here) —
+  no multicast needed on the bridge.
+- **Host reachability:** `dig @<VIP>` and `ping <VIP>` answer **from the Mac host** — gratuitous ARP
+  for the VIP propagates across `bridge100`. This is the key result; there is no host→VIP block.
+- **Failover:** `systemctl stop keepalived` on MASTER → BACKUP entered `MASTER STATE` in ~1s, the VIP
+  migrated, and host-side `dig @<VIP>` did not drop a single query. The VIP **preempts back** to the
+  higher-priority node on recovery.
+
+So on Multipass, HA is fully exercisable (host-side clients included); no Proxmox-only / VM-to-VM-only
+fallback is required.

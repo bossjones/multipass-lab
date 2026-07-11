@@ -354,7 +354,7 @@ resource "terraform_data" "adguardhome_sync_push" {
       scp ${local.ssh_opts} ${local_file.adguardhome_sync_conf[0].filename} ubuntu@"$primary_ip":/tmp/adguardhome-sync.yaml.new
       ssh -n ${local.ssh_opts} ubuntu@"$primary_ip" '
         set -e
-        sudo install -o root -g root -m0600 /tmp/adguardhome-sync.yaml.new /etc/adguardhome-sync/adguardhome-sync.yaml
+        sudo install -D -o root -g root -m0600 /tmp/adguardhome-sync.yaml.new /etc/adguardhome-sync/adguardhome-sync.yaml
         sudo systemctl enable --now adguardhome-sync
         sudo systemctl restart adguardhome-sync
       '

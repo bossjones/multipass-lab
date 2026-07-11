@@ -14,10 +14,20 @@ replicas:
 cron: "@every ${sync_interval}"
 runOnStart: true
 
+# v0.7.5 schema: every feature is a boolean and defaults to enabled; `dhcp` and `dns` are
+# OBJECTS (not booleans) and `clients` is `clientSettings`. We mirror everything from primary
+# to secondary EXCEPT DHCP (the lab nodes are not DHCP servers).
 features:
   generalSettings: true
+  queryLogConfig: true
+  statsConfig: true
+  clientSettings: true
+  services: true
   filters: true
-  dhcp: false
-  clients: true
+  dhcp:
+    serverConfig: false
+    staticLeases: false
   dns:
+    serverConfig: true
+    accessLists: true
     rewrites: true

@@ -373,7 +373,8 @@ locals {
   vrrp_script chk_adguard {
       script "/usr/local/sbin/chk_adguard.sh"
       interval 2
-      weight -60          # drop below the 100-point priority gap on failure
+      weight -120         # MUST exceed the 100-point gap: 200-120=80 < 100 so the VIP moves
+                          # (weight -60 only drops to 140, above 100 — VIP never fails over)
       fall 2
       rise 2
   }

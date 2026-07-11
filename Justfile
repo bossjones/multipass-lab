@@ -1123,33 +1123,39 @@ dns-failover-test CLUSTER:
     fi
     echo "VIP $vip is currently held by: $holder ($holder_ip)"
 
+    # the node that should take over when we down the current holder
+    if [ "$holder" = "primary" ]; then other="secondary"; other_ip="$secondary_ip"; else other="primary"; other_ip="$primary_ip"; fi
+
     echo "=== stopping AdGuardHome on $holder to force failover ==="
     ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$holder_ip" 'sudo systemctl stop AdGuardHome'
 
+    # a failing chk_adguard must drop the holder's priority BELOW the peer's so the VIP actually
+    # migrates — assert the VIP appears on $other AND keeps answering (not just that DNS answers).
     ok=1
     for i in $(seq 1 10); do
-      if dig +time=1 +tries=1 +short @"$vip" example.com >/dev/null 2>&1; then ok=0; break; fi
+      if ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$other_ip" "ip addr show | grep -q $vip" \
+         && dig +time=1 +tries=1 +short @"$vip" example.com >/dev/null 2>&1; then
+        echo "PASS: VIP $vip migrated to $other and still answers DNS (~${i}s after stopping AdGuard on $holder)"
+        ok=0; break
+      fi
       sleep 1
     done
-    if [ "$ok" -eq 0 ]; then
-      echo "PASS: VIP $vip still answers DNS within 10s of stopping AdGuard on $holder"
-    else
-      echo "FAIL: VIP $vip stopped answering after stopping AdGuard on $holder" >&2
-    fi
+    [ "$ok" -eq 0 ] || echo "FAIL: VIP $vip did not migrate to $other / stopped answering within 10s of stopping AdGuard on $holder" >&2
 
     echo "=== restarting AdGuardHome on $holder ==="
     ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$holder_ip" 'sudo systemctl start AdGuardHome'
-    sleep 3
-    if [ "$holder" = "primary" ]; then
-      echo "PASS: primary is back — preemption is a no-op since primary never lost the VIP holder role in this run"
-    else
-      preempted=1
-      for i in $(seq 1 10); do
-        if ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$primary_ip" "ip addr show | grep -q $vip"; then preempted=0; break; fi
-        sleep 1
-      done
-      [ "$preempted" -eq 0 ] && echo "PASS: VIP preempted back to primary" || echo "FAIL: VIP did not preempt back to primary within 10s" >&2
-    fi
+    # primary has the highest priority, so once healthy the VIP must end up back on primary
+    # (preempt). Assert it lands on primary and DNS keeps answering throughout.
+    back=1
+    for i in $(seq 1 15); do
+      if ssh -n {{ssh_opts}} -i {{ssh_key}} ubuntu@"$primary_ip" "ip addr show | grep -q $vip" \
+         && dig +time=1 +tries=1 +short @"$vip" example.com >/dev/null 2>&1; then
+        echo "PASS: VIP $vip is back on primary (preempt) and answers DNS (~${i}s after AdGuard recovered)"
+        back=0; break
+      fi
+      sleep 1
+    done
+    [ "$back" -eq 0 ] || { echo "FAIL: VIP $vip did not preempt back to primary within 15s" >&2; ok=1; }
     exit "$ok"
 
 # live: tail AdGuardHome-Sync's recent journal on primary (thin wrapper over adguard_cli.py sync-status).

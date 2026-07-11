@@ -312,7 +312,11 @@ runcmd:
   # post-apply push writes the config and starts the service for the first time.
   - |
     ARCH="$(dpkg --print-architecture)"
-    curl -sSLf "https://github.com/bakito/adguardhome-sync/releases/download/${adguardhome_sync_version}/adguardhome-sync_linux_$${ARCH}.tar.gz" -o /tmp/adguardhome-sync.tar.gz
+    # bakito/adguardhome-sync assets embed the version WITHOUT the leading "v" in the
+    # filename (e.g. adguardhome-sync_0.7.5_linux_arm64.tar.gz) while the release tag keeps
+    # it. Strip the "v" for the filename only; the download path still uses the full tag.
+    SYNC_VER="$(echo "${adguardhome_sync_version}" | sed 's/^v//')"
+    curl -sSLf "https://github.com/bakito/adguardhome-sync/releases/download/${adguardhome_sync_version}/adguardhome-sync_$${SYNC_VER}_linux_$${ARCH}.tar.gz" -o /tmp/adguardhome-sync.tar.gz
     tar -xzf /tmp/adguardhome-sync.tar.gz -C /tmp adguardhome-sync
     install -m0755 /tmp/adguardhome-sync /usr/local/bin/adguardhome-sync
   - systemctl daemon-reload
