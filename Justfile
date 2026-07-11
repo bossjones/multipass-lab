@@ -1089,6 +1089,50 @@ tail-log CLUSTER ROLE:
 
 # --- centralized_dns HA (opt-in enable_ha; see specs/ha-dns.md) --------------------------------
 
+# Turn HA ON: write clusters/<CLUSTER>/ha.auto.tfvars.json (enable_ha=true + the VIP) and cascade
+# to `just recreate` (NOT `up` — HA flips VM topology 1->2 and cloud-init). The VIP is REQUIRED and
+# must be a FREE address on the Multipass subnet (see specs/ha-dns.md Task 1); pass it as the first
+# arg or via $HA_VIP. If a cascade gate is set (2nd arg, or $HA_VERIFY), also chain
+# `just verify` + `just dns-failover-test` afterward. VIP is the FIRST positional (HA is
+# centralized_dns-specific) so `just dns-ha <vip>` binds the VIP, not CLUSTER.
+#   just dns-ha 192.168.252.240            # enable HA + recreate
+#   just dns-ha 192.168.252.240 verify     # ...then verify + failover-test
+#   HA_VIP=192.168.252.240 HA_VERIFY=1 just dns-ha
+dns-ha VIP="" VERIFY="" CLUSTER="centralized_dns":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    vip="{{VIP}}"; [ -z "$vip" ] && vip="${HA_VIP:-}"
+    if [ -z "$vip" ]; then
+      echo "no VIP given — pass one as the first arg (just dns-ha 192.168.252.240) or set HA_VIP." >&2
+      echo "it must be a FREE address on the Multipass subnet (see specs/ha-dns.md Task 1)." >&2
+      exit 1
+    fi
+    verify="{{VERIFY}}"; [ -z "$verify" ] && verify="${HA_VERIFY:-}"
+    # one auto-tfvars only: drop a stale HCL twin before writing the JSON form.
+    rm -f {{cluster_root}}/{{CLUSTER}}/ha.auto.tfvars
+    jq -n --arg vip "$vip" '{enable_ha: true, vip_address: $vip}' \
+      > {{cluster_root}}/{{CLUSTER}}/ha.auto.tfvars.json
+    echo "=== wrote {{cluster_root}}/{{CLUSTER}}/ha.auto.tfvars.json (enable_ha=true, vip_address=$vip) ==="
+    just recreate {{CLUSTER}}
+    if [ -n "$verify" ]; then
+      echo "=== cascade: verify + dns-failover-test ==="
+      just verify {{CLUSTER}}
+      just dns-failover-test {{CLUSTER}}
+    fi
+    echo ""
+    echo "HA is ON for {{CLUSTER}} (VIP $vip). Revert to single mode with: just dns-ha-off {{CLUSTER}}"
+    echo "(the ha.auto.tfvars.json is auto-loaded — leaving it in place keeps HA on for future ups.)"
+
+# Turn HA OFF: remove clusters/<CLUSTER>/ha.auto.tfvars(.json) and cascade to `just recreate` so the
+# cluster returns to a single `server` VM. Removing the file matters — a leftover HA *.auto.tfvars
+# would keep enable_ha on for every later `just up`/`just check`.  just dns-ha-off centralized_dns
+dns-ha-off CLUSTER="centralized_dns":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rm -f {{cluster_root}}/{{CLUSTER}}/ha.auto.tfvars.json {{cluster_root}}/{{CLUSTER}}/ha.auto.tfvars
+    echo "=== removed ha.auto.tfvars(.json) — {{CLUSTER}} returning to single mode ==="
+    just recreate {{CLUSTER}}
+
 # live: kill AdGuard Home on whichever HA node currently holds the VIP, assert the VIP moves to
 # the other node within a few seconds and keeps answering DNS, then restart AdGuard and assert it
 # preempts back to primary. Requires enable_ha=true and the cluster up.  just dns-failover-test centralized_dns

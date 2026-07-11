@@ -63,11 +63,19 @@ the HA `primary`/`secondary` nodes are kept as separate resources rather than un
 `for_each`), and the peer-IP wiring are in [`specs/ha-dns.md`](../../specs/ha-dns.md).
 
 ```sh
-just recreate centralized_dns          # after setting enable_ha=true / vip_address (needs recreate, not up)
+just dns-ha 10.0.7.99                   # turn HA ON: write ha.auto.tfvars.json (VIP) + recreate
+just dns-ha 10.0.7.99 verify           # ...then also cascade to verify + dns-failover-test
+just dns-ha-off centralized_dns        # turn HA OFF: remove the tfvars + recreate to single mode
 just verify centralized_dns            # HA-aware; adds keepalived + sync + failover tests
 just dns-failover-test centralized_dns # kill AdGuard on the VIP holder, assert it moves + preempts back
 just dns-sync-status centralized_dns   # AdGuardHome-Sync status on primary
 ```
+
+`just dns-ha <vip>` is the one-shot toggle: it writes `ha.auto.tfvars.json` (`enable_ha=true` +
+the VIP, which must be a free address on the Multipass subnet) and cascades to `just recreate`.
+Pass a 2nd arg `verify` (or set `HA_VERIFY=1`; VIP also via `HA_VIP`) to additionally run
+`verify` + `dns-failover-test`. `just dns-ha-off` removes the tfvars and recreates back to single
+mode. (You can still hand-write the tfvars, as below, if you prefer.)
 
 New outputs `dns_endpoint` (the VIP in HA mode, the single VM's IP otherwise — what the fleet
 resolves against) and `dns_rewrite_target` (the origin node — where `just set-dns-all` pushes

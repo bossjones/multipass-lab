@@ -56,12 +56,20 @@ below). Instead SSH in, patch `/opt/AdGuardHome/AdGuardHome.yaml` or
 ## HA mode (opt-in)
 
 ```sh
-# throwaway .auto.tfvars — outranks terraform.tfvars, see the root CLAUDE.md gotcha
-cat > clusters/centralized_dns/ha.auto.tfvars <<'EOF'
-enable_ha   = true
-vip_address = "10.0.7.99"   # a free IP on the Multipass subnet
-EOF
-just recreate centralized_dns          # editing cloud-init (enable_ha flips it) needs recreate, not up
+# one-shot: writes ha.auto.tfvars.json (enable_ha=true + VIP) and cascades to `just recreate`.
+# VIP must be a FREE address on the Multipass subnet. 2nd arg `verify` (or HA_VERIFY=1) also
+# cascades to verify + dns-failover-test; VIP may instead come from $HA_VIP.
+just dns-ha 10.0.7.99                   # enable HA + recreate
+just dns-ha 10.0.7.99 verify           # ...then verify + failover-test
+just dns-ha-off centralized_dns        # disable HA: remove the tfvars + recreate to single mode
+
+# ...or hand-write the throwaway .auto.tfvars (outranks terraform.tfvars, see root CLAUDE.md):
+#   cat > clusters/centralized_dns/ha.auto.tfvars <<'EOF'
+#   enable_ha   = true
+#   vip_address = "10.0.7.99"
+#   EOF
+#   just recreate centralized_dns
+
 just verify   centralized_dns          # HA-aware: adds keepalived + sync + failover tests
 just dns-failover-test centralized_dns # kill AdGuard on the VIP holder; assert it moves + preempts back
 just dns-sync-status   centralized_dns # AdGuardHome-Sync journal on primary

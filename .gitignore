@@ -486,6 +486,9 @@ apps/task-manager/data/
 
 
 
+# Session scratch — transient working files (background logs, tfvars backups, temp cloud-init)
+scratchpad/
+
 # Logs
 logs/
 *.log
