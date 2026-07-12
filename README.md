@@ -15,6 +15,18 @@ parameterize the provider/connection, not the resources.
 
 ---
 
+### 🎞️ How this repo was built
+
+[<img src="docs/slides/title-slide.png" alt="Shipping Infrastructure With a Team of Agents — a 26-slide deck on how multipass-lab was built with cmux, boss-cmux, and multi-agent orchestration" width="100%">](docs/slides/index.html)
+
+<p align="center">
+  <b><a href="docs/slides/index.html">Open the deck →</a></b><br>
+  <sub>26 slides on cmux, agent fleets, and the coordination protocol — including what broke.
+  Zero-dependency single file: <code>open docs/slides/index.html</code>.</sub>
+</p>
+
+---
+
 ## Contents
 
 - [Why this exists](#why-this-exists)

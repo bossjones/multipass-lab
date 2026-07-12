@@ -1,0 +1,2242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shipping Infrastructure With a Team of Agents</title>
+<!-- inline favicon: keeps the console clean with zero external requests -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%230d1117'/><text x='8' y='12' font-size='11' text-anchor='middle' fill='%2339d353' font-family='monospace'>%3E</text></svg>">
+
+<!-- Typography: JetBrains Mono only (Terminal Green preset). Never system fonts. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400;1,600&display=swap" rel="stylesheet">
+
+<style>
+/* ===========================================
+   THEME — Terminal Green
+   Change these variables to restyle the deck.
+   =========================================== */
+:root{
+    /* Surfaces */
+    --stage-bg:#05070a;          /* letterbox area outside the 16:9 stage */
+    --slide-bg:#0d1117;          /* GitHub dark canvas */
+    --bg-deep:#010409;
+    --panel:#161b22;
+    --panel-2:#11161d;
+    --line:#21262d;
+    --line-2:#30363d;
+
+    /* Ink */
+    --text:#c9d1d9;
+    --text-hi:#e6edf3;
+    --muted:#6e7681;
+    --dim:#484f58;
+
+    /* Accents */
+    --green:#39d353;
+    --green-dim:#26a641;
+    --green-deep:#0e4429;
+    --glow:rgba(57,211,83,.42);
+    --blue:#58a6ff;
+    --amber:#d29922;
+    --red:#f85149;
+    --purple:#bc8cff;
+
+    /* Type — authored at the 1920×1080 stage size */
+    --font:'JetBrains Mono', ui-monospace, monospace;
+
+    /* Motion */
+    --ease:cubic-bezier(.16,1,.3,1);
+    --dur:.6s;
+}
+
+*{margin:0;padding:0;box-sizing:border-box;}
+
+/* ===========================================
+   FIXED 16:9 STAGE — MANDATORY BASE STYLES
+   (full contents of viewport-base.css)
+   =========================================== */
+
+/* 1. Lock the browser viewport */
+html,
+body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    background: var(--stage-bg, #000);
+}
+
+/* 2. Full-window deck viewport */
+.deck-viewport {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    background: var(--stage-bg, #000);
+}
+
+/* 3. Fixed 16:9 design canvas.
+   JavaScript sets transform: translate(...) scale(...). */
+.deck-stage {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    transform-origin: 0 0;
+    background: var(--slide-bg, #fff);
+}
+
+/* 4. Slides stack inside the fixed stage.
+   Content must be laid out at 1920×1080, not reflowed per device. */
+.slide {
+    position: absolute;
+    inset: 0;
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    display: block;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    background: var(--slide-bg, #fff);
+}
+
+.slide.active,
+.slide.visible {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+    z-index: 1;
+}
+
+/* 5. Keep media inside authored slide bounds */
+img,
+video,
+canvas,
+svg {
+    max-width: 100%;
+    max-height: 100%;
+}
+
+/* 6. Presentation chrome stays outside the slide design system */
+.deck-controls {
+    position: fixed;
+    left: 50%;
+    bottom: 22px;
+    transform: translateX(-50%);
+    z-index: 1000;
+}
+
+/* 7. Print one fixed-size slide per page */
+@media print {
+    html,
+    body {
+        width: 1920px;
+        height: auto;
+        overflow: visible;
+        background: #fff;
+    }
+
+    .deck-viewport {
+        position: static;
+        overflow: visible;
+        background: #fff;
+    }
+
+    .deck-stage {
+        position: static;
+        width: auto;
+        height: auto;
+        transform: none !important;
+        background: none;
+    }
+
+    .slide {
+        position: relative;
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        width: 1920px;
+        height: 1080px;
+        break-after: page;
+        page-break-after: always;
+    }
+
+    .slide:last-child {
+        break-after: auto;
+        page-break-after: auto;
+    }
+
+    .deck-controls {
+        display: none !important;
+    }
+}
+
+/* 8. Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.2s !important;
+    }
+}
+
+/* ===========================================
+   SLIDE SHELL — shared chrome for every slide
+   Top rail (act + slide no) / body / status bar
+   =========================================== */
+.slide{font-family:var(--font);color:var(--text);}
+
+/* Ambient: faint grid + green bloom, masked so it never fights the text */
+.slide::before{
+    content:"";position:absolute;inset:0;pointer-events:none;z-index:0;
+    background-image:linear-gradient(var(--line) 1px,transparent 1px),
+                     linear-gradient(90deg,var(--line) 1px,transparent 1px);
+    background-size:80px 80px;opacity:.45;
+    -webkit-mask-image:radial-gradient(1400px 900px at 25% 45%,#000 10%,transparent 78%);
+            mask-image:radial-gradient(1400px 900px at 25% 45%,#000 10%,transparent 78%);
+}
+/* Scanlines — the CRT signature of the preset */
+.slide::after{
+    content:"";position:absolute;inset:0;pointer-events:none;z-index:40;
+    background:repeating-linear-gradient(180deg,rgba(57,211,83,.028) 0 1px,transparent 1px 3px);
+}
+
+/* --- top rail --- */
+.rail{position:absolute;top:0;left:0;right:0;height:72px;z-index:5;
+    display:flex;align-items:center;padding:0 84px;gap:22px;
+    border-bottom:1px solid var(--line);background:rgba(1,4,9,.55);}
+.rail .act{font-size:16px;letter-spacing:.2em;text-transform:uppercase;color:var(--green-dim);font-weight:600;}
+.rail .sep{color:var(--dim);}
+.rail .topic{font-size:16px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);}
+.rail .no{margin-left:auto;font-size:16px;letter-spacing:.18em;color:var(--dim);}
+.rail .no b{color:var(--text);font-weight:600;}
+
+/* --- body --- */
+/* Vertically centred so a slide's content sits in the optical middle of the
+   stage rather than hugging the rail with dead space beneath it. */
+.body{position:absolute;top:72px;left:0;right:0;bottom:56px;z-index:5;padding:40px 84px;
+    display:flex;flex-direction:column;justify-content:center;}
+
+/* --- status bar --- */
+.statusbar{position:absolute;left:0;right:0;bottom:0;height:56px;z-index:5;
+    display:flex;align-items:center;gap:30px;padding:0 84px;
+    border-top:1px solid var(--line);background:rgba(1,4,9,.55);
+    font-size:14px;color:var(--dim);letter-spacing:.06em;}
+.statusbar .src{color:var(--green-deep);color:#2e7d40;}
+.statusbar .rt{margin-left:auto;}
+
+/* Fixed-height blocks (diagrams, pane grids, phase bands) must never be
+   shrunk by the flex column — they are authored at exact stage pixels. */
+.body > *{flex:none;}
+
+/* --- headings --- */
+.kicker{font-size:15px;letter-spacing:.24em;text-transform:uppercase;color:var(--green-dim);margin-bottom:16px;}
+h2{font-size:54px;font-weight:800;letter-spacing:-.03em;color:var(--text-hi);line-height:1.08;}
+h2 .m{color:var(--green);}
+h2 em{font-style:normal;color:var(--green);text-shadow:0 0 30px var(--glow);}
+.lede{margin-top:16px;font-size:22px;font-weight:300;line-height:1.55;color:#8b949e;max-width:1500px;}
+.lede b{color:var(--text);font-weight:500;}
+.lede code,.hl{color:var(--green);font-weight:500;}
+
+/* --- generic panel --- */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:22px 24px;position:relative;overflow:hidden;}
+.card h3{font-size:19px;font-weight:600;color:var(--text-hi);letter-spacing:-.01em;}
+.card p{font-size:16px;font-weight:300;line-height:1.55;color:#8b949e;margin-top:8px;}
+.card .tag{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);}
+
+/* callout */
+.callout{border:1px solid rgba(57,211,83,.3);background:rgba(57,211,83,.06);border-radius:10px;
+    padding:18px 24px;font-size:18px;line-height:1.5;color:#9fb3a6;}
+.callout b{color:var(--green);font-weight:600;}
+.callout code{color:var(--text-hi);}
+
+/* code block */
+pre{background:var(--bg-deep);border:1px solid var(--line-2);border-radius:10px;
+    padding:22px 26px;font-family:var(--font);font-size:19px;line-height:1.7;color:var(--text);overflow:hidden;}
+pre .c{color:var(--dim);}      /* comment */
+pre .k{color:var(--green);}    /* keyword / accent */
+pre .s{color:var(--blue);}     /* string / path */
+pre .w{color:var(--amber);}    /* warn */
+code{font-family:var(--font);}
+
+/* ===========================================
+   ANIMATION — staggered reveals, driven by .visible
+   =========================================== */
+.reveal{opacity:0;transform:translateY(26px);
+    transition:opacity var(--dur) var(--ease),transform var(--dur) var(--ease);}
+.slide.visible .reveal{opacity:1;transform:translateY(0);}
+.reveal.x{transform:translateX(-28px);}
+.slide.visible .reveal.x{transform:translateX(0);}
+.reveal.s{transform:scale(.94);}
+.slide.visible .reveal.s{transform:scale(1);}
+.d1{transition-delay:.08s}.d2{transition-delay:.16s}.d3{transition-delay:.24s}.d4{transition-delay:.32s}
+.d5{transition-delay:.40s}.d6{transition-delay:.48s}.d7{transition-delay:.56s}.d8{transition-delay:.64s}
+.d9{transition-delay:.72s}.d10{transition-delay:.80s}.d11{transition-delay:.88s}.d12{transition-delay:.96s}
+
+/* the green rule that opens most slides */
+.rule{width:120px;height:3px;background:var(--green);border-radius:2px;
+    box-shadow:0 0 18px var(--glow);transform-origin:0 50%;transform:scaleX(0);
+    transition:transform .7s var(--ease) .3s;}
+.slide.visible .rule{transform:scaleX(1);}
+
+/* blinking cursor */
+.cursor{display:inline-block;width:.55em;height:1em;background:var(--green);
+    vertical-align:-.12em;margin-left:.22em;box-shadow:0 0 22px var(--glow);
+    animation:blink 1.05s steps(2,start) infinite;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+
+/* ===========================================
+   S1 — TITLE
+   =========================================== */
+.t-chrome{position:absolute;top:0;left:0;right:0;height:56px;z-index:5;
+    display:flex;align-items:center;gap:18px;padding:0 34px;
+    border-bottom:1px solid var(--line);background:rgba(1,4,9,.6);}
+.dots{display:flex;gap:9px}
+.dot{width:13px;height:13px;border-radius:50%}
+.t-path{font-size:19px;color:var(--muted)}
+.t-path b{color:var(--green-dim);font-weight:400}
+.t-right{margin-left:auto;font-size:17px;color:var(--muted);letter-spacing:.14em;text-transform:uppercase}
+.t-body{position:absolute;top:56px;left:0;right:0;bottom:0;z-index:5;padding:96px 120px 0}
+.t-prompt{font-size:23px;color:var(--green-dim);margin-bottom:44px}
+.t-prompt .u{color:var(--green)}
+.t-prompt .c{color:var(--muted)}
+.t-title{font-size:104px;font-weight:800;line-height:1.02;letter-spacing:-.035em;color:var(--text-hi)}
+.t-title span{display:block}
+.t-sub{margin-top:40px;font-size:31px;font-weight:300;line-height:1.5;color:#8b949e;max-width:1200px}
+.t-sub em{font-style:normal;color:#7ee787;background:rgba(57,211,83,.10);
+    border:1px solid rgba(57,211,83,.28);padding:2px 10px;border-radius:4px}
+.t-stats{position:absolute;left:120px;right:120px;bottom:96px;z-index:5;
+    display:flex;align-items:flex-end;border-top:1px solid var(--line);padding-top:34px}
+.t-stat{padding-right:78px;margin-right:78px;border-right:1px solid var(--line)}
+.t-stat:nth-of-type(3){border-right:0}
+.t-stat .n{font-size:56px;font-weight:800;color:var(--green);line-height:1;letter-spacing:-.02em}
+.t-stat .k{font-size:17px;color:var(--muted);letter-spacing:.16em;text-transform:uppercase;margin-top:12px}
+.t-by{margin-left:auto;text-align:right}
+.t-by .w{font-size:26px;color:var(--text);font-weight:600}
+.t-by .d{font-size:17px;color:var(--muted);letter-spacing:.12em;margin-top:10px;text-transform:uppercase}
+
+/* ===========================================
+   LOW-DENSITY STATEMENT SLIDES
+   =========================================== */
+.stmt{position:absolute;top:72px;left:0;right:0;bottom:56px;z-index:5;
+    padding:0 130px;display:flex;flex-direction:column;justify-content:center}
+.stmt h2{font-size:64px;margin-bottom:8px}
+.stmt .rule{margin:36px 0 46px}
+.big-list{list-style:none;display:flex;flex-direction:column;gap:26px;margin-top:6px}
+.big-list li{font-size:30px;font-weight:300;line-height:1.45;color:#8b949e;
+    padding-left:44px;position:relative;max-width:1560px}
+.big-list li::before{content:"▸";position:absolute;left:0;top:0;color:var(--green);font-weight:600}
+.big-list li b{color:var(--text-hi);font-weight:600}
+.big-list li .hl{color:var(--green)}
+
+/* ===========================================
+   S2 — CLUSTER GRID
+   =========================================== */
+.cluster-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin-top:34px}
+.cl{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px 20px 18px;
+    border-top:2px solid var(--green-deep);position:relative}
+.cl .nm{font-size:17px;font-weight:600;color:var(--green);letter-spacing:-.01em}
+.cl .jb{font-size:15px;font-weight:300;line-height:1.5;color:#8b949e;margin-top:9px}
+.cl.hub{border-top-color:var(--green);box-shadow:0 0 0 1px rgba(57,211,83,.22),0 0 34px -10px var(--glow)}
+.cl.hub .nm{text-shadow:0 0 20px var(--glow)}
+.cl .badge{position:absolute;top:14px;right:14px;font-size:10px;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--green);border:1px solid rgba(57,211,83,.35);
+    padding:2px 7px;border-radius:4px;background:rgba(57,211,83,.08)}
+.houserule{margin-top:22px;display:flex;gap:18px}
+.houserule .callout{flex:1}
+
+/* ===========================================
+   S3 — STAT GRID
+   =========================================== */
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;margin-top:40px}
+.sg{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:26px 24px 22px;position:relative;overflow:hidden}
+.sg::after{content:"";position:absolute;left:0;bottom:0;height:2px;width:100%;
+    background:linear-gradient(90deg,var(--green),transparent)}
+.sg .n{font-size:62px;font-weight:800;color:var(--green);line-height:1;letter-spacing:-.03em;
+    text-shadow:0 0 34px rgba(57,211,83,.28)}
+.sg .n small{font-size:26px;font-weight:600;color:var(--text);letter-spacing:0}
+.sg .k{font-size:15px;color:var(--text);margin-top:14px;font-weight:500}
+.sg .sub{font-size:13px;color:var(--dim);margin-top:5px;letter-spacing:.04em}
+.window-note{margin-top:26px;font-size:18px;color:var(--muted);display:flex;align-items:center;gap:14px}
+.window-note .bar{flex:1;height:1px;background:var(--line)}
+
+/* ===========================================
+   S5 — NESTED OBJECT HIERARCHY (diagram)
+   =========================================== */
+.hier{display:flex;gap:52px;margin-top:34px;align-items:flex-start}
+.nest{width:900px;height:600px;position:relative;flex:0 0 900px}
+.nb{position:absolute;border-radius:10px;border:1px solid;padding:34px 0 0 22px}
+.nb .lb{font-size:15px;letter-spacing:.18em;text-transform:uppercase;position:absolute;top:11px;left:22px;font-weight:600}
+.nb-win{inset:0;border-color:var(--line-2);background:var(--panel-2)}
+.nb-win>.lb{color:var(--muted)}
+.nb-ws{left:22px;right:22px;top:52px;bottom:22px;border-color:#3b4756;background:#151b23}
+.nb-ws>.lb{color:var(--blue)}
+.nb-pane{left:22px;right:22px;top:52px;bottom:22px;border-color:#4a5a52;background:#161d20}
+.nb-pane>.lb{color:var(--amber)}
+.nb-surf{left:22px;right:22px;top:52px;bottom:22px;border-color:rgba(57,211,83,.55);
+    background:rgba(57,211,83,.07);box-shadow:0 0 40px -12px var(--glow)}
+.nb-surf>.lb{color:var(--green)}
+.surf-tabs{position:absolute;left:22px;right:22px;top:46px;display:flex;gap:10px}
+.stab{font-size:14px;padding:9px 14px;border-radius:6px 6px 0 0;border:1px solid var(--line-2);
+    border-bottom:0;background:var(--bg-deep);color:var(--muted)}
+.stab.on{color:var(--green);border-color:rgba(57,211,83,.5);background:rgba(57,211,83,.1)}
+.surf-body{position:absolute;left:22px;right:22px;top:88px;bottom:20px;border:1px solid var(--line-2);
+    border-radius:0 6px 6px 6px;background:var(--bg-deep);padding:16px 18px;
+    font-size:14px;line-height:1.9;color:var(--dim)}
+.surf-body .g{color:var(--green-dim)}
+.defs{flex:1;display:flex;flex-direction:column;gap:16px;padding-top:6px}
+.def{border-left:2px solid var(--line-2);padding:2px 0 2px 20px}
+.def.g{border-left-color:var(--green)}
+.def .h{font-size:20px;font-weight:600;color:var(--text-hi)}
+.def .h i{font-style:normal;color:var(--dim);font-weight:400;font-size:16px;margin-left:8px}
+.def p{font-size:16px;font-weight:300;line-height:1.55;color:#8b949e;margin-top:6px}
+.def p b{color:var(--green);font-weight:500}
+.install{margin-top:6px;background:var(--bg-deep);border:1px solid var(--line-2);border-radius:8px;
+    padding:14px 16px;font-size:15px;color:var(--muted);line-height:1.7}
+.install .k{color:var(--green)}
+
+/* ===========================================
+   S6 — VERB TABLE
+   =========================================== */
+.verbs{display:grid;grid-template-columns:repeat(5,1fr);gap:16px;margin-top:32px}
+.vg{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px 18px;
+    display:flex;flex-direction:column;gap:11px}
+.vg .vh{font-size:14px;letter-spacing:.18em;text-transform:uppercase;color:var(--green);
+    font-weight:600;padding-bottom:11px;border-bottom:1px solid var(--line)}
+.vg code{display:block;font-size:15px;color:var(--text);line-height:1.35;
+    padding:6px 9px;background:var(--bg-deep);border-radius:5px;border:1px solid transparent;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vg code .f{color:var(--dim)}
+.nlq{margin-top:26px;display:flex;align-items:stretch;gap:20px}
+.nlq .q{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 22px;
+    font-size:18px;color:#8b949e;font-weight:300;line-height:1.5}
+.nlq .q b{color:var(--text-hi);font-weight:500}
+.nlq .arrow{display:flex;align-items:center;font-size:30px;color:var(--green)}
+
+/* ===========================================
+   S7 — TEAM PANE LAYOUT (hero diagram)
+   =========================================== */
+.team{display:flex;gap:20px;margin-top:26px;height:600px}
+.lead-pane{flex:0 0 900px;background:var(--panel);border:1px solid rgba(57,211,83,.45);border-radius:12px;
+    position:relative;overflow:hidden;box-shadow:0 0 0 1px rgba(57,211,83,.1),0 0 60px -20px var(--glow)}
+.lead-pane::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--green);
+    box-shadow:0 0 24px var(--glow)}
+.ph{height:44px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;
+    padding:0 20px;background:var(--bg-deep);font-size:14px;color:var(--muted)}
+.ph .st{margin-left:auto;font-size:12px;letter-spacing:.1em;color:var(--dim)}
+.pill{width:9px;height:9px;border-radius:50%;display:inline-block;flex:0 0 9px}
+.p-run{background:var(--blue);box-shadow:0 0 10px var(--blue)}
+.p-ok{background:var(--green);box-shadow:0 0 10px var(--glow)}
+.p-err{background:var(--red);box-shadow:0 0 10px var(--red)}
+.p-idle{background:var(--dim)}
+.lead-body{padding:26px 26px 0;font-size:16px;line-height:1.85;color:var(--dim)}
+.lead-body .g{color:var(--green)}
+.lead-body .b{color:var(--blue)}
+.lead-body .you{margin-top:22px;padding:14px 18px;border:1px dashed rgba(57,211,83,.45);border-radius:8px;
+    color:#9fb3a6;font-size:17px;line-height:1.5}
+.lead-body .you b{color:var(--green)}
+.workers{flex:1;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr 1fr;gap:14px}
+.wk{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;
+    display:flex;flex-direction:column}
+.wk .wh{height:38px;flex:0 0 38px;background:var(--bg-deep);border-bottom:1px solid var(--line);
+    display:flex;align-items:center;gap:9px;padding:0 13px;font-size:13px;color:var(--text)}
+.wk .wh .pill{margin-left:auto}
+.wk .wb{flex:1;padding:11px 13px;font-size:12px;line-height:1.7;color:var(--dim);overflow:hidden}
+.wk .wb .g{color:var(--green)}
+.wk .wb .a{color:var(--amber)}
+.bar{height:4px;background:#1d232b;border-radius:2px;margin-top:8px;overflow:hidden}
+.bar i{display:block;height:100%;border-radius:2px;background:var(--blue);box-shadow:0 0 8px var(--blue)}
+.bar.ok i{background:var(--green);box-shadow:0 0 8px var(--glow)}
+.bar.idle i{background:var(--dim);box-shadow:none}
+.team-quote{margin-top:22px;font-size:20px;color:#9fb3a6;font-weight:300;
+    border-left:3px solid var(--green);padding-left:22px;line-height:1.5}
+.team-quote b{color:var(--text-hi);font-weight:600}
+
+/* ===========================================
+   S8 — SPAWN FLOW
+   =========================================== */
+.flow{display:flex;gap:14px;margin-top:34px}
+.fs{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px 18px;
+    position:relative;display:flex;flex-direction:column;gap:10px}
+.fs .n{font-size:13px;letter-spacing:.14em;color:var(--green);font-weight:600}
+.fs .fn{font-size:16px;font-weight:600;color:var(--text-hi);line-height:1.35;word-break:break-word}
+.fs p{font-size:14px;font-weight:300;line-height:1.55;color:#8b949e}
+.fs p b{color:var(--text);font-weight:500}
+.fs.key{border-color:rgba(57,211,83,.45);background:rgba(57,211,83,.05)}
+/* chevrons are siblings, not overhanging children — keeps every card's box clean */
+.chev{flex:0 0 14px;display:flex;align-items:center;justify-content:center;
+    color:var(--line-2);font-size:20px}
+.spawn-code{margin-top:26px}
+.spawn-code pre{font-size:17px}
+
+/* ===========================================
+   S11 — CODE + CALLOUT SPLIT
+   =========================================== */
+.split{display:flex;gap:26px;margin-top:34px;align-items:flex-start}
+.split .l{flex:1.35}
+.split .r{flex:1;display:flex;flex-direction:column;gap:16px}
+.note{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 22px}
+.note .h{font-size:16px;font-weight:600;color:var(--text-hi);margin-bottom:8px;line-height:1.4}
+.note p{font-size:15px;font-weight:300;line-height:1.6;color:#8b949e}
+.note p code{color:var(--green)}
+.note.bad .h{color:var(--red)}
+.note.bad{border-color:rgba(248,81,73,.3);background:rgba(248,81,73,.05)}
+
+/* ===========================================
+   S12 — BOARD
+   =========================================== */
+.board{display:flex;gap:26px;margin-top:32px;align-items:flex-start}
+.btable{flex:1.5;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.btable .bh{display:grid;grid-template-columns:60px 150px 130px 1fr;gap:14px;padding:14px 20px;
+    background:var(--bg-deep);border-bottom:1px solid var(--line);
+    font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+.brow{display:grid;grid-template-columns:60px 150px 130px 1fr;gap:14px;padding:13px 20px;
+    border-bottom:1px solid var(--line);align-items:center;font-size:16px}
+.brow:last-child{border-bottom:0}
+.brow .em{font-size:20px}
+.brow .role{color:var(--text-hi);font-weight:600}
+.brow .msg{color:var(--muted);font-size:15px;font-weight:300;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.state{font-size:13px;padding:3px 9px;border-radius:5px;letter-spacing:.06em;display:inline-block;font-weight:600}
+.s-ok{color:var(--green);background:rgba(57,211,83,.1);border:1px solid rgba(57,211,83,.35)}
+.s-run{color:var(--blue);background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.35)}
+.s-err{color:var(--red);background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.35)}
+.s-idle{color:var(--dim);background:#161b22;border:1px solid var(--line-2)}
+.bside{flex:1;display:flex;flex-direction:column;gap:16px}
+.legend{display:flex;gap:22px;flex-wrap:wrap;font-size:16px;color:var(--muted)}
+.legend span{display:flex;align-items:center;gap:8px}
+
+/* ===========================================
+   S13 / S16 / S20 — ABSOLUTE-POSITIONED DIAGRAMS
+   Fixed-size canvas: guarantees zero overlap.
+   =========================================== */
+.dia{position:relative;margin-top:26px}
+.node{position:absolute;background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    display:flex;flex-direction:column;justify-content:center;padding:0 18px;box-sizing:border-box}
+.node .t{font-size:17px;font-weight:600;color:var(--text-hi);white-space:nowrap}
+.node .s{font-size:13px;color:var(--dim);margin-top:5px;white-space:nowrap}
+.node.lead{border-color:rgba(57,211,83,.5);background:rgba(57,211,83,.07);
+    box-shadow:0 0 44px -14px var(--glow)}
+.node.lead .t{color:var(--green)}
+.node.file{background:var(--bg-deep);border-color:var(--line-2);border-radius:7px}
+.node.file .t{font-size:14px;color:var(--muted);font-weight:400}
+.node.hk{border-color:rgba(188,140,255,.4);background:rgba(188,140,255,.06)}
+.node.hk .t{color:var(--purple)}
+.wire{position:absolute;background:var(--line-2)}
+.wire.g{background:var(--green-dim);box-shadow:0 0 10px rgba(57,211,83,.35)}
+.wire.thick{background:#3d444d;border-radius:2px}
+.wlabel{position:absolute;font-size:13px;color:var(--dim);letter-spacing:.08em;white-space:nowrap;
+    background:var(--slide-bg);padding:0 8px}
+.wlabel.g{color:var(--green-dim)}
+
+/* ===========================================
+   S15 / S21 — DATA TABLES
+   =========================================== */
+.tbl{width:100%;border-collapse:collapse;margin-top:30px;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.tbl th{text-align:left;padding:16px 22px;font-size:13px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--dim);background:var(--bg-deep);border-bottom:1px solid var(--line);font-weight:600}
+.tbl td{padding:17px 22px;border-bottom:1px solid var(--line);font-size:17px;color:var(--text);vertical-align:middle}
+.tbl tr:last-child td{border-bottom:0}
+.tbl .em{font-size:22px;padding-right:0;width:56px}
+.tbl .role{color:var(--green);font-weight:600}
+.tbl .desc{color:#8b949e;font-weight:300;font-size:16px}
+.tbl .uuid{color:var(--muted);font-size:15px;letter-spacing:.02em}
+.tbl .model{color:var(--purple);font-weight:500;font-size:16px}
+.tbl .model.o{color:var(--green)}
+.tbl .model.b{color:var(--blue)}
+
+/* ===========================================
+   S17 — RESULTS
+   =========================================== */
+.res{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:34px}
+.rescard{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:24px 26px;
+    display:flex;align-items:center;gap:22px}
+.rescard .ic{font-size:30px;flex:0 0 auto}
+.rescard .rc{flex:1}
+.rescard .rt{font-size:15px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+.rescard .rv{font-size:26px;font-weight:700;color:var(--text-hi);margin-top:7px;letter-spacing:-.01em}
+.rescard .rv .g{color:var(--green)}
+.rescard .rv .sm{font-size:17px;font-weight:400;color:#8b949e}
+.rescard.pass{border-color:rgba(57,211,83,.4);background:rgba(57,211,83,.05)}
+.res-foot{margin-top:24px;display:flex;gap:20px}
+.res-foot .callout{flex:1}
+
+/* ===========================================
+   S18 — PHASE BANDS
+   =========================================== */
+.phases{display:flex;gap:0;margin-top:30px;height:560px}
+.band{flex:1;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:20px 20px;
+    display:flex;flex-direction:column}
+.band .bt{font-size:14px;letter-spacing:.18em;text-transform:uppercase;color:var(--green);font-weight:600}
+.band .bs{font-size:15px;color:#8b949e;font-weight:300;margin-top:7px;line-height:1.45;min-height:44px}
+.band .agents{margin-top:16px;display:flex;flex-direction:column;gap:9px;flex:1}
+.ag{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;
+    display:flex;align-items:center;gap:10px;font-size:14px;color:var(--text)}
+.ag .out{margin-left:auto;font-size:12px;color:var(--dim);white-space:nowrap}
+.ag.owner{border-color:rgba(57,211,83,.4);background:rgba(57,211,83,.06)}
+.ag.owner .out{color:var(--green)}
+.band .bf{margin-top:12px;font-size:13px;color:var(--dim);letter-spacing:.08em;text-transform:uppercase;
+    padding-top:12px;border-top:1px solid var(--line)}
+.barrier{flex:0 0 92px;position:relative;display:flex;align-items:center;justify-content:center}
+.barrier::before{content:"";position:absolute;top:14px;bottom:14px;left:50%;width:2px;
+    background:repeating-linear-gradient(180deg,var(--amber) 0 8px,transparent 8px 16px);
+    transform:translateX(-50%)}
+.barrier .bl{position:relative;z-index:2;background:var(--slide-bg);border:1px solid rgba(210,153,34,.5);
+    color:var(--amber);font-size:12px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;
+    padding:9px 6px;border-radius:6px;writing-mode:vertical-rl;text-align:center}
+.gap{flex:0 0 20px}
+
+/* ===========================================
+   S19 / S23 — QUOTE SLIDES
+   =========================================== */
+.quote{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--green);
+    border-radius:0 10px 10px 0;padding:30px 34px;margin-top:32px}
+.quote p{font-size:26px;font-weight:300;line-height:1.6;color:var(--text)}
+.quote p b{color:var(--green);font-weight:600}
+.quote .src{margin-top:18px;font-size:15px;color:var(--dim);letter-spacing:.1em}
+.quote.red{border-left-color:var(--red)}
+.quote.red p b{color:var(--red)}
+.verdict{margin-top:26px;display:flex;gap:20px}
+.vcard{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:22px 26px}
+.vcard .vh{font-size:14px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+.vcard .vv{font-size:24px;font-weight:700;color:var(--text-hi);margin-top:9px}
+.vcard .vv .g{color:var(--green)}
+.vcard.pass{border-color:rgba(57,211,83,.45);background:rgba(57,211,83,.06)}
+
+/* ===========================================
+   S22 — FAILURE CARDS
+   =========================================== */
+.fails{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:34px}
+.fc{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:22px 24px;
+    border-left:3px solid var(--red)}
+/* NOT flex: a flex `gap` would also space out the inline <code> runs inside
+   the heading, producing stray gaps like "send-key ." */
+.fc .fh{font-size:20px;font-weight:600;color:var(--text-hi);line-height:1.35}
+.fc .fh .x{color:var(--red);font-size:18px;margin-right:9px}
+.fc p{font-size:16px;font-weight:300;line-height:1.6;color:#8b949e;margin-top:10px}
+.fc p code{color:var(--text);background:var(--bg-deep);padding:2px 6px;border-radius:4px;font-size:15px}
+.fc .fix{margin-top:12px;font-size:15px;color:var(--green);display:flex;gap:9px;align-items:flex-start;line-height:1.5}
+.fc .fix b{color:var(--green);font-weight:600;flex:0 0 auto}
+
+/* ===========================================
+   S24 — LESSONS
+   =========================================== */
+.lessons{display:flex;flex-direction:column;gap:20px;margin-top:30px}
+.ls{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:24px 26px}
+.ls .lh{font-size:22px;font-weight:600;color:var(--amber);display:flex;align-items:center;gap:12px}
+.ls .lb{font-size:17px;font-weight:300;line-height:1.65;color:#8b949e;margin-top:12px}
+.ls .lb code{color:var(--text);background:var(--bg-deep);padding:2px 7px;border-radius:4px;font-size:16px}
+.ls .lb b{color:var(--text-hi);font-weight:500}
+.ls .arrow{margin-top:14px;padding-top:14px;border-top:1px solid var(--line);
+    font-size:17px;color:var(--green);display:flex;gap:11px;line-height:1.5}
+.ls .arrow b{color:var(--green);font-weight:700;flex:0 0 auto}
+
+/* ===========================================
+   S25 — RULES
+   =========================================== */
+.rules{display:flex;flex-direction:column;gap:19px;margin-top:8px}
+.rl{display:flex;align-items:baseline;gap:24px}
+.rl .n{font-size:22px;font-weight:800;color:var(--green-deep);color:#2e7d40;flex:0 0 44px}
+.rl .tx{font-size:31px;font-weight:300;line-height:1.35;color:#8b949e}
+.rl .tx b{color:var(--text-hi);font-weight:700}
+
+/* ===========================================
+   S26 — CLOSING
+   =========================================== */
+.close-code{margin-top:38px;max-width:1300px}
+.close-code pre{font-size:24px;padding:28px 32px}
+.close-foot{margin-top:34px;font-size:24px;color:#8b949e;font-weight:300;line-height:1.6}
+.close-foot b{color:var(--text-hi);font-weight:600}
+.close-foot code{color:var(--green)}
+
+/* ===========================================
+   DECK CHROME — outside the stage
+   =========================================== */
+.deck-controls{display:flex;align-items:center;gap:16px;
+    background:rgba(1,4,9,.82);border:1px solid var(--line-2);border-radius:999px;
+    padding:9px 18px;font-family:var(--font);font-size:13px;color:var(--muted);
+    backdrop-filter:blur(6px);opacity:0;transition:opacity .3s ease}
+/* Hidden until pointed at: the rail already carries the slide number, and this
+   pill would otherwise sit on top of the status bar (and land in the PDF). */
+.deck-controls:hover{opacity:1}
+.deck-controls .pbar{width:150px;height:3px;background:var(--line-2);border-radius:2px;overflow:hidden}
+.deck-controls .pbar i{display:block;height:100%;background:var(--green);width:0;
+    box-shadow:0 0 10px var(--glow);transition:width .35s var(--ease)}
+.deck-controls b{color:var(--green);font-weight:600}
+.deck-controls button{background:none;border:0;color:var(--muted);font-family:var(--font);
+    font-size:15px;cursor:pointer;padding:0 4px}
+.deck-controls button:hover{color:var(--green)}
+
+/* --- inline editing --- */
+.edit-hotzone{position:fixed;top:0;left:0;width:80px;height:80px;z-index:10000;cursor:pointer}
+.edit-toggle{position:fixed;top:16px;left:16px;z-index:10001;
+    background:var(--panel);border:1px solid var(--line-2);border-radius:8px;
+    width:42px;height:42px;font-size:17px;cursor:pointer;
+    opacity:0;pointer-events:none;transition:opacity .3s ease}
+.edit-toggle.show,.edit-toggle.active{opacity:1;pointer-events:auto}
+.edit-toggle.active{border-color:var(--green);box-shadow:0 0 18px -4px var(--glow)}
+body.editing [contenteditable=true]{outline:1px dashed rgba(57,211,83,.5);outline-offset:3px;border-radius:3px}
+body.editing [contenteditable=true]:focus{outline:1px solid var(--green);background:rgba(57,211,83,.06)}
+.edit-hint{position:fixed;top:20px;left:70px;z-index:10001;font-family:var(--font);font-size:12px;
+    color:var(--green);letter-spacing:.1em;text-transform:uppercase;display:none}
+body.editing .edit-hint{display:block}
+</style>
+</head>
+<body>
+
+<div class="deck-viewport">
+<main class="deck-stage" id="deckStage">
+
+<!-- ===========================================
+     SLIDE 1 — TITLE  [LOW]
+     =========================================== -->
+<section class="slide title-slide active">
+    <div class="t-chrome">
+        <div class="dots">
+            <span class="dot" style="background:#ff5f57"></span>
+            <span class="dot" style="background:#febc2e"></span>
+            <span class="dot" style="background:#28c840"></span>
+        </div>
+        <div class="t-path">~/dev/bossjones/<b>multipass-lab</b></div>
+        <div class="t-right">cmux &nbsp;·&nbsp; workspace: fleet</div>
+    </div>
+    <div class="t-body">
+        <div class="t-prompt reveal d1"><span class="u">malcolm@lab</span><span class="c">:</span><span style="color:#58a6ff">~</span><span class="c">$</span> just up-connected <span class="c"># 7 clusters, one apply</span></div>
+        <h1 class="t-title">
+            <span class="reveal d2">Shipping Infrastructure</span>
+            <span class="reveal d3">With a <em style="font-style:normal;color:#39d353;text-shadow:0 0 44px rgba(57,211,83,.42)">Team of Agents</em><i class="cursor"></i></span>
+        </h1>
+        <div class="rule" style="margin:52px 0 40px"></div>
+        <p class="t-sub reveal d5">How <em>multipass-lab</em> was built with cmux, boss-cmux,<br>and multi-agent orchestration.</p>
+    </div>
+    <div class="t-stats reveal d6">
+        <div class="t-stat"><div class="n">7</div><div class="k">clusters</div></div>
+        <div class="t-stat"><div class="n">34</div><div class="k">merged PRs</div></div>
+        <div class="t-stat"><div class="n">3</div><div class="k">weeks</div></div>
+        <div class="t-by">
+            <div class="w">Malcolm Jones</div>
+            <div class="d">June — July 2026</div>
+        </div>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 2 — WHAT THE LAB IS  [HIGH]
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 1</span><span class="sep">/</span><span class="topic">The Setup</span>
+        <span class="no"><b>02</b> / 26</span>
+    </div>
+    <div class="body">
+        <div class="kicker reveal d1">The lab</div>
+        <h2 class="reveal d1">Seven clusters. <em>One command each.</em></h2>
+        <p class="lede reveal d2">Local <b>Multipass</b> VMs as a cheap stand-in for Proxmox. <b>OpenTofu</b> + <b>Ansible</b> + <code>just</code> + <code>uv</code>.
+        Every cluster is vendored to its own folder — its own root module, its own cloud-init, its own tests.</p>
+
+        <div class="cluster-grid">
+            <div class="cl hub reveal s d3">
+                <span class="badge">hub</span>
+                <div class="nm">centralized_dns</div>
+                <div class="jb">AdGuard Home over a recursive Unbound. Comes up first — every other VM resolves through it.</div>
+            </div>
+            <div class="cl reveal s d3">
+                <div class="nm">centralized_logging</div>
+                <div class="jb">syslog-ng log shipping across three VMs. Optional k0s + Coroot eBPF.</div>
+            </div>
+            <div class="cl reveal s d4">
+                <div class="nm">centralized_monitoring</div>
+                <div class="jb">Grafana / Prometheus / OpenObserve. The scrape + dashboard hub.</div>
+            </div>
+            <div class="cl reveal s d4">
+                <div class="nm">centralized_netbox</div>
+                <div class="jb">NetBox DCIM/IPAM. A test VM self-registers into it over the REST API on first boot.</div>
+            </div>
+            <div class="cl reveal s d5">
+                <div class="nm">centralized_k0s</div>
+                <div class="jb">k0sctl-formed Kubernetes, etcd-backed, opt-in HA behind an HAProxy edge.</div>
+            </div>
+            <div class="cl reveal s d5">
+                <div class="nm">centralized_pki</div>
+                <div class="jb">step-ca internal CA + Traefik fleet-edge fronting Authelia and Vaultwarden.</div>
+            </div>
+            <div class="cl reveal s d6">
+                <div class="nm">centralized_unifi</div>
+                <div class="jb">Version-exact UniFi log-plane simulation. USG → UCK Gen2 syslog-ng.</div>
+            </div>
+            <div class="cl reveal s d6" style="border-top-color:var(--line-2);background:var(--panel-2)">
+                <div class="nm" style="color:var(--muted)">clusters/_shared/</div>
+                <div class="jb">The one deliberate exception to vendoring: byte-identical cloud-init snippets.</div>
+            </div>
+        </div>
+
+        <div class="houserule">
+            <div class="callout reveal d7">
+                <b>The house rule — a two-layer test split.</b><br>
+                <b>Hermetic:</b> <code>tofu test</code> + <code>mock_provider</code>, asserts on sizing and rendered cloud-init. No VMs.
+                &nbsp;·&nbsp; <b>Live:</b> pytest + testinfra over SSH against running VMs.
+            </div>
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">CLAUDE.md · clusters/</span>
+        <span>7 root modules · 1 Justfile · 0 shared state</span>
+        <span class="rt">just up-connected</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 3 — THE NUMBERS  [HIGH]
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 1</span><span class="sep">/</span><span class="topic">The Setup</span>
+        <span class="no"><b>03</b> / 26</span>
+    </div>
+    <div class="body">
+        <div class="kicker reveal d1">Three weeks of output</div>
+        <h2 class="reveal d1">The receipts.</h2>
+
+        <div class="stat-grid">
+            <div class="sg reveal s d2"><div class="n">166</div><div class="k">commits</div><div class="sub">2026-06-22 → 2026-07-11</div></div>
+            <div class="sg reveal s d2"><div class="n">34</div><div class="k">merged pull requests</div><div class="sub">#1 — #36</div></div>
+            <div class="sg reveal s d3"><div class="n">7</div><div class="k">clusters</div><div class="sub">each independently deployable</div></div>
+            <div class="sg reveal s d3"><div class="n">49</div><div class="k">spec files</div><div class="sub">12,138 lines of spec</div></div>
+            <div class="sg reveal s d4"><div class="n">80</div><div class="k">pytest files</div><div class="sub">+ 12 hermetic .tftest.hcl</div></div>
+            <div class="sg reveal s d4"><div class="n">89</div><div class="k">just recipes</div><div class="sub">a 1,217-line Justfile</div></div>
+            <div class="sg reveal s d5"><div class="n">21</div><div class="k">days, end to end</div><div class="sub">three calendar weeks</div></div>
+            <div class="sg reveal s d5"><div class="n">15</div><div class="k">claude/* branches</div><div class="sub">one per agent-built feature</div></div>
+        </div>
+
+        <div class="window-note reveal d6">
+            <span>Spec outweighs code. That is not an accident — it is the interface the agents were programmed through.</span>
+            <span class="bar"></span>
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">git log · specs/ · .team/</span>
+        <span>every figure on this slide is checked into the repo</span>
+        <span class="rt">166 commits</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 4 — WHY ONE AGENT WASN'T ENOUGH  [LOW]
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 1</span><span class="sep">/</span><span class="topic">The Setup</span>
+        <span class="no"><b>04</b> / 26</span>
+    </div>
+    <div class="stmt">
+        <div class="kicker reveal d1">The premise</div>
+        <h2 class="reveal d1">Why <em>one</em> agent wasn't enough.</h2>
+        <div class="rule"></div>
+        <ul class="big-list">
+            <li class="reveal x d3"><b>One context.</b> A 45K-line spec sweep and a live journal dump do not both fit in it.</li>
+            <li class="reveal x d4"><b>Serial edits.</b> Seven clusters, one file at a time, forever.</li>
+            <li class="reveal x d5"><b>Log dumps poison the context</b> — the very thing you need in order to reason.</li>
+            <li class="reveal x d6"><b>Review monoculture.</b> The author and the reviewer share a mental model, so they share <span class="hl">blind spots</span>.</li>
+        </ul>
+    </div>
+    <div class="statusbar">
+        <span class="src">the problem statement</span>
+        <span class="rt">→ so: partition the work, and the contexts</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 5 — CMUX OBJECT HIERARCHY  [HIGH] · DIAGRAM
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 2</span><span class="sep">/</span><span class="topic">The Tools</span>
+        <span class="no"><b>05</b> / 26</span>
+    </div>
+    <div class="body">
+        <div class="kicker reveal d1">cmux</div>
+        <h2 class="reveal d1">Every terminal surface is an <em>addressable object.</em></h2>
+
+        <div class="hier">
+            <!-- nested-box diagram -->
+            <div class="nest reveal s d3">
+                <div class="nb nb-win">
+                    <span class="lb">Window</span>
+                    <div class="nb nb-ws">
+                        <span class="lb">Workspace</span>
+                        <div class="nb nb-pane">
+                            <span class="lb">Pane</span>
+                            <div class="nb nb-surf">
+                                <span class="lb">Surface</span>
+                                <div class="surf-tabs">
+                                    <span class="stab on">terminal</span>
+                                    <span class="stab">browser</span>
+                                    <span class="stab">terminal</span>
+                                </div>
+                                <div class="surf-body">
+                                    <span class="g">$</span> claude --model opus<br>
+                                    <span class="g">›</span> owns clusters/centralized_k0s/main.tf<br>
+                                    <span class="g">›</span> TASK-DONE: core | root module green
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- definitions -->
+            <div class="defs">
+                <div class="def reveal x d4">
+                    <div class="h">Window <i>a top-level OS window</i></div>
+                    <p>Addressed by <b>UUID</b>. The only handle that survives a reshuffle.</p>
+                </div>
+                <div class="def reveal x d5">
+                    <div class="h">Workspace <i>a sidebar entry — a "tab"</i></div>
+                    <p>One workspace = <b>one team</b> = one feature.</p>
+                </div>
+                <div class="def reveal x d6">
+                    <div class="h">Pane <i>a split region</i></div>
+                    <p>Arranged by a <b>binary split tree</b>. One agent per pane.</p>
+                </div>
+                <div class="def g reveal x d7">
+                    <div class="h">Surface <i>a tab within a pane</i></div>
+                    <p>A terminal — <b>or a browser</b>. This is what you prompt, read, and rename.</p>
+                </div>
+                <div class="install reveal d8">
+                    <span class="k">$</span> brew tap manaflow-ai/cmux &amp;&amp; brew install --cask cmux<br>
+                    <span style="color:var(--dim)">macOS · Ghostty-based · validated against 0.64.17</span><br>
+                    <span style="color:var(--dim)">CLI + unix socket at ~/.local/state/cmux/cmux.sock</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">boss-cmux/SKILL.md</span>
+        <span>Window ⊃ Workspace ⊃ Pane ⊃ Surface</span>
+        <span class="rt">the core mental model of this deck</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 6 — BOSS-CMUX VERBS  [HIGH]
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 2</span><span class="sep">/</span><span class="topic">The Tools</span>
+        <span class="no"><b>06</b> / 26</span>
+    </div>
+    <div class="body">
+        <div class="kicker reveal d1">boss-cmux</div>
+        <h2 class="reveal d1">The <em>natural-language</em> driver.</h2>
+
+        <div class="nlq">
+            <div class="q reveal x d2">"open a browser surface next to the lead and point it at the Grafana URL"</div>
+            <div class="arrow reveal d3">→</div>
+            <div class="q reveal x d3"><b>cmux new-surface --type browser --pane &lt;uuid&gt; --url …</b></div>
+        </div>
+
+        <div class="verbs">
+            <div class="vg reveal s d4">
+                <div class="vh">Inspect</div>
+                <code>cmux tree <span class="f">--all</span></code>
+                <code>list-pane-surfaces</code>
+                <code>identify <span class="f">--json</span></code>
+            </div>
+            <div class="vg reveal s d5">
+                <div class="vh">Create</div>
+                <code>workspace create</code>
+                <code>new-window</code>
+                <code>new-split</code>
+                <code>new-surface <span class="f">--type</span></code>
+            </div>
+            <div class="vg reveal s d6">
+                <div class="vh">Control</div>
+                <code>send</code>
+                <code>send-key</code>
+                <code>read-screen <span class="f">--scrollback</span></code>
+                <code>close-surface</code>
+            </div>
+            <div class="vg reveal s d7">
+                <div class="vh">Topology</div>
+                <code>move-surface</code>
+                <code>split-off</code>
+                <code>focus-pane</code>
+                <code>rename-tab</code>
+                <code>set-status</code>
+            </div>
+            <div class="vg reveal s d8">
+                <div class="vh">Events</div>
+                <code>cmux events</code>
+                <code class="f">--name notification</code>
+                <code class="f">--no-heartbeat</code>
+                <code class="f">--no-ack</code>
+            </div>
+        </div>
+
+        <div class="callout reveal d9" style="margin-top:26px">
+            The skill's whole job is turning intent into the <b>right verb against the right UUID</b> — so the orchestrator reasons about the team, not about terminal plumbing.
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">boss-cmux/SKILL.md</span>
+        <span class="rt">a CLI is an API the agent can already speak</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 7 — TEAM = WORKSPACE = FEATURE  [HIGH] · HERO DIAGRAM
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 2</span><span class="sep">/</span><span class="topic">The Tools</span>
+        <span class="no"><b>07</b> / 26</span>
+    </div>
+    <div class="body">
+        <div class="kicker reveal d1">boss-cmux-team</div>
+        <h2 class="reveal d1">One team = one workspace = <em>one feature.</em></h2>
+
+        <div class="team">
+            <!-- LEAD -->
+            <div class="lead-pane reveal s d3">
+                <div class="ph"><span class="pill p-run"></span> 👑 lead · opus[1m] <span class="st">LEFT HALF · YOU DRIVE THIS ONE</span></div>
+                <div class="lead-body">
+                    <span class="g">$</span> claude --model opus<br>
+                    <span class="b">›</span> read the plan, own the FSM, dispatch<br>
+                    <span class="b">›</span> cmux send --surface &lt;core&gt; "build the root module…"<br>
+                    <span class="b">›</span> cmux send-key --surface &lt;core&gt; enter<br>
+                    <span class="b">›</span> block on: cmux events --name notification.requested<br>
+                    <div class="you">
+                        <b>You talk to the lead. The lead talks to the workers.</b><br>
+                        The lead's standing rule: <i>"Never edit the app's source yourself — that is the builders' job."</i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- WORKERS -->
+            <div class="workers">
+                <div class="wk reveal s d4"><div class="wh">🏗 core <span class="pill p-ok"></span></div>
+                    <div class="wb">tofu root module<br><span class="g">TASK-DONE: core</span><div class="bar ok"><i style="width:100%"></i></div></div></div>
+                <div class="wk reveal s d5"><div class="wh">📦 node <span class="pill p-run"></span></div>
+                    <div class="wb">controller + worker<br><span class="a">3/7 cloud-init</span><div class="bar"><i style="width:43%"></i></div></div></div>
+                <div class="wk reveal s d6"><div class="wh">⚙️ k0sctl <span class="pill p-run"></span></div>
+                    <div class="wb">k0sctl + HAProxy<br><span class="a">writing k0sctl.yaml</span><div class="bar"><i style="width:66%"></i></div></div></div>
+                <div class="wk reveal s d7"><div class="wh">📊 vector <span class="pill p-idle"></span></div>
+                    <div class="wb">log shipping + tests<br>queued — waits on core<div class="bar idle"><i style="width:8%"></i></div></div></div>
+                <div class="wk reveal s d8"><div class="wh">🚀 ops <span class="pill p-idle"></span></div>
+                    <div class="wb">up / destroy / prune<br>clean-slate recovery<div class="bar idle"><i style="width:8%"></i></div></div></div>
+                <div class="wk reveal s d9" style="border-style:dashed;background:var(--panel-2)">
+                    <div class="wh" style="color:var(--dim)">+ N workers</div>
+                    <div class="wb">balanced binary split tree<br>arranges any N panes</div></div>
+            </div>
+        </div>
+
+        <div class="team-quote reveal d10">
+            A <b>lead</b> agent drives its <b>workers</b>. Each role carries a <b>name</b>, a <b>model</b>, a <b>launcher</b>, a <b>prompt</b>, and a <b>kickoff</b> template — declared in one config, spawned in one call.
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">boss-cmux-team/scripts/spawn_team.py</span>
+        <span>roles[0] is the lead, by contract</span>
+        <span class="rt">--config → ./.cmux/team.json → bundled example</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 8 — THE SPAWN, END TO END  [HIGH]
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 2</span><span class="sep">/</span><span class="topic">The Tools</span>
+        <span class="no"><b>08</b> / 26</span>
+    </div>
+    <div class="body">
+        <div class="kicker reveal d1">spawn_team.py</div>
+        <h2 class="reveal d1">The spawn, <em>end to end.</em></h2>
+
+        <div class="flow">
+            <div class="fs reveal s d2">
+                <div class="n">01</div>
+                <div class="fn">ensure_cmux_running()</div>
+                <p><code>cmux identify --json</code>. If it's dead: <b>open -a cmux</b> and poll ~15s.</p>
+            </div>
+            <span class="chev reveal d3">›</span>
+            <div class="fs key reveal s d3">
+                <div class="n">02</div>
+                <div class="fn">find_or_create_window()</div>
+                <p>Reuse the open window. <b>The UUID is the only stable handle.</b></p>
+            </div>
+            <span class="chev reveal d4">›</span>
+            <div class="fs reveal s d4">
+                <div class="n">03</div>
+                <div class="fn">build_layout()</div>
+                <p>Lead takes the left half. Workers arrange into a <b>balanced binary split tree</b> — any N.</p>
+            </div>
+            <span class="chev reveal d5">›</span>
+            <div class="fs key reveal s d5">
+                <div class="n">04</div>
+                <div class="fn">cmux workspace create</div>
+                <p><b>One call boots every pane's agent at once.</b> Not N spawns — one.</p>
+            </div>
+            <span class="chev reveal d6">›</span>
+            <div class="fs reveal s d6">
+                <div class="n">05</div>
+                <div class="fn">os.execvp("claude", …)</div>
+                <p>The spawner <b>becomes</b> the orchestrator — already oriented, already holding the board.</p>
+            </div>
+        </div>
+
+        <div class="spawn-code reveal d7">
+<pre><span class="c"># step 4 — the whole team, in a single call</span>
+cmux workspace create <span class="k">--window</span> <span class="s">&lt;UUID&gt;</span> <span class="k">--name</span> <span class="s">&lt;feature&gt;</span> <span class="k">--cwd</span> <span class="s">&lt;dir&gt;</span> \
+     <span class="k">--env-file</span> <span class="s">.env</span> <span class="k">--layout</span> <span class="s">&lt;json&gt;</span> <span class="k">--focus</span> true <span class="k">--json</span>
+
+<span class="c"># step 5 — the spawner replaces itself with the lead</span>
+os.execvp(<span class="s">"claude"</span>, [..., <span class="s">"/cmux-did-spawn .team/&lt;feature&gt;.spawn.json"</span>])</pre>
+        </div>
+
+        <div class="callout reveal d8" style="margin-top:20px">
+            <b>--env-file</b> injects credentials into every surface, so agents come up authenticated.
+            The standing instruction: <i>"Assume the keys are already set up, and <b>never read their values</b>."</i>
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">spawn_team.py</span>
+        <span class="rt">one apply for infra · one workspace create for agents</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 9 — THE COMPLETION CONTRACT  [LOW]
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 3</span><span class="sep">/</span><span class="topic">The Protocol</span>
+        <span class="no"><b>09</b> / 26</span>
+    </div>
+    <div class="stmt">
+        <div class="kicker reveal d1">The completion contract</div>
+        <h2 class="reveal d1">Claude Code has no<br><em>deterministic turn-stop hook.</em></h2>
+        <div class="rule"></div>
+        <p class="lede reveal d3" style="font-size:26px;max-width:1400px">
+            codex, gemini, pi, amp, cursor and ~10 other launchers do. Claude Code does not.
+            So the contract is not an event — it is <b>a line the worker prints</b>.
+        </p>
+
+        <div class="reveal d4" style="margin-top:40px;max-width:1200px">
+<pre style="font-size:30px;padding:32px 36px;border-color:rgba(57,211,83,.4);box-shadow:0 0 60px -24px var(--glow)"><span class="k">TASK-DONE:</span> &lt;role&gt; | &lt;one-line summary&gt;</pre>
+        </div>
+
+        <div class="callout reveal d6" style="margin-top:34px;max-width:1400px;font-size:22px">
+            <b>Always tell a worker the exact TASK-DONE line to print</b>, so you can detect completion.
+            A sentinel you did not specify is a sentinel you cannot grep for.
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">boss-cmux-team/SKILL.md</span>
+        <span class="rt">grep is the API</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 10 — THE ONE-LINE RULE  [LOW]
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 3</span><span class="sep">/</span><span class="topic">The Protocol</span>
+        <span class="no"><b>10</b> / 26</span>
+    </div>
+    <div class="stmt">
+        <div class="kicker reveal d1">The single most load-bearing gotcha</div>
+        <h2 class="reveal d1"><code style="color:var(--green)">cmux send</code> submits a separate prompt<br>on <em>every newline.</em></h2>
+        <div class="rule"></div>
+
+        <p class="lede reveal d3" style="font-size:30px;max-width:1500px">
+            A multi-line string is not one prompt. It is <b>N prompts</b> — each half-formed, each dispatched,
+            each racing the next.
+        </p>
+
+        <div class="reveal d4" style="margin-top:36px;max-width:1500px">
+            <div class="callout" style="font-size:28px;padding:26px 32px;line-height:1.45">
+                <b>If a task is too big for one line, it is too big for one task. Split it.</b>
+            </div>
+        </div>
+
+        <div class="split reveal d6" style="margin-top:36px">
+            <div class="l">
+                <div class="note bad">
+                    <div class="h">✗ send types. It does not submit.</div>
+                    <p>Forget <code>send-key enter</code> and your worker sits there with a full prompt buffer, doing nothing, forever. They are <b style="color:var(--text)">two separate calls</b>.</p>
+                </div>
+            </div>
+            <div class="r">
+                <div class="note">
+                    <div class="h" style="color:var(--green)">✓ The two-call idiom</div>
+                    <p><code>cmux send --surface &lt;s&gt; "&lt;one line&gt;"</code><br><code>cmux send-key --surface &lt;s&gt; enter</code></p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">boss-cmux/SKILL.md · learned the hard way</span>
+        <span class="rt">one line · one task · one prompt</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 11 — PUSH, DON'T POLL  [HIGH]
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 3</span><span class="sep">/</span><span class="topic">The Protocol</span>
+        <span class="no"><b>11</b> / 26</span>
+    </div>
+    <div class="body">
+        <div class="kicker reveal d1">Event loop</div>
+        <h2 class="reveal d1">Push, <em>don't poll.</em></h2>
+        <p class="lede reveal d2">Subscribe <b>before</b> the first prompt, then block on the event. Re-reading screens in a loop burns tokens to learn nothing.</p>
+
+        <div class="split">
+            <div class="l reveal x d3">
+<pre><span class="c"># 1. subscribe FIRST — before you prompt anyone</span>
+cmux events <span class="k">--name</span> notification.requested \
+     <span class="k">--no-heartbeat --no-ack</span> &gt; <span class="s">/tmp/team.ev</span> &amp;
+
+<span class="c"># 2. now dispatch the workers … then block</span>
+<span class="k">until</span> grep -q <span class="s">"\"workspace_id\":\"$WS\""</span> <span class="s">/tmp/team.ev</span>; <span class="k">do</span>
+    sleep 1
+<span class="k">done</span>
+
+<span class="c"># 3. only now spend tokens reading a screen</span>
+cmux read-screen <span class="k">--surface</span> <span class="s">"$SURF"</span> <span class="k">--lines</span> 40</pre>
+            </div>
+            <div class="r">
+                <div class="note reveal d5">
+                    <div class="h">⚠ Match on <code>workspace_id</code></div>
+                    <p><code>surface_id</code> is usually <b style="color:var(--text)">null</b> in the event payload. Filter on the workspace, or your <code>until</code> loop never exits.</p>
+                </div>
+                <div class="note reveal d6">
+                    <div class="h">Subscribe before you prompt</div>
+                    <p>Start the listener <b style="color:var(--text)">after</b> dispatch and you will miss the fast workers' completion entirely — then poll forever for an event that already fired.</p>
+                </div>
+                <div class="note reveal d7">
+                    <div class="h">The cost model</div>
+                    <p>A poll costs a screenful of tokens <b style="color:var(--text)">every</b> tick. A subscription costs one grep against a file.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">boss-cmux/SKILL.md</span>
+        <span class="rt">the event exists — use it</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 12 — THE BOARD IS THE STATE  [HIGH]
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 3</span><span class="sep">/</span><span class="topic">The Protocol</span>
+        <span class="no"><b>12</b> / 26</span>
+    </div>
+    <div class="body">
+        <div class="kicker reveal d1">.team/&lt;feature&gt;.board.md</div>
+        <h2 class="reveal d1">The board <em>is</em> the state.</h2>
+        <p class="lede reveal d2">Every team writes a board: an agent table, and an explicit FSM. It is committed. It is the thing you read instead of opening six panes.</p>
+
+        <div class="board">
+            <div class="btable reveal x d3">
+                <div class="bh"><span></span><span>Agent</span><span>State</span><span>Last log</span></div>
+                <div class="brow"><span class="em">👑</span><span class="role">lead</span><span><i class="state s-run">BUILD</i></span><span class="msg">dispatched core; blocking on events</span></div>
+                <div class="brow"><span class="em">🏗</span><span class="role">core</span><span><i class="state s-ok">DONE</i></span><span class="msg">root module green, 9/9 hermetic</span></div>
+                <div class="brow"><span class="em">📦</span><span class="role">node</span><span><i class="state s-run">BUILD</i></span><span class="msg">rendering cloud-init 3/7</span></div>
+                <div class="brow"><span class="em">⚙️</span><span class="role">k0sctl</span><span><i class="state s-run">BUILD</i></span><span class="msg">writing k0sctl.yaml + HAProxy edge</span></div>
+                <div class="brow"><span class="em">📊</span><span class="role">vector</span><span><i class="state s-idle">QUEUED</i></span><span class="msg">waits on core's outputs</span></div>
+                <div class="brow"><span class="em">🚀</span><span class="role">ops</span><span><i class="state s-err">ISSUE</i></span><span class="msg">multipassd socket — escalated to human</span></div>
+            </div>
+
+            <div class="bside">
+                <div class="note reveal d4">
+                    <div class="h">Workers keep their own tab pill current</div>
+                    <p>So the whole team's state is legible from the sidebar — no pane ever has to be opened.</p>
+                </div>
+                <div class="reveal d5">
+<pre style="font-size:15px;line-height:1.6">cmux rename-tab <span class="k">--surface</span> <span class="s">&lt;UUID&gt;</span> \
+  <span class="s">"🔵 core 3/7 [███░░░] · rendering cloud-init"</span></pre>
+                </div>
+                <div class="legend reveal d6">
+                    <span>🔵 working</span>
+                    <span>🟢 done</span>
+                    <span>🔴 error</span>
+                    <span>⚪ queued</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">.team/centralized_k0s.board.md — committed</span>
+        <span class="rt">state that survives a context window</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 13 — RESEARCH FLEET  [HIGH] · DIAGRAM
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 4</span><span class="sep">/</span><span class="topic">Case Study A — centralized_k0s</span>
+        <span class="no"><b>13</b> / 26</span>
+    </div>
+    <div class="body">
+        <div class="kicker reveal d1">Phase 1 — research</div>
+        <h2 class="reveal d1">Five agents. Five <em>disjoint</em> files.<br>Zero collisions, by construction.</h2>
+
+        <div class="dia" style="height:470px" >
+            <!-- lead -->
+            <div class="node lead reveal s d3" style="left:706px;top:0;width:320px;height:74px;align-items:center">
+                <div class="t">👑 research lead</div>
+                <div class="s">partitions the question</div>
+            </div>
+            <!-- stem down from lead -->
+            <div class="wire g reveal d4" style="left:865px;top:74px;width:2px;height:40px"></div>
+            <!-- bus -->
+            <div class="wire g reveal d4" style="left:167px;top:114px;width:1400px;height:2px"></div>
+            <!-- 5 stubs down to researchers -->
+            <div class="wire g reveal d4" style="left:167px;top:114px;width:2px;height:38px"></div>
+            <div class="wire g reveal d4" style="left:516px;top:114px;width:2px;height:38px"></div>
+            <div class="wire g reveal d4" style="left:865px;top:114px;width:2px;height:38px"></div>
+            <div class="wire g reveal d4" style="left:1215px;top:114px;width:2px;height:38px"></div>
+            <div class="wire g reveal d4" style="left:1565px;top:114px;width:2px;height:38px"></div>
+
+            <!-- researchers -->
+            <div class="node reveal s d5" style="left:24px;top:152px;width:288px;height:84px">
+                <div class="t">🌐 cni-networking</div><div class="s">kube-router · calico · MTU</div></div>
+            <div class="node reveal s d6" style="left:373px;top:152px;width:288px;height:84px">
+                <div class="t">⚖️ ha-loadbalancer</div><div class="s">HAProxy edge · VIP · quorum</div></div>
+            <div class="node reveal s d7" style="left:722px;top:152px;width:288px;height:84px">
+                <div class="t">📊 observability</div><div class="s">Vector · journald · shipping</div></div>
+            <div class="node reveal s d8" style="left:1071px;top:152px;width:288px;height:84px">
+                <div class="t">📦 provisioning</div><div class="s">cloud-init · k0sctl bootstrap</div></div>
+            <div class="node reveal s d9" style="left:1421px;top:152px;width:288px;height:84px">
+                <div class="t">🔧 tooling-shell</div><div class="s">just · repo layout · tests</div></div>
+
+            <!-- stubs to files -->
+            <div class="wire reveal d10" style="left:167px;top:236px;width:2px;height:36px"></div>
+            <div class="wire reveal d10" style="left:516px;top:236px;width:2px;height:36px"></div>
+            <div class="wire reveal d10" style="left:865px;top:236px;width:2px;height:36px"></div>
+            <div class="wire reveal d10" style="left:1215px;top:236px;width:2px;height:36px"></div>
+            <div class="wire reveal d10" style="left:1565px;top:236px;width:2px;height:36px"></div>
+
+            <!-- output files -->
+            <div class="node file reveal s d10" style="left:24px;top:272px;width:288px;height:58px">
+                <div class="t">cni-networking.md</div></div>
+            <div class="node file reveal s d10" style="left:373px;top:272px;width:288px;height:58px">
+                <div class="t">ha-loadbalancer.md</div></div>
+            <div class="node file reveal s d11" style="left:722px;top:272px;width:288px;height:58px">
+                <div class="t">observability-logging.md</div></div>
+            <div class="node file reveal s d11" style="left:1071px;top:272px;width:288px;height:58px">
+                <div class="t">provisioning-cloudinit.md</div></div>
+            <div class="node file reveal s d11" style="left:1421px;top:272px;width:288px;height:58px">
+                <div class="t">tooling-shell-repo.md</div></div>
+
+            <div class="wlabel g reveal d12" style="left:1360px;top:104px">fan-out · fully parallel</div>
+            <div class="wlabel reveal d12" style="left:24px;top:352px;background:none;padding:0;font-size:17px;color:#8b949e">
+                → <span style="color:var(--green);font-weight:600">94 KB</span> of research, written concurrently. No two agents ever opened the same file.
+            </div>
+        </div>
+
+        <div class="quote reveal d12" style="margin-top:8px;padding:20px 26px">
+            <p style="font-size:21px">"Status: IMPLEMENTED and verified. Synthesized from a <b>5-agent research fleet</b>, refined through user review, then <b>hardened against three hostile reviewers</b>."</p>
+            <div class="src">specs/centralized_k0s.md:3</div>
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">specs/centralized_k0s/*.md</span>
+        <span class="rt">disjoint outputs = no locking needed</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 14 — SYNTHESIS + HOSTILE REVIEW  [LOW]
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 4</span><span class="sep">/</span><span class="topic">Case Study A — centralized_k0s</span>
+        <span class="no"><b>14</b> / 26</span>
+    </div>
+    <div class="stmt">
+        <div class="kicker reveal d1">Synthesis</div>
+        <h2 class="reveal d1">Five shards → one spec →<br><em>three hostile reviewers.</em></h2>
+        <div class="rule"></div>
+
+        <p class="lede reveal d3" style="font-size:30px;max-width:1560px">
+            The reviewers exist to break the <b>monoculture</b> from slide 4.
+        </p>
+        <p class="lede reveal d4" style="font-size:34px;max-width:1560px;margin-top:26px;color:var(--text-hi)">
+            A reviewer who shares your context <span class="hl">cannot find your blind spot</span> — it is a blind spot precisely because the shared model does not see it.
+        </p>
+
+        <div class="reveal d6" style="margin-top:48px">
+<pre style="font-size:22px">d94bd3e  <span class="c">docs(specs):</span> harden k0s architecture spec after adversarial review</pre>
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">git log · specs/centralized_k0s.md</span>
+        <span class="rt">the spec got worse-looking and more correct</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 15 — A BUILD PLAN PER AGENT  [HIGH]
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 4</span><span class="sep">/</span><span class="topic">Case Study A — centralized_k0s</span>
+        <span class="no"><b>15</b> / 26</span>
+    </div>
+    <div class="body">
+        <div class="kicker reveal d1">Phase 2 — build</div>
+        <h2 class="reveal d1">A build plan <em>per agent</em> — each ending in the same contract.</h2>
+        <p class="lede reveal d2">Four builders, four build-plans. Each plan hardcodes <b>its own cmux surface UUID</b> and the sentinel it must print. The UUIDs are committed — that is the receipt.</p>
+
+        <table class="tbl reveal d3">
+            <thead>
+                <tr><th class="em"></th><th>Agent</th><th>Owns — exclusively</th><th>Hardcoded surface</th></tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td class="em">🏗</td><td class="role">core</td>
+                    <td class="desc">the OpenTofu root module</td>
+                    <td class="uuid">4ADFB530-…-7A3FD6E4FC92</td>
+                </tr>
+                <tr>
+                    <td class="em">📦</td><td class="role">node</td>
+                    <td class="desc">controller + worker cloud-init</td>
+                    <td class="uuid">EA732F3D-…-3E3739086554</td>
+                </tr>
+                <tr>
+                    <td class="em">⚙️</td><td class="role">k0sctl</td>
+                    <td class="desc">k0sctl config + the HAProxy edge</td>
+                    <td class="uuid">AF1C1F20-…-6C6984E34335</td>
+                </tr>
+                <tr>
+                    <td class="em">📊</td><td class="role">vector</td>
+                    <td class="desc">Vector log shipping + the whole test suite</td>
+                    <td class="uuid">E1DEF030-…-79D90E815E20</td>
+                </tr>
+                <tr style="background:rgba(57,211,83,.04)">
+                    <td class="em">👑🚀</td><td class="role">lead + ops</td>
+                    <td class="desc">orchestration, FSM, apply / destroy / prune</td>
+                    <td class="uuid" style="color:var(--green)">six agents, one workspace</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="callout reveal d5" style="margin-top:26px">
+            <b>One owner per file set.</b> core owns <code>main.tf</code>; node owns the <code>.tftpl</code>s; vector owns <code>tests/</code>.
+            Nobody negotiates, because nobody overlaps.
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">specs/centralized_k0s/build-plans/*.md</span>
+        <span class="rt">the surface UUID is in the plan, in git</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 16 — THE FSM  [HIGH] · DIAGRAM
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 4</span><span class="sep">/</span><span class="topic">Case Study A — centralized_k0s</span>
+        <span class="no"><b>16</b> / 26</span>
+    </div>
+    <div class="body">
+        <div class="kicker reveal d1">.team/centralized_k0s.board.md — verbatim</div>
+        <h2 class="reveal d1">The FSM.</h2>
+
+        <div class="dia" style="height:560px">
+            <!-- SVG connector layer -->
+            <svg class="reveal d6" viewBox="0 0 1752 560" style="position:absolute;inset:0;width:1752px;height:560px;max-width:none;max-height:none;overflow:visible">
+                <defs>
+                    <!-- userSpaceOnUse so the heads keep one size regardless of stroke weight -->
+                    <marker id="ah" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="10" refX="10" refY="5" orient="auto">
+                        <path d="M0,0 L11,5 L0,10 z" fill="#26a641"/>
+                    </marker>
+                    <marker id="ahw" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="11" refX="11" refY="5.5" orient="auto">
+                        <path d="M0,0 L12,5.5 L0,11 z" fill="#d29922"/>
+                    </marker>
+                </defs>
+                <!-- OBSERVE -> HEALTHY: short hop across the gutter -->
+                <path d="M1196,98 L1212,98" stroke="#26a641" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+                <!-- OBSERVE -> ISSUE branch (down the left) -->
+                <path d="M1050,132 L1050,196 Q1050,214 1032,214 L200,214 Q182,214 182,232 L182,282" stroke="#d29922" stroke-width="2" fill="none" marker-end="url(#ahw)"/>
+                <!-- THE LOOP-BACK: RECREATE (right edge) → up and around → OBSERVE (bottom edge).
+                     This is the arc the slide is about, so it is drawn heavy and dashed. -->
+                <path d="M1390,316 L1500,316 Q1525,316 1525,291 L1525,190 Q1525,165 1500,165 L1131,165 Q1106,165 1106,145 L1106,140"
+                      stroke="#d29922" stroke-width="3" fill="none" marker-end="url(#ahw)" stroke-dasharray="8 5"/>
+            </svg>
+
+            <!-- happy path -->
+            <div class="node reveal s d2" style="left:0;top:64px;width:172px;height:68px;align-items:center"><div class="t">SCAFFOLD</div></div>
+            <div class="wlabel reveal d2" style="left:180px;top:88px;color:var(--green-dim);font-size:20px">→</div>
+            <div class="node reveal s d3" style="left:214px;top:52px;width:420px;height:92px;align-items:center">
+                <div class="t">BUILD</div><div class="s">core → node | k0sctl | vector</div></div>
+            <div class="wlabel reveal d3" style="left:642px;top:88px;color:var(--green-dim);font-size:20px">→</div>
+            <div class="node reveal s d4" style="left:676px;top:64px;width:150px;height:68px;align-items:center"><div class="t">CHECK</div></div>
+            <div class="wlabel reveal d4" style="left:834px;top:88px;color:var(--green-dim);font-size:20px">→</div>
+            <div class="node reveal s d4" style="left:868px;top:64px;width:110px;height:68px;align-items:center"><div class="t">UP</div></div>
+            <div class="wlabel reveal d4" style="left:986px;top:88px;color:var(--green-dim);font-size:20px">→</div>
+            <div class="node lead reveal s d5" style="left:1020px;top:64px;width:172px;height:68px;align-items:center"><div class="t">OBSERVE</div></div>
+
+            <!-- healthy branch -->
+            <div class="node reveal s d7" style="left:1224px;top:64px;width:168px;height:68px;align-items:center;border-color:rgba(57,211,83,.45)">
+                <div class="t" style="color:var(--green)">HEALTHY</div></div>
+            <div class="wlabel reveal d7" style="left:1400px;top:88px;color:var(--green-dim);font-size:20px">→</div>
+            <div class="node reveal s d7" style="left:1434px;top:64px;width:150px;height:68px;align-items:center;border-color:rgba(57,211,83,.45)">
+                <div class="t" style="color:var(--green)">VERIFY</div></div>
+            <div class="wlabel reveal d7" style="left:1592px;top:88px;color:var(--green-dim);font-size:20px">→</div>
+            <div class="node reveal s d8" style="left:1626px;top:64px;width:126px;height:68px;align-items:center;
+                border-color:var(--green);background:rgba(57,211,83,.12);box-shadow:0 0 40px -12px var(--glow)">
+                <div class="t" style="color:var(--green)">DONE</div></div>
+
+            <!-- issue loop -->
+            <div class="node reveal s d8" style="left:96px;top:282px;width:172px;height:68px;align-items:center;border-color:rgba(210,153,34,.5)">
+                <div class="t" style="color:var(--amber)">ISSUE</div></div>
+            <div class="wlabel reveal d8" style="left:276px;top:306px;color:var(--amber);font-size:20px">→</div>
+            <div class="node reveal s d9" style="left:310px;top:282px;width:196px;height:68px;align-items:center;border-color:rgba(210,153,34,.5)">
+                <div class="t" style="color:var(--amber)">FIX-LIVE</div></div>
+            <div class="wlabel reveal d9" style="left:514px;top:306px;color:var(--amber);font-size:20px">→</div>
+            <div class="node reveal s d10" style="left:548px;top:270px;width:400px;height:92px;align-items:center;
+                border-color:var(--amber);background:rgba(210,153,34,.08);box-shadow:0 0 44px -14px rgba(210,153,34,.5)">
+                <div class="t" style="color:var(--amber)">BACKPORT</div>
+                <div class="s" style="color:#b08a2e">the fix goes back into the .tftpl</div></div>
+            <div class="wlabel reveal d10" style="left:956px;top:306px;color:var(--amber);font-size:20px">→</div>
+            <div class="node reveal s d11" style="left:990px;top:270px;width:400px;height:92px;align-items:center;border-color:rgba(210,153,34,.5)">
+                <div class="t" style="color:var(--amber)">RECREATE</div>
+                <div class="s" style="color:#b08a2e">rebuild the cluster from source</div></div>
+
+            <div class="wlabel reveal d12" style="left:1290px;top:180px;color:var(--amber);font-size:15px">↺ back to OBSERVE</div>
+
+            <!-- error -->
+            <div class="node reveal s d12" style="left:0;top:396px;width:172px;height:56px;align-items:center;border-color:rgba(248,81,73,.45)">
+                <div class="t" style="color:var(--red);font-size:15px">ERROR</div></div>
+            <div class="wlabel reveal d12" style="left:192px;top:412px;background:none;padding:0;color:var(--muted);font-size:15px">
+                — the terminal state nobody wants: escalate to the human.
+            </div>
+        </div>
+
+        <div class="callout reveal d12" style="margin-top:14px">
+            <b>The interesting edge is FIX-LIVE → BACKPORT → RECREATE.</b>
+            A fix SSH'd into a running VM <b>does not count</b>. It has to go back into the <code>.tftpl</code> and the cluster has to be rebuilt from source — or it isn't real.
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">.team/centralized_k0s.board.md</span>
+        <span class="rt">a loop, not a line</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 17 — THE RESULT  [HIGH]
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 4</span><span class="sep">/</span><span class="topic">Case Study A — centralized_k0s</span>
+        <span class="no"><b>17</b> / 26</span>
+    </div>
+    <div class="body">
+        <div class="kicker reveal d1">Phase 3 — the result</div>
+        <h2 class="reveal d1">Green <em>from source.</em> No live patches.</h2>
+
+        <div class="res">
+            <div class="rescard pass reveal s d2">
+                <div class="ic">✅</div>
+                <div class="rc">
+                    <div class="rt">just check — hermetic</div>
+                    <div class="rv"><span class="g">9 / 9</span> <span class="sm">tofu test · mock_provider · no VMs</span></div>
+                </div>
+            </div>
+            <div class="rescard pass reveal s d3">
+                <div class="ic">✅</div>
+                <div class="rc">
+                    <div class="rt">just verify — live over SSH</div>
+                    <div class="rv"><span class="g">26 passed</span> <span class="sm">· 25 skipped · <span class="g">0 failed</span></span></div>
+                </div>
+            </div>
+            <div class="rescard reveal s d4">
+                <div class="ic">🔁</div>
+                <div class="rc">
+                    <div class="rt">Fixes found live, then backported</div>
+                    <div class="rv"><span class="g">7</span> <span class="sm">source fixes — 5 original, + konnectivity externalAddress, + kubelet resolvConf, then a KSM port collision</span></div>
+                </div>
+            </div>
+            <div class="rescard reveal s d5">
+                <div class="ic">📦</div>
+                <div class="rc">
+                    <div class="rt">Shipped as</div>
+                    <div class="rv">3fd5913 <span class="sm">— 27 files, <span class="g">+3,948</span> lines</span></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="res-foot">
+            <div class="callout reveal d6">
+                <b>Live target:</b> 1 controller + 2 workers · k0s <code>v1.34.9+k0s.0</code> · etcd-backed · Vector shipping journald to the logging hub.
+            </div>
+            <div class="callout reveal d7" style="border-color:rgba(210,153,34,.35);background:rgba(210,153,34,.06);color:#b8a06a">
+                <b style="color:var(--amber)">"From source" is the whole claim.</b> Every one of those 7 fixes was discovered on a running VM — and none of them stayed there.
+            </div>
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">git 3fd5913 · just check · just verify</span>
+        <span class="rt">26 passed · 0 failed</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 18 — TEN AGENTS, FOUR SHARED FILES  [HIGH] · DIAGRAM
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 5</span><span class="sep">/</span><span class="topic">Case Study B — docs-fleet</span>
+        <span class="no"><b>18</b> / 26</span>
+    </div>
+    <div class="body">
+        <div class="kicker reveal d1">The collision problem</div>
+        <h2 class="reveal d1">Ten agents. <em>Four shared files.</em></h2>
+        <p class="lede reveal d2">Five researchers can't collide — their outputs are disjoint. But <code>CLAUDE.md</code>, <code>README.md</code> and <code>docs/README.md</code> are <b>shared</b>. The fix is not locking. It is <b>phase-locking + one owner per file</b>.</p>
+
+        <div class="phases">
+            <!-- PHASE A -->
+            <div class="band reveal x d3">
+                <div class="bt">Phase A — fact sheets</div>
+                <div class="bs">5 researchers. Each writes <b style="color:var(--text)">only</b> its own factsheet. Disjoint → fully parallel.</div>
+                <div class="agents">
+                    <div class="ag">🌀 k0s <span class="out">k0s.factsheet.md</span></div>
+                    <div class="ag">🔐 pki <span class="out">pki.factsheet.md</span></div>
+                    <div class="ag">📡 unifi <span class="out">unifi.factsheet.md</span></div>
+                    <div class="ag">📦 netbox <span class="out">netbox.factsheet.md</span></div>
+                    <div class="ag">🌐 dns <span class="out">dns.factsheet.md</span></div>
+                </div>
+                <div class="bf">5 agents · 5 files · 0 contention</div>
+            </div>
+
+            <!-- BARRIER -->
+            <div class="barrier reveal d5"><div class="bl">Barrier — all fact sheets land first</div></div>
+
+            <!-- PHASE B -->
+            <div class="band reveal x d6">
+                <div class="bt">Phase B — authoring</div>
+                <div class="bs">3 authors. <b style="color:var(--text)">Exactly one shared file each.</b> Serialized by ownership, not by a lock.</div>
+                <div class="agents">
+                    <div class="ag owner">✍️ claude-md-author <span class="out">CLAUDE.md</span></div>
+                    <div class="ag owner">✍️ readme-author <span class="out">README.md</span></div>
+                    <div class="ag owner">✍️ docs-readme-author <span class="out">docs/README.md</span></div>
+                    <div class="ag" style="border-style:dashed;color:var(--dim)">each reads all 5 fact sheets</div>
+                </div>
+                <div class="bf">3 agents · 3 files · 1 owner each</div>
+            </div>
+
+            <div class="gap"></div>
+
+            <!-- PHASE C -->
+            <div class="band reveal x d7">
+                <div class="bt">Phase C — review</div>
+                <div class="bs">1 reviewer, <b style="color:var(--text)">read-only</b>, over the 4 changed files. It cannot write, so it cannot race.</div>
+                <div class="agents">
+                    <div class="ag">🔍 reviewer <span class="out">read-only</span></div>
+                    <div class="ag" style="border-style:dashed;color:var(--dim)">checks every relative link</div>
+                    <div class="ag" style="border-style:dashed;color:var(--dim)">cross-checks VM counts vs variables.tf</div>
+                </div>
+                <div class="bf">1 agent · 0 writes</div>
+            </div>
+        </div>
+
+        <div class="callout reveal d8" style="margin-top:22px">
+            <b>Fan out on research. Serialize on authorship.</b> The barrier is the whole trick — it converts a write-write race into a read-many/write-one.
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">.team/docs-fleet.board.md · .team/docs-fleet/prompts/*.md</span>
+        <span class="rt">10 agents · 3 phases</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 19 — THE REVIEWER ACTUALLY REVIEWED  [HIGH]
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 5</span><span class="sep">/</span><span class="topic">Case Study B — docs-fleet</span>
+        <span class="no"><b>19</b> / 26</span>
+    </div>
+    <div class="body">
+        <div class="kicker reveal d1">Phase C</div>
+        <h2 class="reveal d1">The reviewer <em>actually reviewed.</em></h2>
+
+        <div class="quote reveal d2">
+            <p>"Checked all <b>20</b> new relative-link targets in <code>README.md</code> … every target resolves with <code>test -e</code>. <b>No broken links found.</b>"</p>
+            <div class="src">.team/docs-fleet.board.md — reviewer's report</div>
+        </div>
+
+        <p class="lede reveal d3" style="margin-top:26px">
+            …and cross-checked the VM counts and sizing for all <b>5</b> clusters against each cluster's own <code>variables.tf</code>. Not "looks right" — <b>resolved, one target at a time</b>.
+        </p>
+
+        <div class="verdict">
+            <div class="vcard pass reveal s d4">
+                <div class="vh">Verdict</div>
+                <div class="vv"><span class="g">PASS</span> — no fixes required</div>
+            </div>
+            <div class="vcard reveal s d5">
+                <div class="vh">Shipped as</div>
+                <div class="vv">2c13b55 → PR <span class="g">#35</span></div>
+            </div>
+            <div class="vcard reveal s d6">
+                <div class="vh">Diff</div>
+                <div class="vv">19 files · <span class="g">+982</span> / −10</div>
+            </div>
+        </div>
+
+        <div class="callout reveal d7" style="margin-top:26px">
+            The worker prompts are <b>committed verbatim</b> in <code>.team/docs-fleet/prompts/</code> — including the line that makes the fan-out work:
+            <i>"Work fully autonomously — do not ask clarifying questions."</i>
+            An agent that stops to ask is an agent that is no longer parallel.
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">PR #35 · .team/docs-fleet/prompts/</span>
+        <span class="rt">the prompts are in git — that's the point</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 20 — TRIAGE-LOGS FAN-OUT  [HIGH] · DIAGRAM
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 6</span><span class="sep">/</span><span class="topic">Case Study C — subagent fan-out</span>
+        <span class="no"><b>20</b> / 26</span>
+    </div>
+    <div class="body">
+        <div class="kicker reveal d1">/triage-logs — no cmux required</div>
+        <h2 class="reveal d1">Keep the logs <em>out of your context.</em></h2>
+        <p class="lede reveal d2">When a cluster breaks, fan out <b>haiku</b> <code>log-researcher</code> subagents — <b>one per suspect VM role</b>. The verbose output stays in <b>their</b> contexts. Only distilled, <b>cited</b> findings come back.</p>
+
+        <div class="dia" style="height:436px">
+            <!-- SVG: thin arrows back to lead, thick arrows from journals -->
+            <svg class="reveal d5" viewBox="0 0 1752 436" style="position:absolute;inset:0;width:1752px;height:436px;max-width:none;max-height:none;overflow:visible">
+                <defs>
+                    <!-- markerUnits=userSpaceOnUse: otherwise the head scales with stroke-width
+                         and a 10px "raw journal" stroke produces a 100px arrowhead. -->
+                    <marker id="thin" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="10" refX="10" refY="5" orient="auto">
+                        <path d="M0,0 L11,5 L0,10 z" fill="#39d353"/>
+                    </marker>
+                    <marker id="thick" markerUnits="userSpaceOnUse" markerWidth="18" markerHeight="18" refX="17" refY="9" orient="auto">
+                        <path d="M0,0 L18,9 L0,18 z" fill="#49525c"/>
+                    </marker>
+                </defs>
+                <!-- THICK: journals -> researchers. The raw bytes flow INTO the researcher and stop there. -->
+                <path d="M1300,52  L1002,52"  stroke="#3d444d" stroke-width="10" fill="none" marker-end="url(#thick)" opacity=".9"/>
+                <path d="M1300,148 L1002,148" stroke="#3d444d" stroke-width="10" fill="none" marker-end="url(#thick)" opacity=".9"/>
+                <path d="M1300,244 L1002,244" stroke="#3d444d" stroke-width="10" fill="none" marker-end="url(#thick)" opacity=".9"/>
+                <path d="M1300,340 L1002,340" stroke="#3d444d" stroke-width="10" fill="none" marker-end="url(#thick)" opacity=".9"/>
+                <!-- THIN: researchers -> lead (cited findings only) -->
+                <path d="M660,52  Q560,52  560,160 L560,178 L470,178" stroke="#39d353" stroke-width="1.5" fill="none" marker-end="url(#thin)"/>
+                <path d="M660,148 Q580,148 580,182 L470,182" stroke="#39d353" stroke-width="1.5" fill="none" marker-end="url(#thin)"/>
+                <path d="M660,244 Q580,244 580,206 L470,206" stroke="#39d353" stroke-width="1.5" fill="none" marker-end="url(#thin)"/>
+                <path d="M660,340 Q560,340 560,232 L560,210 L470,210" stroke="#39d353" stroke-width="1.5" fill="none" marker-end="url(#thin)"/>
+            </svg>
+
+            <!-- LEAD (opus) -->
+            <div class="node lead reveal s d3" style="left:0;top:130px;width:470px;height:128px;padding:0 22px">
+                <div class="t" style="font-size:20px">🧠 main agent · opus</div>
+                <div class="s" style="font-size:15px;white-space:normal;line-height:1.5;margin-top:8px">
+                    Partitions up front. Receives only summaries.<br>
+                    <span style="color:var(--green)">Verifies every citation before touching anything.</span>
+                </div>
+            </div>
+
+            <!-- RESEARCHERS (haiku) -->
+            <div class="node hk reveal s d6" style="left:660px;top:22px;width:340px;height:60px">
+                <div class="t">🔎 log-researcher · haiku</div><div class="s">role: server</div></div>
+            <div class="node hk reveal s d7" style="left:660px;top:118px;width:340px;height:60px">
+                <div class="t">🔎 log-researcher · haiku</div><div class="s">role: controller</div></div>
+            <div class="node hk reveal s d8" style="left:660px;top:214px;width:340px;height:60px">
+                <div class="t">🔎 log-researcher · haiku</div><div class="s">role: worker-1</div></div>
+            <div class="node hk reveal s d9" style="left:660px;top:310px;width:340px;height:60px">
+                <div class="t">🔎 log-researcher · haiku</div><div class="s">role: worker-2</div></div>
+
+            <!-- JOURNALS -->
+            <div class="node file reveal s d10" style="left:1300px;top:22px;width:452px;height:60px">
+                <div class="t">journalctl -u … · cloud-init-output.log</div></div>
+            <div class="node file reveal s d10" style="left:1300px;top:118px;width:452px;height:60px">
+                <div class="t">journalctl -p err -b · systemctl --failed</div></div>
+            <div class="node file reveal s d11" style="left:1300px;top:214px;width:452px;height:60px">
+                <div class="t">otelcol-contrib · syslog-ng · k0s</div></div>
+            <div class="node file reveal s d11" style="left:1300px;top:310px;width:452px;height:60px">
+                <div class="t">40,000 lines nobody should read</div></div>
+
+            <!-- labels -->
+            <div class="wlabel g reveal d12" style="left:494px;top:106px;font-size:15px">cited findings only — thin</div>
+            <div class="wlabel reveal d12" style="left:1024px;top:388px;font-size:15px;color:#8b949e">raw journals — thick. <b style="color:var(--text-hi)">The bytes stop here.</b></div>
+        </div>
+
+        <div class="callout reveal d12" style="margin-top:16px">
+            <b>Partition up front · Summaries, never dumps · Verify before you fix · Reuse the tested engine</b>
+            (<code>uv run tools/system_debug.py</code> — never a hand-rolled <code>ssh</code> + <code>journalctl</code>).
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">.claude/skills/triage-logs/ · .claude/agents/log-researcher.md</span>
+        <span class="rt">the asymmetry IS the idea</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 21 — MODEL TIERING  [HIGH]
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 6</span><span class="sep">/</span><span class="topic">Case Study C — subagent fan-out</span>
+        <span class="no"><b>21</b> / 26</span>
+    </div>
+    <div class="body">
+        <div class="kicker reveal d1">Economics</div>
+        <h2 class="reveal d1">Model tiering.</h2>
+        <p class="lede reveal d2">Every agent in a fleet does <b>not</b> need to be the smartest model. It needs to be the right one for its job.</p>
+
+        <table class="tbl reveal d3">
+            <thead>
+                <tr><th>Tier</th><th>Model</th><th>Job</th><th>Token shape</th></tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td class="role">Orchestrator</td>
+                    <td class="model o">opus <span style="color:var(--dim)">(cc: opus[1m])</span></td>
+                    <td class="desc">Plan, dispatch, verify citations, own the FSM</td>
+                    <td class="desc">low in · <b style="color:var(--text)">high judgment</b></td>
+                </tr>
+                <tr>
+                    <td class="role">Builder</td>
+                    <td class="model b">opus / codex gpt-5.5</td>
+                    <td class="desc">Write code, own exactly one file set</td>
+                    <td class="desc">medium in · high out</td>
+                </tr>
+                <tr style="background:rgba(188,140,255,.05)">
+                    <td class="role">Researcher</td>
+                    <td class="model">haiku</td>
+                    <td class="desc">Read a lot, return a little</td>
+                    <td class="desc"><b style="color:var(--text)">huge in</b> · tiny out</td>
+                </tr>
+                <tr>
+                    <td class="role">Reviewer</td>
+                    <td class="model o">opus, read-only</td>
+                    <td class="desc">Adversarial pass — try to break it</td>
+                    <td class="desc">high in · <b style="color:var(--text)">high judgment</b></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="callout reveal d5" style="margin-top:30px;font-size:22px;padding:24px 28px">
+            <b>Put the cheap model where the tokens are, and the expensive model where the judgment is.</b>
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">.claude/agents/*.md · skill frontmatter</span>
+        <span class="rt">cost follows volume; quality follows judgment</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 22 — WHAT BROKE  [HIGH]
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 7</span><span class="sep">/</span><span class="topic">Lessons</span>
+        <span class="no"><b>22</b> / 26</span>
+    </div>
+    <div class="body">
+        <div class="kicker reveal d1">The honest slide</div>
+        <h2 class="reveal d1">What <em>broke.</em></h2>
+
+        <div class="fails">
+            <div class="fc reveal s d2">
+                <div class="fh"><span class="x">✗</span> Positional refs renumber.</div>
+                <p><code>surface:3</code> is not a name — it is an index. It shifts as surfaces open and close, and then you are prompting the wrong agent.</p>
+                <div class="fix"><b>→</b> <span>Anchor everything to a <b>stable window UUID</b>. Resolve positions once, at spawn.</span></div>
+            </div>
+            <div class="fc reveal s d3">
+                <div class="fh"><span class="x">✗</span> <code style="font-size:17px">send</code> without <code style="font-size:17px">send-key</code>.</div>
+                <p>A worker sitting on a full prompt buffer, doing nothing, forever — and the board says <b style="color:var(--text)">BUILD</b> the whole time, because it never errored.</p>
+                <div class="fix"><b>→</b> <span>Two calls, always. <code>send</code> types; <code>send-key enter</code> submits.</span></div>
+            </div>
+            <div class="fc reveal s d4">
+                <div class="fh"><span class="x">✗</span> A multi-line prompt is N prompts.</div>
+                <p>The rule from slide 10 — learned the hard way, by watching a worker receive four fragments of an instruction and act on the last one.</p>
+                <div class="fix"><b>→</b> <span>One line, one task. If it doesn't fit, it wasn't one task.</span></div>
+            </div>
+            <div class="fc reveal s d5">
+                <div class="fh"><span class="x">✗</span> Fork agents overreach.</div>
+                <p>A fork inherits the <b style="color:var(--text)">whole</b> plan — so it "helpfully" does its neighbours' work too, and races them on shared files.</p>
+                <div class="fix"><b>→</b> <span>For isolated fan-out use a <b>general-purpose</b> agent with a scoped brief — exactly what Phase A of docs-fleet does.</span></div>
+            </div>
+        </div>
+
+        <div class="callout reveal d6" style="margin-top:26px">
+            Notice the shape: <b>every one of these is a silent failure.</b> Nothing crashed. The board just stopped moving — which is why the sentinel and the event subscription exist at all.
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">CLAUDE.md · memory · scar tissue</span>
+        <span class="rt">4 failure modes, 4 guardrails</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 23 — WHAT THE AGENTS COULDN'T FIX  [LOW]
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 7</span><span class="sep">/</span><span class="topic">Lessons</span>
+        <span class="no"><b>23</b> / 26</span>
+    </div>
+    <div class="stmt">
+        <div class="kicker reveal d1">The honest slide's honest slide</div>
+        <h2 class="reveal d1">What the agents <em>couldn't</em> fix.</h2>
+        <div class="rule"></div>
+
+        <p class="lede reveal d3" style="font-size:26px;max-width:1560px">
+            The k0s lead hit a <code>multipassd</code> socket outage. It diagnosed it correctly — and then it <b>stopped</b>.
+        </p>
+
+        <div class="quote red reveal d4" style="margin-top:30px">
+            <p style="font-size:30px">"I cannot fix it — <code>sudo</code> requires a password (no askpass, no TTY). <b>Needs the HUMAN.</b>"</p>
+            <div class="src">.team/centralized_k0s.backlog.md</div>
+        </div>
+
+        <ul class="big-list reveal d6" style="margin-top:34px">
+            <li style="font-size:26px">It killed the stuck <code style="color:var(--green)">tofu apply</code> (pids 41790 / 41797 / 41933).</li>
+            <li style="font-size:26px">It routed clean-slate recovery to <b>ops</b>.</li>
+            <li style="font-size:26px">Then it escalated — and <b>waited</b>.</li>
+        </ul>
+
+        <p class="lede reveal d8" style="font-size:32px;color:var(--text-hi);margin-top:34px">
+            Knowing the edge of your authority <span class="hl">is the feature</span>.
+        </p>
+    </div>
+    <div class="statusbar">
+        <span class="src">.team/centralized_k0s.backlog.md</span>
+        <span class="rt">an agent that stops correctly is a good agent</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 24 — WHAT THE FLEET TAUGHT THE REPO  [HIGH]
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 7</span><span class="sep">/</span><span class="topic">Lessons</span>
+        <span class="no"><b>24</b> / 26</span>
+    </div>
+    <div class="body">
+        <div class="kicker reveal d1">Failures become guardrails</div>
+        <h2 class="reveal d1">What the fleet <em>taught the repo.</em></h2>
+        <p class="lede reveal d2">Every failure the fleet hit is now a permanent, documented rule. The scar tissue is the deliverable.</p>
+
+        <div class="lessons">
+            <div class="ls reveal x d3">
+                <div class="lh">⏳ The silent wait-loop</div>
+                <div class="lb">
+                    A VM stuck at <code>cloud-init: running</code> for minutes with <b>no failed unit</b> isn't slow — it's hung.
+                    An early install lost the <b>DNS warm-up race</b> (<code>curl: (6) Could not resolve host</code>) and failed
+                    <b>without aborting</b> — <code>runcmd</code> is <code>/bin/sh</code>, no <code>set -e</code> — so a later
+                    <code>until …; do sleep 5; done</code> now loops forever, silently. <code>tofu apply</code> just prints <i>Still creating…</i>
+                </div>
+                <div class="arrow"><b>→</b> <span>A resolver-ready gate (<code>until getent hosts &lt;host&gt;</code>) + a retry around the installer. Now the standard cloud-init pattern in every cluster.</span></div>
+            </div>
+
+            <div class="ls reveal x d5">
+                <div class="lh">🧪 The hermetic suite was not hermetic</div>
+                <div class="lb">
+                    A gitignored <code>.cross-cluster.auto.tfvars.json</code> is <b>auto-loaded by <code>tofu test</code></b> — so it silently
+                    flips the "off by default" assertions. <code>git status</code> doesn't show it. The tests were reading live fleet state
+                    and calling it isolated.
+                </div>
+                <div class="arrow"><b>→</b> <span><code>just unwire</code>, plus file-level <code>variables {}</code> blocks in every <code>.tftest.hcl</code> to outrank auto-loaded tfvars.</span></div>
+            </div>
+        </div>
+
+        <div class="callout reveal d7" style="margin-top:24px">
+            Both are now in <b>CLAUDE.md</b> — read by every future agent on first token. The second one grew into its own skill: <b>triage-patterns</b>.
+            <b>An agent's mistake, written down, becomes every later agent's prior.</b>
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">CLAUDE.md "Working fast on live iterations" · .claude/skills/</span>
+        <span class="rt">the repo learned</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 25 — THE RULES THAT GENERALIZE  [LOW]
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 8</span><span class="sep">/</span><span class="topic">Close</span>
+        <span class="no"><b>25</b> / 26</span>
+    </div>
+    <div class="stmt">
+        <div class="kicker reveal d1">The whole deck, compressed</div>
+        <h2 class="reveal d1" style="margin-bottom:34px">The rules that <em>generalize.</em></h2>
+
+        <div class="rules">
+            <div class="rl reveal x d2"><span class="n">01</span><span class="tx"><b>Partition up front.</b> Disjoint files, or one owner per file. Never two agents in one file.</span></div>
+            <div class="rl reveal x d3"><span class="n">02</span><span class="tx"><b>Phase-lock the shared surfaces.</b> Fan out on research; serialize on authorship.</span></div>
+            <div class="rl reveal x d4"><span class="n">03</span><span class="tx"><b>Summaries, never dumps.</b> Keep the raw bytes in the cheap agent's context.</span></div>
+            <div class="rl reveal x d5"><span class="n">04</span><span class="tx"><b>A sentinel beats a poll.</b> <code style="color:var(--green)">TASK-DONE:</code> — and subscribe before you prompt.</span></div>
+            <div class="rl reveal x d6"><span class="n">05</span><span class="tx"><b>Verify before you fix.</b> Cited evidence, or it didn't happen.</span></div>
+            <div class="rl reveal x d7"><span class="n">06</span><span class="tx"><b>Live patches don't count.</b> Backport it and rebuild from source, or it isn't real.</span></div>
+        </div>
+    </div>
+    <div class="statusbar">
+        <span class="src">six rules · three case studies · one repo</span>
+        <span class="rt">none of these are about a specific model</span>
+    </div>
+</section>
+
+<!-- ===========================================
+     SLIDE 26 — RUN IT YOURSELF  [LOW]
+     =========================================== -->
+<section class="slide">
+    <div class="rail">
+        <span class="act">Act 8</span><span class="sep">/</span><span class="topic">Close</span>
+        <span class="no"><b>26</b> / 26</span>
+    </div>
+    <div class="stmt">
+        <div class="kicker reveal d1">Your turn</div>
+        <h2 class="reveal d1">Run it yourself.<i class="cursor"></i></h2>
+        <div class="rule"></div>
+
+        <div class="close-code reveal d3">
+<pre><span class="c"># 1. get the terminal</span>
+<span class="k">brew</span> tap manaflow-ai/cmux &amp;&amp; <span class="k">brew</span> install --cask cmux
+
+<span class="c"># 2. spawn the team</span>
+<span class="k">/agent-harness:cmux-spawn-team</span> <span class="s">&lt;feature&gt;</span></pre>
+        </div>
+
+        <p class="close-foot reveal d5">
+            The board is at <code>.team/&lt;feature&gt;.board.md</code>.<br>
+            <b>You drive the lead. The lead drives the team.</b>
+        </p>
+
+        <p class="lede reveal d7" style="margin-top:40px;font-size:20px;color:var(--dim)">
+            multipass-lab · 7 clusters · 34 merged PRs · 21 days · Malcolm Jones
+        </p>
+    </div>
+    <div class="statusbar">
+        <span class="src">github.com/bossjones/multipass-lab</span>
+        <span class="rt">TASK-DONE: deck | 26 slides, 0 overflow</span>
+    </div>
+</section>
+
+</main>
+</div>
+
+<!-- ===========================================
+     DECK CHROME — progress + counter (outside the stage)
+     =========================================== -->
+<nav class="deck-controls" aria-label="Slide navigation">
+    <button id="prevBtn" aria-label="Previous slide">‹</button>
+    <span class="pbar"><i id="pfill"></i></span>
+    <span><b id="curNo">1</b> / <span id="totNo">26</span></span>
+    <button id="nextBtn" aria-label="Next slide">›</button>
+</nav>
+
+<!-- inline editing affordance -->
+<div class="edit-hotzone" aria-hidden="true"></div>
+<button class="edit-toggle" id="editToggle" title="Edit mode (E)">✏️</button>
+<span class="edit-hint">edit mode · ⌘S / ctrl+S to save</span>
+
+<script>
+/* ===========================================
+   SLIDE PRESENTATION CONTROLLER
+   - fixed 1920×1080 stage, uniformly scaled
+   - keyboard / wheel / touch navigation
+   =========================================== */
+class SlidePresentation {
+    constructor() {
+        this.slides = document.querySelectorAll('.slide');
+        this.stage = document.getElementById('deckStage');
+        this.current = 0;
+        this.wheelLock = false;
+
+        document.getElementById('totNo').textContent = this.slides.length;
+
+        this.setupStageScale();
+        this.setupKeyboardNav();
+        this.setupPointerNav();
+        this.setupTouchNav();
+        this.showSlide(0);
+    }
+
+    /* Scale the whole stage as one unit. Letterbox/pillarbox — never reflow. */
+    setupStageScale() {
+        const scale = () => {
+            const factor = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+            const x = (window.innerWidth - 1920 * factor) / 2;
+            const y = (window.innerHeight - 1080 * factor) / 2;
+            this.stage.style.transform = `translate(${x}px, ${y}px) scale(${factor})`;
+        };
+        scale();
+        window.addEventListener('resize', scale);
+    }
+
+    setupKeyboardNav() {
+        document.addEventListener('keydown', (e) => {
+            if (e.target.getAttribute && e.target.getAttribute('contenteditable')) return;
+            switch (e.key) {
+                case 'ArrowRight': case 'ArrowDown': case ' ': case 'PageDown':
+                    e.preventDefault(); this.next(); break;
+                case 'ArrowLeft': case 'ArrowUp': case 'PageUp':
+                    e.preventDefault(); this.prev(); break;
+                case 'Home': e.preventDefault(); this.showSlide(0); break;
+                case 'End':  e.preventDefault(); this.showSlide(this.slides.length - 1); break;
+            }
+        });
+    }
+
+    setupPointerNav() {
+        document.getElementById('nextBtn').addEventListener('click', () => this.next());
+        document.getElementById('prevBtn').addEventListener('click', () => this.prev());
+        window.addEventListener('wheel', (e) => {
+            if (this.wheelLock || Math.abs(e.deltaY) < 24) return;
+            this.wheelLock = true;
+            setTimeout(() => { this.wheelLock = false; }, 620);
+            e.deltaY > 0 ? this.next() : this.prev();
+        }, { passive: true });
+    }
+
+    setupTouchNav() {
+        let x0 = null;
+        window.addEventListener('touchstart', (e) => { x0 = e.changedTouches[0].clientX; }, { passive: true });
+        window.addEventListener('touchend', (e) => {
+            if (x0 === null) return;
+            const dx = e.changedTouches[0].clientX - x0;
+            if (Math.abs(dx) > 50) { dx < 0 ? this.next() : this.prev(); }
+            x0 = null;
+        }, { passive: true });
+    }
+
+    next() { this.showSlide(this.current + 1); }
+    prev() { this.showSlide(this.current - 1); }
+
+    showSlide(i) {
+        this.current = Math.max(0, Math.min(i, this.slides.length - 1));
+        this.slides.forEach((s, n) => {
+            s.classList.toggle('active',  n === this.current);
+            s.classList.toggle('visible', n === this.current);
+        });
+        document.getElementById('curNo').textContent = this.current + 1;
+        document.getElementById('pfill').style.width =
+            ((this.current + 1) / this.slides.length * 100) + '%';
+    }
+}
+
+/* ===========================================
+   INLINE EDITOR — hover top-left or press E
+   JS-driven show/hide (a CSS `~` selector breaks
+   the hover chain via pointer-events:none).
+   =========================================== */
+class InlineEditor {
+    constructor(deck) {
+        this.deck = deck;
+        this.isActive = false;
+        this.toggle = document.getElementById('editToggle');
+        this.restore();
+        this.wire();
+    }
+
+    get targets() {
+        return document.querySelectorAll(
+            '.slide h1, .slide h2, .slide h3, .slide p, .slide li, .slide td, .slide .t, .slide .s, .slide .nm, .slide .jb, .slide .k, .slide .n'
+        );
+    }
+
+    toggleEditMode() {
+        this.isActive = !this.isActive;
+        document.body.classList.toggle('editing', this.isActive);
+        this.toggle.classList.toggle('active', this.isActive);
+        this.targets.forEach(el => {
+            if (this.isActive) {
+                el.setAttribute('contenteditable', 'true');
+                el.addEventListener('blur', this.save);
+            } else {
+                el.removeAttribute('contenteditable');
+            }
+        });
+        if (!this.isActive) this.save();
+    }
+
+    save = () => {
+        try {
+            const html = {};
+            document.querySelectorAll('.slide').forEach((s, i) => { html[i] = s.innerHTML; });
+            localStorage.setItem('deck-edits-agents', JSON.stringify(html));
+        } catch (e) { /* storage unavailable — editing still works in-session */ }
+    };
+
+    restore() {
+        try {
+            const raw = localStorage.getItem('deck-edits-agents');
+            if (!raw) return;
+            const html = JSON.parse(raw);
+            document.querySelectorAll('.slide').forEach((s, i) => {
+                if (html[i]) s.innerHTML = html[i];
+            });
+        } catch (e) { /* ignore malformed cache */ }
+    }
+
+    wire() {
+        const hotzone = document.querySelector('.edit-hotzone');
+        let hideTimeout = null;
+        const show = () => { clearTimeout(hideTimeout); this.toggle.classList.add('show'); };
+        const hide = () => {
+            hideTimeout = setTimeout(() => {
+                if (!this.isActive) this.toggle.classList.remove('show');
+            }, 400);
+        };
+
+        hotzone.addEventListener('mouseenter', show);
+        hotzone.addEventListener('mouseleave', hide);
+        this.toggle.addEventListener('mouseenter', show);
+        this.toggle.addEventListener('mouseleave', hide);
+        hotzone.addEventListener('click', () => this.toggleEditMode());
+        this.toggle.addEventListener('click', () => this.toggleEditMode());
+
+        document.addEventListener('keydown', (e) => {
+            if ((e.key === 'e' || e.key === 'E') && !e.target.getAttribute('contenteditable')) {
+                this.toggleEditMode();
+            }
+            if ((e.metaKey || e.ctrlKey) && e.key === 's' && this.isActive) {
+                e.preventDefault();
+                this.save();
+            }
+        });
+    }
+}
+
+const deck = new SlidePresentation();
+new InlineEditor(deck);
+</script>
+</body>
+</html>

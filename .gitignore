@@ -570,5 +570,13 @@ clusters/*/.flags.auto.tfvars.json
 # HA-DNS toggle state written by `just dns-ha` / removed by `just dns-ha-off` (see Justfile)
 clusters/*/ha.auto.tfvars.json
 
+# Generated slide-deck export — re-create with scripts/export-pdf.sh (see docs/slides/README.md).
+# The source of truth is docs/slides/index.html; the PDF is ~2.6MB of screenshots.
+docs/slides/*.pdf
+
+# Working dirs from the frontend-slides skill / Playwright MCP
+.frontend-slides/
+.playwright-mcp/
+
 **/.claude/data
 **/logs
