@@ -59,6 +59,7 @@ flowchart TD
 | 📐 [`specs/centralized_dns.md`](../specs/centralized_dns.md) | Full **design rationale** for the AdGuard Home + Unbound DNS lab. |
 | 📐 [`specs/cross-cluster.md`](../specs/cross-cluster.md) | Cross-cluster **hub-ordering design** (logs, metrics, DNS, CA in `up-connected`). |
 | 📅 [`specs/dns-dashboards.md`](../specs/dns-dashboards.md) | Planned design for AdGuard/Unbound **Grafana dashboards** — not yet built. |
+| 🎞️ [`docs/slides/`](slides/) | **"Shipping Infrastructure With a Team of Agents"** — a 26-slide deck on how this repo was built with cmux + multi-agent fleets. Zero-dependency single file: `open docs/slides/index.html`. |
 | 🤖 [`CLAUDE.md`](../CLAUDE.md) | Repo conventions and `.claude/` automation guidance. |
 | ⚙️ [`Justfile`](../Justfile) | Every orchestration recipe (`init`/`plan`/`up`/`down`/`check`/`verify`/`status`/`ssh`/`logs`). |
 | ✅ [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | Hermetic CI — auto-discovers every `clusters/<name>/` folder. |
